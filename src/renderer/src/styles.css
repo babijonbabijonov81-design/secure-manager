@@ -3467,3 +3467,36 @@ button:disabled {
   flex: 1;
   min-width: 0;
 }
+
+/* ---- «Избранное» ------------------------------------------------------------ */
+
+.avatar.saved {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+.avatar.saved svg {
+  position: relative;
+  z-index: 1;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
+}
+.e2e-card.saved-card .icon {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.bubble .fwd {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 3px;
+  font-size: 12.5px;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msg-row.out .bubble .fwd {
+  color: rgba(255, 255, 255, 0.85);
+}
+.bubble.with-media .fwd,
+.bubble.sticker-bubble .fwd {
+  padding: 0 4px;
+}

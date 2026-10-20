@@ -92,6 +92,10 @@ export interface AccountRecord {
   recovery?: RecoverySettings;
 }
 
+/** «Избранное»: a chat with yourself that never leaves this device. */
+export const SAVED_ID = 'saved';
+export const isSavedChat = (id: string) => id === SAVED_ID;
+
 export interface Contact {
   id: string;
   username: string;
@@ -188,6 +192,8 @@ export interface Message {
   readSent?: boolean;
   sys?: SystemEvent;
   call?: CallRecord;
+  /** Saved to «Избранное» from another chat: who wrote it and when. */
+  fwd?: { name: string; ts: number };
 }
 
 export const attachmentsOf = (message: Message): Attachment[] => message.atts ?? (message.att ? [message.att] : []);

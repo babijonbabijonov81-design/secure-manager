@@ -1,5 +1,6 @@
-import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
+import { AlertCircle, Bookmark, CheckCircle2, Info, X } from 'lucide-react';
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { SAVED_ID } from '../../../core/types.ts';
 import { avatarGradient, initials } from './format.ts';
 
 const SHIELD = 'M32 9.5 49.5 15.6V30.2c0 11.1-7.3 19.9-17.5 24.8C21.8 50.1 14.5 41.3 14.5 30.2V15.6Z';
@@ -37,6 +38,12 @@ export function Logo({ size = 44 }: { size?: number }) {
 }
 
 export function Avatar({ name, seed, size = 44 }: { name: string; seed: string; size?: number }) {
+  if (seed === SAVED_ID)
+    return (
+      <div className="avatar saved" style={{ width: size, height: size }}>
+        <Bookmark size={Math.round(size * 0.44)} fill="currentColor" strokeWidth={1.5} />
+      </div>
+    );
   return (
     <div
       className="avatar"

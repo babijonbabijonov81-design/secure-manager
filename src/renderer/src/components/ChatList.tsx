@@ -7,6 +7,7 @@ import {
   Check,
   CheckCheck,
   Clock,
+  Eraser,
   MailOpen,
   MessageSquarePlus,
   MoreVertical,
@@ -19,7 +20,7 @@ import {
 } from 'lucide-react';
 import { forwardRef, useMemo, useState, type MouseEvent } from 'react';
 import { snippetOf, type Messenger } from '../../../core/messenger.ts';
-import type { Contact, Message, MessengerSnapshot } from '../../../core/types.ts';
+import { isSavedChat, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
 import { formatListTime, systemText } from '../lib/format.ts';
 import { Avatar, ConfirmDialog, ContextMenu, type MenuItem } from '../lib/ui.tsx';
 
@@ -55,7 +56,19 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
     setMenu({ x: e.clientX, y: e.clientY, contact });
   };
 
-  const menuItems = (c: Contact): MenuItem[] => [
+  const menuItems = (c: Contact): MenuItem[] => isSavedChat(c.id) ? savedMenuItems(c) : contactMenuItems(c);
+  const savedMenuItems = (c: Contact): MenuItem[] => [
+    ...(!c.archived
+      ? [{ label: c.pinned ? 'Открепить' : 'Закрепить', icon: c.pinned ? <PinOff size={16} /> : <Pin size={16} />, onClick: () => messenger.setPinned(c.id, !c.pinned) }]
+      : []),
+    {
+      label: c.archived ? 'Вернуть из архива' : 'В архив',
+      icon: c.archived ? <ArchiveRestore size={16} /> : <Archive size={16} />,
+      onClick: () => messenger.setArchived(c.id, !c.archived),
+    },
+    { label: 'Очистить', icon: <Eraser size={16} />, danger: true, onClick: () => setConfirmDelete(c) },
+  ];
+  const contactMenuItems = (c: Contact): MenuItem[] => [
     ...(!c.archived
       ? [{ label: c.pinned ? 'Открепить' : 'Закрепить', icon: c.pinned ? <PinOff size={16} /> : <Pin size={16} />, onClick: () => messenger.setPinned(c.id, !c.pinned) }]
       : []),
@@ -155,14 +168,18 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.contact)} onClose={() => setMenu(null)} />}
       {confirmDelete && (
         <ConfirmDialog
-          title="Удалить чат?"
-          text={`Переписка с ${confirmDelete.displayName} и ключи сеанса будут удалены с этого устройства.`}
-          confirm="Удалить"
+          title={isSavedChat(confirmDelete.id) ? 'Очистить «Избранное»?' : 'Удалить чат?'}
+          text={
+            isSavedChat(confirmDelete.id)
+              ? 'Все заметки и файлы в «Избранном» будут удалены с этого устройства.'
+              : `Переписка с ${confirmDelete.displayName} и ключи сеанса будут удалены с этого устройства.`
+          }
+          confirm={isSavedChat(confirmDelete.id) ? 'Очистить' : 'Удалить'}
           danger
           onClose={() => setConfirmDelete(null)}
           onConfirm={async () => {
             await messenger.deleteChat(confirmDelete.id);
-            onDeleted(confirmDelete.id);
+            if (!isSavedChat(confirmDelete.id)) onDeleted(confirmDelete.id);
           }}
         />
       )}
@@ -177,7 +194,7 @@ const lastMessage = (messages: Message[] | undefined) => {
 };
 
 function StatusTicks({ message }: { message: Message }) {
-  if (message.dir !== 'out' || message.call) return null;
+  if (message.dir !== 'out' || message.call || !message.status) return null;
   if (message.status === 'pending') return <Clock size={14} className="ticks" style={{ color: 'var(--text-3)' }} />;
   if (message.status === 'failed') return <TriangleAlert size={14} className="ticks" style={{ color: 'var(--danger)' }} />;
   if (message.status === 'sent') return <Check size={15} className="ticks" style={{ color: 'var(--text-3)' }} />;
@@ -201,9 +218,22 @@ function ChatItem({
   onClick(): void;
   onMenu(e: MouseEvent): void;
 }) {
-  const preview = !last ? 'Нет сообщений' : last.dir === 'system' ? systemText(last, contact) : snippetOf(last);
+  const saved = isSavedChat(contact.id);
+  const preview = !last
+    ? saved
+      ? 'Заметки и файлы для себя'
+      : 'Нет сообщений'
+    : last.dir === 'system'
+      ? systemText(last, contact)
+      : snippetOf(last);
   return (
-    <div className={`chat-item${active ? ' active' : ''}`} role="listitem" data-testid={`chat-${contact.username}`} onClick={onClick} onContextMenu={onMenu}>
+    <div
+      className={`chat-item${active ? ' active' : ''}`}
+      role="listitem"
+      data-testid={`chat-${contact.username || contact.id}`}
+      onClick={onClick}
+      onContextMenu={onMenu}
+    >
       <span className="avatar-wrap">
         <Avatar name={contact.displayName} seed={contact.id} size={50} />
         {online && <i className="online-dot" />}
@@ -212,7 +242,7 @@ function ChatItem({
         <div className="row">
           <span className="name">
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{contact.displayName}</span>
-            {contact.verified && <ShieldCheck size={14} style={{ color: 'var(--success)' }} />}
+            {contact.verified && !saved && <ShieldCheck size={14} style={{ color: 'var(--success)' }} />}
             {contact.keyWarning && <TriangleAlert size={14} style={{ color: 'var(--warning)' }} />}
           </span>
           {last && <span className="time">{formatListTime(last.ts)}</span>}

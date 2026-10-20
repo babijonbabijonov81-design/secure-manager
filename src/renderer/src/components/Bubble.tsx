@@ -7,6 +7,7 @@ import {
   CornerUpLeft,
   Download,
   FileText,
+  Forward,
   ImageIcon,
   MoreHorizontal,
   Phone,
@@ -22,7 +23,7 @@ import { callTitle, type Messenger } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
 import { attachmentsOf, type Attachment, type Message } from '../../../core/types.ts';
 import { saveAttachment, useAttachmentUrl } from '../lib/attachments.ts';
-import { formatCallDuration, formatSize, formatTime, isEmojiOnly, remaining } from '../lib/format.ts';
+import { formatCallDuration, formatDay, formatSize, formatTime, isEmojiOnly, remaining } from '../lib/format.ts';
 import { ReactionPicker } from './ReactionPicker.tsx';
 import { VoicePlayer } from './VoicePlayer.tsx';
 
@@ -187,7 +188,7 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
   );
 
   let bubbleClass = 'bubble';
-  const mediaOnly = images.length > 0 && !message.text && !files.length && !message.reply;
+  const mediaOnly = images.length > 0 && !message.text && !files.length && !message.reply && !message.fwd;
   if (sticker) bubbleClass += ' sticker-bubble';
   else if (mediaOnly) bubbleClass += ' media';
   else if (images.length) bubbleClass += ' with-media';
@@ -219,6 +220,11 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
       <div className="msg-col">
         <div className="bubble-line">
           <div className={bubbleClass} onContextMenu={(e) => props.onContext(e, message)} onDoubleClick={() => react('❤️')}>
+            {message.fwd && (
+              <div className="fwd" title={`${formatDay(message.fwd.ts)}, ${formatTime(message.fwd.ts)}`}>
+                <Forward size={13} /> Переслано от <b>{message.fwd.name}</b>
+              </div>
+            )}
             {message.reply && (
               <button className="quote" onClick={() => props.onJump(message.reply!.id)}>
                 <b>{message.reply.out ? 'Вы' : contactName}</b>

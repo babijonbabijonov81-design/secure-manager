@@ -1,8 +1,8 @@
-import { DownloadCloud, Lock, LockKeyhole, Maximize2, MessageCircle, MessageSquarePlus, Minimize2, Moon, Settings, ShieldCheck, Sun, Timer, WifiOff, X } from 'lucide-react';
+import { Bookmark, DownloadCloud, Lock, LockKeyhole, Maximize2, MessageCircle, MessageSquarePlus, Minimize2, Moon, Settings, ShieldCheck, Sun, Timer, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
 import { bridge, type NotificationCardData, type UpdateState } from '../../../core/platform.ts';
-import type { Contact, Message } from '../../../core/types.ts';
+import { SAVED_ID, type Contact, type Message } from '../../../core/types.ts';
 import { applyAppearance } from '../App.tsx';
 import { CallOverlay } from '../components/CallOverlay.tsx';
 import { ChatList } from '../components/ChatList.tsx';
@@ -256,13 +256,18 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
             <Logo size={40} />
           </div>
           <div className="tooltip-wrap" data-tip="Чаты">
-            <button className="icon-btn active" aria-label="Чаты" onClick={() => setActiveId(null)}>
+            <button className={`icon-btn${activeId === SAVED_ID ? '' : ' active'}`} aria-label="Чаты" onClick={() => setActiveId(null)}>
               <MessageCircle size={21} />
             </button>
           </div>
           <div className="tooltip-wrap" data-tip="Новый чат">
             <button className="icon-btn" aria-label="Новый чат" onClick={() => setModal({ kind: 'new' })}>
               <MessageSquarePlus size={21} />
+            </button>
+          </div>
+          <div className="tooltip-wrap" data-tip="Избранное">
+            <button className={`icon-btn${activeId === SAVED_ID ? ' active' : ''}`} aria-label="Избранное" onClick={() => setActiveId(SAVED_ID)}>
+              <Bookmark size={20} />
             </button>
           </div>
           <div className="tooltip-wrap" data-tip="Настройки">

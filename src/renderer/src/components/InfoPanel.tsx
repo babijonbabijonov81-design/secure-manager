@@ -2,7 +2,7 @@ import { Archive, ArchiveRestore, Ban, Bell, BellOff, Eraser, Hourglass, Phone, 
 import { useMemo, useState } from 'react';
 import { formatSafetyNumber } from '../../../core/crypto/fingerprint.ts';
 import type { Messenger } from '../../../core/messenger.ts';
-import { TIMER_OPTIONS, type Contact } from '../../../core/types.ts';
+import { isSavedChat, TIMER_OPTIONS, type Contact } from '../../../core/types.ts';
 import { timerLabel } from '../lib/format.ts';
 import { presenceText } from '../lib/text.ts';
 import { Avatar, ConfirmDialog, useToast } from '../lib/ui.tsx';
@@ -27,6 +27,7 @@ export function InfoPanel({
   const toast = useToast();
   const [confirm, setConfirm] = useState<Confirm>(null);
   const safety = useMemo(() => formatSafetyNumber(messenger.safetyNumber(contact.id)), [messenger, contact.id]);
+  if (isSavedChat(contact.id)) return <SavedInfo messenger={messenger} contact={contact} onClose={onClose} />;
 
   return (
     <aside className="info-panel">
@@ -184,6 +185,64 @@ export function InfoPanel({
           confirm="Сбросить"
           onClose={() => setConfirm(null)}
           onConfirm={() => messenger.resetSession(contact.id)}
+        />
+      )}
+    </aside>
+  );
+}
+
+/** «Избранное» has no keys, presence or calls: only pin, archive and clear. */
+function SavedInfo({ messenger, contact, onClose }: { messenger: Messenger; contact: Contact; onClose(): void }) {
+  const [confirm, setConfirm] = useState(false);
+  const count = (messenger.getSnapshot().conversations[contact.id] ?? []).filter((m) => m.dir !== 'system').length;
+  return (
+    <aside className="info-panel">
+      <div className="panel-head">
+        <h3>Информация</h3>
+        <button className="icon-btn sm" onClick={onClose} aria-label="Закрыть панель">
+          <X size={18} />
+        </button>
+      </div>
+      <div className="panel-body">
+        <div className="profile-hero">
+          <Avatar name={contact.displayName} seed={contact.id} size={96} />
+          <h4>{contact.displayName}</h4>
+          <span className="handle">
+            {count} {count % 10 === 1 && count % 100 !== 11 ? 'запись' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 10 || count % 100 >= 20) ? 'записи' : 'записей'}
+          </span>
+        </div>
+        <div className="section">
+          <div className="section-title">
+            <ShieldCheck size={16} /> Только на этом устройстве
+          </div>
+          <p>
+            Заметки и файлы из «Избранного» никуда не отправляются: они хранятся в зашифрованном хранилище Veil на этом компьютере. Текст попадает
+            и в резервную копию для восстановления по почте, если она включена.
+          </p>
+        </div>
+        <div className="section action-list">
+          <button className="action-item" onClick={() => messenger.setPinned(contact.id, !contact.pinned)}>
+            {contact.pinned ? <PinOff size={18} /> : <Pin size={18} />}
+            <span className="grow">{contact.pinned ? 'Открепить' : 'Закрепить'}</span>
+          </button>
+          <button className="action-item" onClick={() => messenger.setArchived(contact.id, !contact.archived)}>
+            {contact.archived ? <ArchiveRestore size={18} /> : <Archive size={18} />}
+            <span className="grow">{contact.archived ? 'Вернуть из архива' : 'В архив'}</span>
+          </button>
+          <button className="action-item danger" onClick={() => setConfirm(true)}>
+            <Eraser size={18} />
+            <span className="grow">Очистить «Избранное»</span>
+          </button>
+        </div>
+      </div>
+      {confirm && (
+        <ConfirmDialog
+          title="Очистить «Избранное»?"
+          text="Все заметки и файлы в «Избранном» будут удалены с этого устройства."
+          confirm="Очистить"
+          danger
+          onClose={() => setConfirm(false)}
+          onConfirm={() => messenger.clearChat(contact.id)}
         />
       )}
     </aside>

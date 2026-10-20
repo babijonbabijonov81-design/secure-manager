@@ -54,6 +54,8 @@ import {
   type CallRecord,
   type CallSignal,
   type Contact,
+  isSavedChat,
+  SAVED_ID,
   type Content,
   type Message,
   type MessengerSnapshot,
@@ -441,6 +443,30 @@ export class Messenger {
       dhSig: unb64(state.account.dhSig),
     };
     this.tickTimer = setInterval(() => this.tick(), 1000);
+    this.ensureSavedChat();
+  }
+
+  /** «Избранное» exists for every account, pinned on top the first time it appears. */
+  private ensureSavedChat(): void {
+    if (!this.contacts[SAVED_ID]) {
+      const now = Date.now();
+      this.contacts[SAVED_ID] = {
+        id: SAVED_ID,
+        username: '',
+        displayName: 'Избранное',
+        dhKey: this.account.dh.pub,
+        dhSig: this.account.dhSig,
+        verified: true,
+        blocked: false,
+        createdAt: now,
+        lastActivity: now,
+        unread: 0,
+        timer: 0,
+        pinned: true,
+      };
+      this.markDirty('contacts');
+    }
+    if (!this.conversations.has(SAVED_ID)) this.conversations.set(SAVED_ID, []);
   }
 
   /** Used once while creating the account: resolves when the relay accepted us. */
@@ -753,7 +779,8 @@ export class Messenger {
   async addContact(rawUsername: string): Promise<Contact> {
     const username = cleanUsername(rawUsername);
     if (!USERNAME_RE.test(username)) throw new MessengerError('bad_username', 'Неверное имя пользователя');
-    if (username === this.account.username) throw new MessengerError('self', 'Это ваш собственный аккаунт');
+    // Your own name opens «Избранное», like in Telegram.
+    if (username === this.account.username) return this.contacts[SAVED_ID];
     if (!this.relay) throw new MessengerError('offline', 'Нет соединения с сервером');
     let info: UserInfo;
     try {
@@ -854,6 +881,7 @@ export class Messenger {
 
   async deleteChat(contactId: string): Promise<void> {
     await this.clearChat(contactId);
+    if (isSavedChat(contactId)) return; // «Избранное» stays, just empty
     delete this.contacts[contactId];
     delete this.sessions[contactId];
     delete this.online[contactId];
@@ -949,7 +977,8 @@ export class Messenger {
       dir: 'out',
       ts: now,
       at: now,
-      status: 'pending',
+      // Nothing is sent from «Избранное», so there is no delivery status.
+      ...(isSavedChat(contact.id) ? {} : { status: 'pending' as const }),
       ...fields,
       ...(reply ? { reply } : {}),
       ...(contact.timer ? { timer: contact.timer, expiresAt: now + contact.timer * 1000 } : {}),
@@ -1025,6 +1054,36 @@ export class Messenger {
     }
   }
 
+  /**
+   * Copies a message (text and files) into «Избранное». The files are copied too, so the note
+   * survives even if the original message is deleted or disappears.
+   */
+  async saveToFavorites(contactId: string, messageId: string): Promise<void> {
+    const source = this.conversations.get(contactId)?.find((m) => m.id === messageId);
+    if (!source || source.dir === 'system' || source.call) return;
+    const atts: Attachment[] = [];
+    for (const att of attachmentsOf(source)) {
+      const bytes = await this.store.getBytes(`att.${att.id}`);
+      if (!bytes) continue;
+      const copy = { ...att, id: randomId() };
+      await this.store.putBytes(`att.${copy.id}`, bytes);
+      atts.push(copy);
+    }
+    if (!source.text && !atts.length) throw new MessengerError('empty', 'Файл ещё не загружен');
+    const author = source.dir === 'out' ? this.account.displayName : (this.contacts[contactId]?.displayName ?? '');
+    const now = Date.now();
+    this.addMessage(SAVED_ID, {
+      id: randomId(),
+      dir: 'out',
+      ts: now,
+      at: now,
+      ...(source.text ? { text: source.text } : {}),
+      ...(atts.length ? { atts } : {}),
+      ...(isSavedChat(contactId) ? {} : { fwd: { name: author, ts: source.ts } }),
+    });
+    this.updateContact(SAVED_ID, { lastActivity: now, archived: false });
+  }
+
   /** Kept for callers sending one file. */
   sendFile(contactId: string, file: OutgoingFile, options: SendOptions = {}): Promise<void> {
     return this.sendMedia(contactId, [file], options);
@@ -1047,6 +1106,7 @@ export class Messenger {
   }
 
   private async deliverMessage(contact: Contact, message: Message): Promise<void> {
+    if (isSavedChat(contact.id)) return;
     const content: Content = {
       t: 'msg',
       id: message.id,
@@ -1111,6 +1171,7 @@ export class Messenger {
   }
 
   private async sendControl(contact: Contact, content: Content): Promise<void> {
+    if (isSavedChat(contact.id)) return;
     try {
       await this.encryptAndQueue(contact, content, undefined, []);
     } catch (error) {
@@ -1264,6 +1325,7 @@ export class Messenger {
   private async sendEphemeral(contactId: string, content: Content): Promise<boolean> {
     const contact = this.contacts[contactId];
     const session = this.confirmedSession(contactId);
+    if (isSavedChat(contactId)) return false;
     if (!this.relay || this.relay.status !== 'online' || !contact || contact.blocked || !session) return false;
     const envelope = sealEnvelope(unb64(contact.dhKey), this.senderInfo(), ephemeralEncrypt(session, pack(content)));
     try {
@@ -1297,6 +1359,7 @@ export class Messenger {
    */
   async sendCallSignal(contactId: string, signal: CallSignal): Promise<'delivered' | 'offline' | 'queued'> {
     const contact = this.requireContact(contactId);
+    if (isSavedChat(contactId)) throw new MessengerError('saved', 'В «Избранное» позвонить нельзя');
     if (contact.blocked) throw new MessengerError('blocked', 'Пользователь заблокирован');
     if (!this.relay || this.relay.status !== 'online') throw new MessengerError('offline', 'Нет соединения с сервером');
     const content: Content = { t: 'call', ts: Date.now(), ...signal };
@@ -1442,7 +1505,8 @@ export class Messenger {
   private async handleEnvelope(envelope: Uint8Array, delivered: Map<string, string[]>): Promise<void> {
     const { sender, wire } = openEnvelope(this.identity.dh, envelope);
     const contactId = sender.from;
-    if (contactId === this.account.userId) return;
+    // Nobody can write into «Избранное», and our own envelopes are ignored.
+    if (contactId === this.account.userId || isSavedChat(contactId)) return;
     if (this.contacts[contactId]?.blocked) return;
     const { header, body } = parseWire(wire);
     const list = this.sessions[contactId] ?? [];

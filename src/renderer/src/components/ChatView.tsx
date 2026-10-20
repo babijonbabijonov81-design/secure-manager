@@ -1,4 +1,5 @@
 import {
+  Bookmark,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -18,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
-import { attachmentsOf, MAX_ATTACHMENT_BYTES, QUICK_REACTIONS, type Attachment, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
+import { attachmentsOf, isSavedChat, MAX_ATTACHMENT_BYTES, QUICK_REACTIONS, type Attachment, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
 import { attachmentUrl, saveAttachment } from '../lib/attachments.ts';
 import { formatDay, sameDay, systemText, timerLabel } from '../lib/format.ts';
 import { copyImage, copyText, prepareFile } from '../lib/media.ts';
@@ -41,6 +42,7 @@ interface Props {
 const GROUP_GAP_MS = 3 * 60 * 1000;
 
 export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo, onShowSafety, onCall }: Props) {
+  const saved = isSavedChat(contact.id);
   const messages = snapshot.conversations[contact.id] ?? [];
   const typing = !!snapshot.typing[contact.id];
   const online = !!snapshot.online[contact.id];
@@ -174,6 +176,16 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
       ];
     const atts = attachmentsOf(m);
     const items: MenuItem[] = [{ label: 'Ответить', icon: <CornerUpLeft size={16} />, onClick: () => setReplyTo(m) }];
+    if (!saved && (m.text || atts.length))
+      items.push({
+        label: 'В избранное',
+        icon: <Bookmark size={16} />,
+        onClick: () =>
+          void messenger
+            .saveToFavorites(contact.id, m.id)
+            .then(() => toast('Сохранено в «Избранное»', 'success'))
+            .catch((e: Error) => toast(e.message, 'error')),
+      });
     const selection = window.getSelection()?.toString().trim();
     if (selection) items.push({ label: 'Копировать выделенное', icon: <Copy size={16} />, onClick: () => void copyText(selection).then(() => toast('Скопировано', 'success')) });
     if (m.text) items.push({ label: 'Копировать текст', icon: <Copy size={16} />, onClick: () => void copy(m) });
@@ -190,10 +202,10 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
       });
     if (m.status === 'failed') items.push({ label: 'Отправить снова', icon: <RotateCcw size={16} />, onClick: () => onRetry(m) });
     items.push({ label: 'Удалить у меня', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, false) });
-    if (m.dir === 'out' && m.status !== 'failed' && m.status !== 'pending')
+    if (!saved && m.dir === 'out' && m.status !== 'failed' && m.status !== 'pending')
       items.push({ label: 'Удалить у всех', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, true) });
     return items;
-  }, [menu, messenger, contact.id, toast, onRetry, copy, snapshot.stickers, onCall]);
+  }, [menu, messenger, contact.id, toast, onRetry, copy, snapshot.stickers, onCall, saved]);
 
   const onDragEnter = (e: DragEvent) => {
     if (!e.dataTransfer.types.includes('Files')) return;
@@ -274,9 +286,14 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
           <div style={{ minWidth: 0 }}>
             <div className="name">
               {contact.displayName}
-              {contact.verified && <ShieldCheck size={15} style={{ color: 'var(--success)' }} />}
+              {contact.verified && !saved && <ShieldCheck size={15} style={{ color: 'var(--success)' }} />}
             </div>
-            {typing ? (
+            {saved ? (
+              <div className="sub">
+                <LockKeyhole size={12} className="lock" />
+                только на этом устройстве
+              </div>
+            ) : typing ? (
               <div className="sub typing">
                 печатает
                 <span className="typing-dots">
@@ -301,9 +318,11 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
               <Hourglass size={14} /> {timerLabel(contact.timer, true)}
             </span>
           )}
-          <button className="icon-btn" onClick={() => onCall(contact.id)} aria-label="Позвонить" title="Аудиозвонок" disabled={contact.blocked}>
-            <Phone size={19} />
-          </button>
+          {!saved && (
+            <button className="icon-btn" onClick={() => onCall(contact.id)} aria-label="Позвонить" title="Аудиозвонок" disabled={contact.blocked}>
+              <Phone size={19} />
+            </button>
+          )}
           <button className={`icon-btn${infoOpen ? ' active' : ''}`} onClick={onToggleInfo} aria-label="Информация о чате">
             <Info size={20} />
           </button>
@@ -315,15 +334,26 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
       <div className="messages" ref={scroller} onScroll={onScroll}>
         <div className="messages-inner" ref={inner}>
           <div className="messages-spacer" />
-          <div className="e2e-card">
-            <div className="icon">
-              <LockKeyhole size={20} />
+          {saved ? (
+            <div className="e2e-card saved-card">
+              <div className="icon">
+                <Bookmark size={20} />
+              </div>
+              <b>Избранное</b>
+              Сохраняйте сюда заметки, ссылки и файлы, а из других чатов — сообщения (правый клик → «В избранное»). Всё хранится
+              зашифрованным только на этом компьютере и никуда не отправляется.
             </div>
-            <b>Сквозное шифрование</b>
-            Сообщения и файлы шифруются на вашем устройстве. Прочитать их можете только вы и {contact.displayName} — даже сервер не видит
-            содержимое.
-            <button onClick={onShowSafety}>Проверить код безопасности</button>
-          </div>
+          ) : (
+            <div className="e2e-card">
+              <div className="icon">
+                <LockKeyhole size={20} />
+              </div>
+              <b>Сквозное шифрование</b>
+              Сообщения и файлы шифруются на вашем устройстве. Прочитать их можете только вы и {contact.displayName} — даже сервер не видит
+              содержимое.
+              <button onClick={onShowSafety}>Проверить код безопасности</button>
+            </div>
+          )}
           {rows}
           {typing && (
             <div className="msg-row in group-start group-end">
