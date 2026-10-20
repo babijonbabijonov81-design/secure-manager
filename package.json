@@ -1,7 +1,7 @@
 {
   "name": "veil-messenger",
   "productName": "Veil",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Veil — приватный мессенджер со сквозным шифрованием",
   "main": "out/main/index.js",
   "author": {
@@ -53,5 +53,9 @@
     "vite": "^8.3.4",
     "vitest": "^5.0.5"
   },
-  "homepage": "https://github.com/babijonbabijonov81-design/secure-manager"
+  "homepage": "https://github.com/babijonbabijonov81-design/secure-manager",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/babijonbabijonov81-design/secure-manager.git"
+  }
 }

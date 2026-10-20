@@ -26,6 +26,7 @@ mac:
   hardenedRuntime: false
   extendInfo:
     NSHumanReadableCopyright: Veil — end-to-end encrypted messenger
+    NSMicrophoneUsageDescription: Veil records voice messages only when you press the microphone button.
 dmg:
   title: Veil ${version}
   artifactName: Veil-${version}-mac-${arch}.${ext}
@@ -41,7 +42,7 @@ win:
   icon: build/icon.ico
   target:
     - target: nsis
-      arch: [x64, arm64]
+      arch: [x64]
     - target: portable
       arch: [x64]
 nsis:
@@ -68,4 +69,9 @@ linux:
   maintainer: Veil
   synopsis: End-to-end encrypted messenger
 
-publish: null
+# In-app updates read releases from this repository (it must be public for that).
+publish:
+  provider: github
+  owner: babijonbabijonov81-design
+  repo: secure-manager
+  releaseType: release

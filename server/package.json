@@ -1,6 +1,6 @@
 {
   "name": "veil-relay",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Veil zero-knowledge relay server: stores and forwards only end-to-end encrypted envelopes",
   "type": "module",
   "private": true,

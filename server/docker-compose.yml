@@ -1,9 +1,15 @@
 # Relay + automatic HTTPS with Caddy. Set DOMAIN to a domain pointing at this server:
 #   DOMAIN=chat.example.com docker compose up -d
+# For account recovery by email also pass BREVO_API_KEY (or RESEND_API_KEY / SMTP_URL) and MAIL_FROM.
 services:
   relay:
     build: .
     restart: unless-stopped
+    environment:
+      - BREVO_API_KEY
+      - RESEND_API_KEY
+      - SMTP_URL
+      - MAIL_FROM
     volumes:
       - relay-data:/data
   caddy:

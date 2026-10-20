@@ -12,3 +12,9 @@ services:
         value: memory
       - key: RELAY_NAME
         value: Veil Relay
+      # Email for account recovery codes (optional). Brevo works on Render's free plan:
+      # create an API key at brevo.com and use a sender address verified there.
+      - key: BREVO_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
