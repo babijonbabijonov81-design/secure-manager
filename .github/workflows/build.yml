@@ -34,11 +34,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # macOS is temporarily disabled (GitHub's macOS runners are often unavailable).
+        # To re-enable, add: { os: macos-latest, target: --mac }
         include:
           - os: windows-latest
             target: --win
-          - os: macos-latest
-            target: --mac
           - os: ubuntu-latest
             target: --linux
     runs-on: ${{ matrix.os }}
