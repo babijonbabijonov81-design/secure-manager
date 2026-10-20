@@ -34,7 +34,7 @@
 
 ## Установка
 
-Готовые сборки лежат в разделе **Releases** репозитория. Их собирает GitHub Actions, когда в репозиторий отправляют тег вида `v1.0.0`.
+Готовые сборки лежат в разделе [**Releases**](https://github.com/babijonbabijonov81-design/secure-manager/releases) репозитория. Их собирает GitHub Actions, когда в репозиторий отправляют тег вида `v1.0.0`.
 
 ### Windows 10/11
 
@@ -80,7 +80,7 @@ xattr -cr /Applications/Veil.app
 Понадобится любой сервер с Docker и домен, который указывает на этот сервер:
 
 ```bash
-git clone <этот репозиторий> veil && cd veil/server
+git clone https://github.com/babijonbabijonov81-design/secure-manager veil && cd veil/server
 DOMAIN=chat.example.com docker compose up -d
 ```
 
