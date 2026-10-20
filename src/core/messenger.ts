@@ -222,6 +222,8 @@ export class Messenger {
   private snapshot: MessengerSnapshot | null = null;
   private notifyQueued = false;
   private locked = false;
+  /** Set once the vault key is gone: nothing may be written after that. */
+  private closed = false;
 
   constructor(storage: StorageBackend, store: SecureStore, meta: VaultMeta, events: MessengerEvents) {
     this.storage = storage;
@@ -318,6 +320,7 @@ export class Messenger {
   /** Stops timers and the connection without touching storage. */
   dispose(): void {
     this.locked = true;
+    this.closed = true;
     this.relay?.close();
     this.relay = null;
     if (this.sweepTimer) clearInterval(this.sweepTimer);
@@ -333,6 +336,7 @@ export class Messenger {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     for (const timer of this.typingTimers.values()) clearTimeout(timer);
     await this.flushNow();
+    this.closed = true;
     this.store.close();
     this.identity.sign.priv.fill(0);
     this.identity.dh.priv.fill(0);
@@ -385,11 +389,13 @@ export class Messenger {
   // ---- persistence -------------------------------------------------------------------
 
   markDirty(...names: string[]): void {
+    if (this.closed) return;
     for (const name of names) this.dirty.add(name);
     if (!this.flushTimer) this.flushTimer = setTimeout(() => void this.flushNow(), 300);
   }
 
   async flushNow(): Promise<void> {
+    if (this.closed) return;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;

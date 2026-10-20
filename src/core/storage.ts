@@ -98,12 +98,20 @@ export class SecureStore {
     this.dataKey = dataKey;
   }
 
+  private closed = false;
+
+  private assertOpen(): void {
+    if (this.closed) throw new Error('Хранилище заблокировано');
+  }
+
   async getBytes(name: string): Promise<Uint8Array | null> {
+    this.assertOpen();
     const raw = await this.backend.get(`r.${name}`);
     return raw ? decryptRecord(this.dataKey, name, raw) : null;
   }
 
   async putBytes(name: string, value: Uint8Array): Promise<void> {
+    this.assertOpen();
     await this.backend.set(`r.${name}`, encryptRecord(this.dataKey, name, value));
   }
 
@@ -128,6 +136,7 @@ export class SecureStore {
 
   /** Forget the key; the store is unusable afterwards. */
   close(): void {
+    this.closed = true;
     this.dataKey.fill(0);
   }
 }
