@@ -5,12 +5,16 @@
   "type": "module",
   "private": true,
   "license": "MIT",
-  "engines": { "node": ">=22.18" },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "start": "node src/index.ts"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "nodemailer": "^10.1.7",
     "ws": "^8.22.0"
   }
 }

@@ -184,9 +184,9 @@ describe('messenger end-to-end', () => {
 
     const file = new Uint8Array(300_000).map((_, i) => i % 251);
     await alice.messenger.sendFile(contact.id, { name: 'photo.png', mime: 'image/png', data: file, w: 640, h: 480 });
-    const received = await waitFor(() => messages(bob.messenger, aliceId).find((m) => m.att));
-    expect(received.att).toMatchObject({ name: 'photo.png', kind: 'image', size: file.length, w: 640, h: 480 });
-    const bytes = await bob.messenger.getAttachment(received.att!.id);
+    const received = await waitFor(() => messages(bob.messenger, aliceId).find((m) => m.atts?.length));
+    expect(received.atts![0]).toMatchObject({ name: 'photo.png', kind: 'image', size: file.length, w: 640, h: 480 });
+    const bytes = await bob.messenger.getAttachment(received.atts![0].id);
     expect(Buffer.from(bytes!).equals(Buffer.from(file))).toBe(true);
 
     await alice.messenger.setTimer(contact.id, 1);
@@ -201,7 +201,9 @@ describe('messenger end-to-end', () => {
     const oops = await waitFor(() => messages(bob.messenger, aliceId).find((m) => m.text === 'oops'));
     const mine = messages(alice.messenger, contact.id).find((m) => m.text === 'oops')!;
     await alice.messenger.deleteMessage(contact.id, mine.id, true);
-    await waitFor(() => messages(bob.messenger, aliceId).find((m) => m.id === oops.id)?.deleted);
+    // The message disappears completely on both sides: no "deleted" placeholder.
+    await waitFor(() => !messages(bob.messenger, aliceId).some((m) => m.id === oops.id));
+    expect(messages(alice.messenger, contact.id).some((m) => m.id === mine.id)).toBe(false);
 
     alice.messenger.dispose();
     bob.messenger.dispose();

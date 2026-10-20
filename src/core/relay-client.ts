@@ -91,6 +91,48 @@ export function probeServer(input: string, timeoutMs = 6000): Promise<{ name: st
   });
 }
 
+/**
+ * One request on a fresh, not logged-in connection (used for account recovery).
+ * Resolves with the result payload and any binary body.
+ */
+export function anonymousRequest<T>(
+  input: string,
+  frame: Record<string, unknown>,
+  timeoutMs = 30_000,
+): Promise<{ data: T; body: Uint8Array }> {
+  return new Promise((resolve, reject) => {
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(normalizeServerUrl(input));
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    ws.binaryType = 'arraybuffer';
+    const reqId = randomId(9);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new RelayRequestError('timeout', 'Сервер не отвечает'));
+    }, timeoutMs);
+    const finish = (fn: () => void) => {
+      clearTimeout(timer);
+      ws.close();
+      fn();
+    };
+    ws.onmessage = (event) => {
+      try {
+        const { header, body } = unpack<ServerFrame>(new Uint8Array(event.data as ArrayBuffer));
+        if (header.type === 'hello') ws.send(pack({ ...frame, reqId }));
+        else if (header.type === 'result' && header.reqId === reqId) finish(() => resolve({ data: header.data as T, body: body.slice() }));
+        else if (header.type === 'error') finish(() => reject(new RelayRequestError(header.code, header.message)));
+      } catch (error) {
+        finish(() => reject(error));
+      }
+    };
+    ws.onerror = () => finish(() => reject(new RelayRequestError('offline', 'Не удалось подключиться к серверу')));
+  });
+}
+
 const REQUEST_TIMEOUT_MS = 30_000;
 const PING_INTERVAL_MS = 25_000;
 const FATAL_CODES = new Set(['username_taken', 'replaced', 'deleted']);

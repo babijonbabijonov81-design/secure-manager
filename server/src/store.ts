@@ -3,7 +3,8 @@
 
 import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { OneTimePreKeyPublic, SignedPreKeyPublic } from './shared/protocol.ts';
+import { randomBytes } from 'node:crypto';
+import type { BackupMeta, OneTimePreKeyPublic, SignedPreKeyPublic } from './shared/protocol.ts';
 import { unb64 } from './shared/wire.ts';
 
 export interface UserRecord {
@@ -14,6 +15,13 @@ export interface UserRecord {
   spk: SignedPreKeyPublic;
   opks: OneTimePreKeyPublic[];
   createdAt: number;
+  /** HMAC of the recovery email: the address itself is never stored. */
+  emailHash?: string;
+  /** Base32 TOTP secret when two-factor authentication is on. */
+  totp?: string;
+  /** Last accepted TOTP time step, so a code cannot be replayed. */
+  totpLast?: number;
+  backup?: BackupMeta & { size: number };
 }
 
 export interface QueuedEnvelope {
@@ -52,6 +60,9 @@ export class RelayStore {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private saving: Promise<void> = Promise.resolve();
   private counter = 0;
+  private readonly memoryBackups = new Map<string, Uint8Array>();
+  /** Server secret mixed into email hashes. */
+  pepper: Uint8Array = randomBytes(32);
 
   constructor(dataDir: string | null, limits: Partial<StoreLimits> = {}) {
     this.dataDir = dataDir;
@@ -61,6 +72,12 @@ export class RelayStore {
   async load(): Promise<void> {
     if (!this.dataDir) return;
     await mkdir(join(this.dataDir, 'queue'), { recursive: true });
+    await mkdir(join(this.dataDir, 'backups'), { recursive: true });
+    try {
+      this.pepper = new Uint8Array(await readFile(join(this.dataDir, 'secret.key')));
+    } catch {
+      await writeFile(join(this.dataDir, 'secret.key'), this.pepper, { mode: 0o600 });
+    }
     try {
       const raw = JSON.parse(await readFile(join(this.dataDir, 'users.json'), 'utf8')) as { users: UserRecord[] };
       for (const user of raw.users ?? []) {
@@ -101,8 +118,49 @@ export class RelayStore {
     this.users.delete(userId);
     this.usernames.delete(user.username);
     this.queues.delete(userId);
+    this.memoryBackups.delete(userId);
     this.scheduleSave();
-    if (this.dataDir) await rm(join(this.dataDir, 'queue', userDir(userId)), { recursive: true, force: true });
+    if (this.dataDir) {
+      await rm(join(this.dataDir, 'queue', userDir(userId)), { recursive: true, force: true });
+      await rm(join(this.dataDir, 'backups', `${userDir(userId)}.bin`), { force: true });
+    }
+  }
+
+  touch(): void {
+    this.scheduleSave();
+  }
+
+  // ---- encrypted backups -------------------------------------------------------------
+
+  async putBackup(userId: string, meta: BackupMeta, data: Uint8Array): Promise<void> {
+    const user = this.users.get(userId);
+    if (!user) return;
+    if (this.dataDir) {
+      const file = join(this.dataDir, 'backups', `${userDir(userId)}.bin`);
+      await writeFile(`${file}.tmp`, data);
+      await rename(`${file}.tmp`, file);
+    } else {
+      this.memoryBackups.set(userId, data);
+    }
+    user.backup = { ...meta, size: data.length };
+    this.scheduleSave();
+  }
+
+  async getBackup(userId: string): Promise<Uint8Array | null> {
+    if (!this.dataDir) return this.memoryBackups.get(userId) ?? null;
+    try {
+      return new Uint8Array(await readFile(join(this.dataDir, 'backups', `${userDir(userId)}.bin`)));
+    } catch {
+      return null;
+    }
+  }
+
+  async deleteBackup(userId: string): Promise<void> {
+    const user = this.users.get(userId);
+    if (user) delete user.backup;
+    this.memoryBackups.delete(userId);
+    if (this.dataDir) await rm(join(this.dataDir, 'backups', `${userDir(userId)}.bin`), { force: true });
+    this.scheduleSave();
   }
 
   byUsername(username: string): UserRecord | undefined {

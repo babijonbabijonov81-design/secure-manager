@@ -89,3 +89,40 @@ export function decryptRecord(dataKey: Uint8Array, name: string, data: Uint8Arra
   if (data[0] !== 1 || data.length < 25) throw new Error('Vault: unsupported record');
   return aeadOpen(dataKey, data.subarray(1, 25), data.subarray(25), recordAd(name));
 }
+
+// ---- server backups -------------------------------------------------------------------
+// The backup key is derived from the password with its own salt, so the server-side
+// copy can only be opened by someone who knows the password.
+
+const BACKUP_AD = utf8('veil-backup-v1');
+
+export async function deriveBackupKey(
+  password: string,
+  kdfParams: { N: number; r: number; p: number; salt?: string } = DEFAULT_KDF,
+): Promise<{ key: Uint8Array; kdf: VaultMeta['kdf'] }> {
+  const kdf = { alg: 'scrypt' as const, N: kdfParams.N, r: kdfParams.r, p: kdfParams.p, salt: kdfParams.salt ?? b64(random(16)) };
+  return { key: await passwordKey(password, kdf), kdf };
+}
+
+export function sealBackup(key: Uint8Array, plaintext: Uint8Array): { nonce: Uint8Array; ct: Uint8Array } {
+  return aeadSeal(key, plaintext, BACKUP_AD);
+}
+
+/** Throws `WrongPasswordError` if the key (password) is wrong. */
+export function openBackup(key: Uint8Array, nonce: Uint8Array, ct: Uint8Array): Uint8Array {
+  try {
+    return aeadOpen(key, nonce, ct, BACKUP_AD);
+  } catch {
+    throw new WrongPasswordError();
+  }
+}
+
+/** Checks a password against the local vault without changing anything. */
+export async function verifyVaultPassword(meta: VaultMeta, password: string): Promise<boolean> {
+  try {
+    wipe(await unlockVault(meta, password));
+    return true;
+  } catch {
+    return false;
+  }
+}

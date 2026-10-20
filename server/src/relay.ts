@@ -4,13 +4,15 @@
 // for user X". What it never knows: message contents, attachments, display names,
 // contact lists, or who sent an envelope (the sender is sealed inside the envelope).
 
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   authStatement,
   dhKeyStatement,
+  EMAIL_RE,
+  MAX_BACKUP_BYTES,
   MAX_ENVELOPE_BYTES,
   MAX_FRAME_BYTES,
   MAX_OPKS_PER_UPLOAD,
@@ -18,6 +20,8 @@ import {
   registerExtra,
   signedPreKeyStatement,
   USERNAME_RE,
+  type AccountStatus,
+  type BackupMeta,
   type ClientFrame,
   type ErrorCode,
   type OneTimePreKeyPublic,
@@ -26,7 +30,9 @@ import {
   type SignedPreKeyPublic,
   type UserInfo,
 } from './shared/protocol.ts';
+import { verifyTotp } from './shared/totp.ts';
 import { b64, pack, unb64Len, unpack } from './shared/wire.ts';
+import { codeEmail, type Mailer } from './mailer.ts';
 import { RelayStore, type StoreLimits, type UserRecord } from './store.ts';
 
 export interface RelayOptions {
@@ -37,6 +43,8 @@ export interface RelayOptions {
   name?: string;
   limits?: Partial<StoreLimits>;
   log?: (message: string) => void;
+  /** Sends verification and recovery codes; without it email features are unavailable. */
+  mailer?: Mailer | null;
 }
 
 export interface RelayHandle {
@@ -51,6 +59,36 @@ const LOOKUP_WINDOW_MS = 60_000;
 const LOOKUPS_PER_WINDOW = 120;
 const SENDS_PER_WINDOW = 1200;
 const REGISTRATIONS_PER_HOUR = 20;
+const CODE_TTL_MS = 15 * 60 * 1000;
+const CODE_ATTEMPTS = 5;
+const EMAILS_PER_HOUR = 5;
+const TOKEN_TTL_MS = 30 * 60 * 1000;
+
+interface PendingCode {
+  code: string;
+  expires: number;
+  attempts: number;
+  emailHash: string;
+}
+
+const sameCode = (a: string, b: string) => {
+  const x = Buffer.from(String(a).replace(/\s/g, ''));
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+
+function validBackupMeta(meta: unknown): meta is BackupMeta {
+  const m = meta as BackupMeta;
+  return (
+    !!m &&
+    m.v === 1 &&
+    !!m.kdf &&
+    [m.kdf.N, m.kdf.r, m.kdf.p].every((n) => Number.isInteger(n) && n > 0 && n <= 2 ** 22) &&
+    !!unb64Len(m.kdf.salt, 16) &&
+    !!unb64Len(m.nonce, 24) &&
+    Number.isFinite(m.updatedAt)
+  );
+}
 
 interface Connection {
   ws: WebSocket;
@@ -151,6 +189,50 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
   const registrations = new Map<string, Bucket>();
   // Client-side ids of recently accepted envelopes, so a retried send is not queued twice.
   const recentSends = new Map<string, Map<string, { id: string; ts: number }>>();
+  const mailer = options.mailer ?? null;
+  const emailPending = new Map<string, PendingCode>(); // by userId
+  const recoverPending = new Map<string, PendingCode>(); // by username
+  const recoveryTokens = new Map<string, { username: string; expires: number }>();
+  const mailBuckets = new Map<string, Bucket>();
+
+  const emailHash = (email: string) => createHmac('sha256', store.pepper).update(email.trim().toLowerCase()).digest('base64url');
+  const newCode = () => String(randomInt(0, 1_000_000)).padStart(6, '0');
+  const takeMailBudget = (key: string) => {
+    const bucket = mailBuckets.get(key) ?? new Bucket(EMAILS_PER_HOUR, 3_600_000);
+    mailBuckets.set(key, bucket);
+    if (!bucket.take()) fail('rate_limited', 'Слишком много писем, попробуйте через час');
+  };
+  const sendCode = async (to: string, code: string, purpose: 'confirm' | 'recover') => {
+    if (!mailer) fail('mail_unavailable', 'Сервер не настроен для отправки писем');
+    try {
+      await mailer!({ to, ...codeEmail(code, purpose) });
+    } catch (error) {
+      log(`mail error: ${(error as Error).message}`);
+      fail('mail_unavailable', 'Не удалось отправить письмо. Проверьте настройки почты на сервере');
+    }
+  };
+  /** Checks a 2FA code and burns its time step so it cannot be reused. */
+  const totpOk = (user: UserRecord, code: unknown): boolean => {
+    if (!user.totp) return true;
+    const step = verifyTotp(user.totp, String(code ?? ''));
+    if (step === null || step <= (user.totpLast ?? -1)) return false;
+    user.totpLast = step;
+    store.touch();
+    return true;
+  };
+  const checkCode = (pending: PendingCode | undefined, code: unknown): PendingCode => {
+    if (!pending || pending.expires < Date.now() || pending.attempts >= CODE_ATTEMPTS)
+      fail('bad_code', 'Код устарел — запросите новый');
+    pending!.attempts++;
+    if (!sameCode(String(code ?? ''), pending!.code)) fail('bad_code', 'Неверный код из письма');
+    return pending!;
+  };
+  const accountStatus = (user: UserRecord): AccountStatus => ({
+    email: !!user.emailHash,
+    totp: !!user.totp,
+    backup: user.backup ? { size: user.backup.size, updatedAt: user.backup.updatedAt } : null,
+    mail: !!mailer,
+  });
 
   const http = createServer((req: IncomingMessage, res: ServerResponse) => {
     const path = (req.url ?? '/').split('?')[0];
@@ -217,7 +299,19 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     if (!validSignedPreKey(signKey!, frame.spk)) fail('bad_request', 'Неверный подписанный предключ');
     if (!validOneTimePreKeys(frame.opks)) fail('bad_request', 'Неверные одноразовые предключи');
 
-    const taken = store.byUsername(username);
+    let taken = store.byUsername(username);
+    let inherited: Pick<UserRecord, 'emailHash' | 'totp' | 'totpLast'> = {};
+    if (taken && taken.userId !== frame.userId && frame.recoveryToken) {
+      // Account reset after email (+2FA) recovery: new keys take over the username.
+      const token = recoveryTokens.get(frame.recoveryToken);
+      if (!token || token.username !== username || token.expires < Date.now()) fail('bad_code', 'Срок восстановления истёк');
+      recoveryTokens.delete(frame.recoveryToken);
+      inherited = { emailHash: taken.emailHash, totp: taken.totp, totpLast: taken.totpLast };
+      for (const old of online.get(taken.userId) ?? []) old.ws.close(4002, 'deleted');
+      await store.removeUser(taken.userId);
+      log(`account reset @${username}`);
+      taken = undefined;
+    }
     if (taken && taken.userId !== frame.userId) fail('username_taken', 'Это имя пользователя уже занято');
     const previous = store.users.get(frame.userId);
     if (previous && previous.username !== username) store.usernames.delete(previous.username);
@@ -230,6 +324,10 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       spk: { id: frame.spk.id, pub: frame.spk.pub, sig: frame.spk.sig },
       opks: frame.opks.map((k) => ({ id: k.id, pub: k.pub })).slice(0, store.limits.maxOpks),
       createdAt: previous?.createdAt ?? Date.now(),
+      ...inherited,
+      ...(previous?.emailHash ? { emailHash: previous.emailHash } : {}),
+      ...(previous?.totp ? { totp: previous.totp, totpLast: previous.totpLast } : {}),
+      ...(previous?.backup ? { backup: previous.backup } : {}),
     };
     store.addUser(user);
     log(`registered @${username}`);
@@ -243,6 +341,47 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     if (!user) fail('unknown_user', 'Аккаунт не найден на сервере');
     if (!verifySig(frame.sig, authStatement(conn.nonce, 'auth'), signKey!)) fail('unauthorized', 'Неверная подпись');
     await goOnline(conn, user!);
+  };
+
+  const handleRecovery = async (conn: Connection, frame: Extract<ClientFrame, { type: 'recover_start' | 'recover_finish' }>) => {
+    const username = String(frame.username ?? '').toLowerCase().replace(/^@/, '');
+    if (frame.type === 'recover_start') {
+      const email = String(frame.email ?? '').trim();
+      if (!USERNAME_RE.test(username) || !EMAIL_RE.test(email)) fail('bad_request', 'Проверьте имя пользователя и почту');
+      if (!mailer) fail('mail_unavailable', 'Сервер не настроен для отправки писем');
+      takeMailBudget(`ip:${conn.ip}`);
+      const user = store.byUsername(username);
+      // Same answer whether or not the pair matches, so accounts cannot be probed.
+      if (user?.emailHash && user.emailHash === emailHash(email)) {
+        takeMailBudget(`user:${user.userId}`);
+        const code = newCode();
+        recoverPending.set(username, { code, expires: Date.now() + CODE_TTL_MS, attempts: 0, emailHash: user.emailHash });
+        await sendCode(email, code, 'recover');
+        log(`recovery code sent for @${username}`);
+      }
+      send(conn, { type: 'result', reqId: frame.reqId, data: { sent: true } });
+      return;
+    }
+    const user = store.byUsername(username);
+    const pending = recoverPending.get(username);
+    checkCode(user && pending?.emailHash === user.emailHash ? pending : undefined, frame.code);
+    if (user!.totp) {
+      if (!frame.totp) fail('totp_required', 'Введите код из Google Authenticator');
+      if (!totpOk(user!, frame.totp)) fail('bad_totp', 'Неверный код из Google Authenticator');
+    }
+    recoverPending.delete(username);
+    const token = b64(randomBytes(24));
+    recoveryTokens.set(token, { username, expires: Date.now() + TOKEN_TTL_MS });
+    const backup = user!.backup ? await store.getBackup(user!.userId) : null;
+    send(
+      conn,
+      {
+        type: 'result',
+        reqId: frame.reqId,
+        data: { token, userId: user!.userId, backup: backup && user!.backup ? { ...user!.backup } : null },
+      },
+      backup ?? undefined,
+    );
   };
 
   const handleRequest = async (conn: Connection, frame: ClientFrame, body: Uint8Array) => {
@@ -322,9 +461,73 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         send(conn, { type: 'result', reqId: frame.reqId, data: { opkCount: count } });
         return;
       }
+      case 'account_status': {
+        send(conn, { type: 'result', reqId: frame.reqId, data: accountStatus(store.users.get(userId)!) });
+        return;
+      }
+      case 'email_set': {
+        const email = String(frame.email ?? '').trim();
+        if (!EMAIL_RE.test(email)) fail('bad_request', 'Неверный адрес почты');
+        if (!mailer) fail('mail_unavailable', 'Сервер не настроен для отправки писем');
+        takeMailBudget(`user:${userId}`);
+        const code = newCode();
+        emailPending.set(userId, { code, expires: Date.now() + CODE_TTL_MS, attempts: 0, emailHash: emailHash(email) });
+        await sendCode(email, code, 'confirm');
+        send(conn, { type: 'result', reqId: frame.reqId, data: { sent: true } });
+        return;
+      }
+      case 'email_confirm': {
+        const pending = checkCode(emailPending.get(userId), frame.code);
+        const user = store.users.get(userId)!;
+        user.emailHash = pending.emailHash;
+        emailPending.delete(userId);
+        store.touch();
+        send(conn, { type: 'result', reqId: frame.reqId, data: accountStatus(user) });
+        return;
+      }
+      case 'email_remove': {
+        const user = store.users.get(userId)!;
+        if (!totpOk(user, frame.totp)) fail('bad_totp', 'Неверный код из Google Authenticator');
+        delete user.emailHash;
+        await store.deleteBackup(userId);
+        send(conn, { type: 'result', reqId: frame.reqId, data: accountStatus(user) });
+        return;
+      }
+      case 'totp_set': {
+        const user = store.users.get(userId)!;
+        if (user.totp) fail('bad_request', 'Двухфакторная аутентификация уже включена');
+        const secret = String(frame.secret ?? '');
+        if (!/^[A-Z2-7]{16,64}$/.test(secret)) fail('bad_request', 'Неверный секрет');
+        const step = verifyTotp(secret, frame.code);
+        if (step === null) fail('bad_totp', 'Неверный код из Google Authenticator');
+        user.totp = secret;
+        user.totpLast = step!;
+        store.touch();
+        send(conn, { type: 'result', reqId: frame.reqId, data: accountStatus(user) });
+        return;
+      }
+      case 'totp_disable': {
+        const user = store.users.get(userId)!;
+        if (!user.totp) fail('bad_request', 'Двухфакторная аутентификация выключена');
+        if (!totpOk(user, frame.code)) fail('bad_totp', 'Неверный код из Google Authenticator');
+        delete user.totp;
+        delete user.totpLast;
+        store.touch();
+        send(conn, { type: 'result', reqId: frame.reqId, data: accountStatus(user) });
+        return;
+      }
+      case 'backup_put': {
+        if (!validBackupMeta(frame.meta)) fail('bad_request', 'Неверная резервная копия');
+        if (!body.length || body.length > MAX_BACKUP_BYTES) fail('too_large', 'Резервная копия слишком большая');
+        const meta: BackupMeta = { v: 1, kdf: frame.meta.kdf, nonce: frame.meta.nonce, updatedAt: Date.now() };
+        await store.putBackup(userId, meta, body.slice());
+        send(conn, { type: 'result', reqId: frame.reqId, data: accountStatus(store.users.get(userId)!) });
+        return;
+      }
       case 'unregister': {
         const signKey = unb64Len(userId, 32)!;
         if (!verifySig(frame.sig, authStatement(conn.nonce, 'unregister'), signKey)) fail('unauthorized', 'Неверная подпись');
+        if (!totpOk(store.users.get(userId)!, frame.totp)) fail('bad_totp', 'Неверный код из Google Authenticator');
         await store.removeUser(userId);
         recentSends.delete(userId);
         log('account deleted');
@@ -364,6 +567,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
           if (!conn.userId) {
             if (header.type === 'register') await handleRegister(conn, header);
             else if (header.type === 'auth') await handleAuth(conn, header);
+            else if (header.type === 'recover_start' || header.type === 'recover_finish') await handleRecovery(conn, header);
             else if (header.type === 'ping') send(conn, { type: 'pong' });
             else fail('unauthorized', 'Требуется вход');
             return;

@@ -12,6 +12,8 @@ export const MAX_FRAME_BYTES = 26 * 1024 * 1024;
 export const MAX_ENVELOPE_BYTES = 25 * 1024 * 1024;
 export const USERNAME_RE = /^[a-z0-9_]{3,32}$/;
 export const MAX_OPKS_PER_UPLOAD = 200;
+export const MAX_BACKUP_BYTES = 16 * 1024 * 1024;
+export const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
 
 /** userId is the base64url Ed25519 identity (signing) public key. */
 export interface SignedPreKeyPublic {
@@ -47,7 +49,33 @@ export interface RegisterFrame {
   spk: SignedPreKeyPublic;
   opks: OneTimePreKeyPublic[];
   sig: string;
+  /** Proof of email (+2FA) recovery: lets new keys take over an existing username. */
+  recoveryToken?: string;
 }
+
+/**
+ * Encrypted account backup. The relay stores the ciphertext only; the key is derived
+ * from the user's password with scrypt, so the relay can never decrypt it.
+ */
+export interface BackupMeta {
+  v: 1;
+  kdf: { N: number; r: number; p: number; salt: string };
+  nonce: string;
+  updatedAt: number;
+}
+
+export interface AccountStatus {
+  email: boolean;
+  totp: boolean;
+  backup: { size: number; updatedAt: number } | null;
+  /** The relay is configured to send email. */
+  mail: boolean;
+}
+
+/** Requests allowed before login, used to recover an account on a new device. */
+export type RecoveryFrame =
+  | { type: 'recover_start'; reqId: string; username: string; email: string }
+  | { type: 'recover_finish'; reqId: string; username: string; code: string; totp?: string };
 
 export interface AuthFrame {
   type: 'auth';
@@ -61,11 +89,19 @@ export type RequestFrame =
   | { type: 'bundle'; reqId: string; userId: string }
   | { type: 'send'; reqId: string; to: string; cid: string; ephemeral?: boolean }
   | { type: 'prekeys'; reqId: string; opks?: OneTimePreKeyPublic[]; spk?: SignedPreKeyPublic }
-  | { type: 'unregister'; reqId: string; sig: string };
+  | { type: 'unregister'; reqId: string; sig: string; totp?: string }
+  | { type: 'account_status'; reqId: string }
+  | { type: 'email_set'; reqId: string; email: string }
+  | { type: 'email_confirm'; reqId: string; code: string }
+  | { type: 'email_remove'; reqId: string; totp?: string }
+  | { type: 'totp_set'; reqId: string; secret: string; code: string }
+  | { type: 'totp_disable'; reqId: string; code: string }
+  | { type: 'backup_put'; reqId: string; meta: BackupMeta };
 
 export type ClientFrame =
   | RegisterFrame
   | AuthFrame
+  | RecoveryFrame
   | RequestFrame
   | { type: 'ack'; ids: string[] }
   | { type: 'ping' };
@@ -89,6 +125,10 @@ export type ErrorCode =
   | 'too_large'
   | 'quota'
   | 'offline'
+  | 'mail_unavailable'
+  | 'bad_code'
+  | 'totp_required'
+  | 'bad_totp'
   | 'server_error';
 
 // ---- Signed statements -------------------------------------------------------------

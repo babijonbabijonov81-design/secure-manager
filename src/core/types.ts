@@ -11,12 +11,18 @@ export interface Settings {
   typingIndicators: boolean;
   notifications: boolean;
   notificationPreview: boolean;
+  /** Veil's own notification cards or the operating system's ones. */
+  notificationStyle: 'veil' | 'system';
   sounds: boolean;
   /** Minutes of inactivity before the app locks itself; 0 disables auto-lock. */
   autoLockMinutes: number;
   enterToSend: boolean;
   /** Hide the window from screenshots and screen sharing (Windows and macOS). */
   screenProtection: boolean;
+  spellcheck: boolean;
+  autocorrect: boolean;
+  /** Who sees when you were last online: exact time, or only "recently". */
+  lastSeen: 'everyone' | 'nobody';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -26,10 +32,14 @@ export const DEFAULT_SETTINGS: Settings = {
   typingIndicators: true,
   notifications: true,
   notificationPreview: false,
+  notificationStyle: 'veil',
   sounds: true,
   autoLockMinutes: 15,
   enterToSend: true,
   screenProtection: false,
+  spellcheck: true,
+  autocorrect: true,
+  lastSeen: 'everyone',
 };
 
 export interface SignedPreKeyRecord {
@@ -38,6 +48,14 @@ export interface SignedPreKeyRecord {
   priv: string;
   sig: string;
   createdAt: number;
+}
+
+export interface RecoverySettings {
+  email: string;
+  /** Key that encrypts the server backup, derived from the password with scrypt. */
+  key: string;
+  kdf: { N: number; r: number; p: number; salt: string };
+  lastBackupAt: number;
 }
 
 export interface AccountRecord {
@@ -54,6 +72,9 @@ export interface AccountRecord {
   nextSpkId: number;
   serverUrl: string;
   createdAt: number;
+  /** Base32 secret of the authenticator app (two-factor authentication). */
+  totp?: string;
+  recovery?: RecoverySettings;
 }
 
 export interface Contact {
@@ -71,21 +92,33 @@ export interface Contact {
   timer: number;
   pinned?: boolean;
   muted?: boolean;
+  archived?: boolean;
   draft?: string;
   /** Another account claims this contact's username (possible reinstall or impersonation). */
   keyWarning?: boolean;
+  /** When the contact was last seen online (our clock), if they share it. */
+  lastSeen?: number;
+  /** The contact hides their last-seen time ("был(а) недавно"). */
+  presenceHidden?: boolean;
 }
 
 export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+
+export type AttachmentKind = 'image' | 'file' | 'voice' | 'sticker';
 
 export interface Attachment {
   id: string;
   name: string;
   mime: string;
   size: number;
-  kind: 'image' | 'file';
+  kind: AttachmentKind;
   w?: number;
   h?: number;
+  /** Voice messages: duration in seconds and a coarse waveform (0–31 per bar). */
+  dur?: number;
+  wave?: number[];
+  /** Stickers: content hash, lets the recipient save it to their collection. */
+  sticker?: string;
 }
 
 export type SystemEvent =
@@ -94,11 +127,23 @@ export type SystemEvent =
   | { kind: 'keychange' }
   | { kind: 'reset' };
 
+export interface ReplyRef {
+  id: string;
+  text: string;
+  /** The quoted message was written by me. */
+  out: boolean;
+}
+
 export interface Message {
   id: string;
   dir: 'in' | 'out' | 'system';
+  /** Text, or the caption of attachments. */
   text?: string;
+  /** Legacy single attachment (v1.0); new messages use `atts`. */
   att?: Attachment;
+  atts?: Attachment[];
+  reply?: ReplyRef;
+  reactions?: { me?: string; them?: string };
   /** Sender clock. */
   ts: number;
   /** Local clock when added. */
@@ -106,10 +151,15 @@ export interface Message {
   status?: MessageStatus;
   timer?: number;
   expiresAt?: number;
+  /** Legacy (v1.0) "deleted" placeholders; such messages are dropped on load. */
   deleted?: boolean;
   readSent?: boolean;
   sys?: SystemEvent;
 }
+
+export const attachmentsOf = (message: Message): Attachment[] => message.atts ?? (message.att ? [message.att] : []);
+
+export type AttachmentMeta = Omit<Attachment, 'id'> & { len: number };
 
 /** Plaintext carried inside the Double Ratchet. */
 export type Content =
@@ -118,7 +168,11 @@ export type Content =
       id: string;
       ts: number;
       text?: string;
+      /** Legacy single attachment, still sent for one-file messages so v1.0 can read them. */
       att?: Omit<Attachment, 'id'>;
+      atts?: AttachmentMeta[];
+      /** Reply: quoted id, short snippet and who wrote it from the sender's point of view. */
+      r?: { id: string; s: string; a: 'me' | 'you' };
       timer?: number;
       p?: { n: string };
     }
@@ -126,6 +180,11 @@ export type Content =
   | { t: 'typ'; on: boolean }
   | { t: 'timer'; seconds: number; ts: number }
   | { t: 'del'; ids: string[] }
+  | { t: 'react'; id: string; e: string }
+  /** Presence: online, going offline, or hidden ("recently"); `ask` requests a reply. */
+  | { t: 'pres'; s: 'on' | 'off' | 'hidden'; ask?: 1 }
+  /** Sent after restoring from a backup to open fresh sessions with every contact. */
+  | { t: 'hi' }
   | { t: 'prof'; n: string };
 
 export interface OutboxItem {
@@ -135,16 +194,29 @@ export interface OutboxItem {
   msgIds: string[];
 }
 
+export interface StickerMeta {
+  id: string;
+  mime: string;
+  w: number;
+  h: number;
+  addedAt: number;
+}
+
 export interface MessengerSnapshot {
   status: ConnectionStatus;
   statusError?: string;
   fatal?: string;
   me: { userId: string; username: string; displayName: string; serverUrl: string };
+  security: { totp: boolean; recoveryEmail?: string; lastBackupAt?: number };
   settings: Settings;
   contacts: Contact[];
   conversations: Record<string, Message[]>;
   typing: Record<string, boolean>;
+  online: Record<string, boolean>;
+  stickers: StickerMeta[];
 }
 
 export const TIMER_OPTIONS = [0, 30, 300, 3600, 28800, 86400, 604800] as const;
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export const MAX_ALBUM_ITEMS = 10;
+export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'] as const;
