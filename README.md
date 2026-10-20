@@ -96,14 +96,56 @@ xattr -cr /Applications/Veil.app
 
 ### Вариант 3. Свой VPS с HTTPS (рекомендуется)
 
-Понадобится любой сервер с Docker и домен, который указывает на этот сервер:
+Понадобятся:
 
-```bash
-git clone https://github.com/babijonbabijonov81-design/secure-manager veil && cd veil/server
-DOMAIN=chat.example.com docker compose up -d
-```
+- VPS с Ubuntu и публичным IP-адресом (Hetzner, DigitalOcean, Vultr, Timeweb и т. п.; хватит 1 ядра и 1 ГБ памяти);
+- домен или поддомен, A-запись которого указывает на IP сервера. Подойдёт и бесплатный поддомен, например на [duckdns.org](https://www.duckdns.org).
 
-Caddy сам получит сертификат Let's Encrypt. В приложении укажите адрес `chat.example.com`.
+1. Установите Docker:
+
+   ```bash
+   curl -fsSL https://get.docker.com | sh
+   ```
+
+2. Откройте порты. Если на сервере включён брандмауэр ufw:
+
+   ```bash
+   ufw allow 80/tcp && ufw allow 443/tcp          # сам сервер Veil (HTTPS)
+   ufw allow 3478 && ufw allow 49160:49200/udp    # TURN для звонков (если нужен)
+   ```
+
+   У многих провайдеров есть ещё и брандмауэр в панели управления: откройте там те же порты.
+
+3. Скачайте код (пока репозиторий закрытый, git попросит логин и [токен GitHub](https://github.com/settings/tokens)):
+
+   ```bash
+   git clone https://github.com/babijonbabijonov81-design/secure-manager veil && cd veil/server
+   ```
+
+4. Создайте файл настроек `.env` (например, `nano .env`). Обязателен только `DOMAIN`, остальное по желанию:
+
+   ```ini
+   DOMAIN=chat.example.com
+
+   # Звонки через TURN (см. «Звонки и TURN-сервер»). Секрет: любая длинная строка, например из `openssl rand -hex 32`
+   TURN_SECRET=вставьте-сюда-длинную-случайную-строку
+   TURN_URLS=turn:chat.example.com:3478,turn:chat.example.com:3478?transport=tcp
+
+   # Почта для восстановления аккаунта (см. ниже)
+   BREVO_API_KEY=xkeysib-...
+   MAIL_FROM=Veil <you@example.com>
+   ```
+
+5. Запустите:
+
+   ```bash
+   docker compose --profile turn up -d     # сервер + TURN
+   docker compose up -d                    # или только сервер, без TURN
+   ```
+
+6. В приложении укажите адрес сервера `chat.example.com`. Сертификат HTTPS Caddy получит сам за минуту.
+
+Обновить сервер до новой версии: `git pull && docker compose --profile turn up -d --build`. Журнал: `docker compose logs -f relay`.
 
 Можно обойтись и без Docker: нужен Node.js 22.18+.
 
@@ -113,7 +155,7 @@ cd server && npm install && PORT=8787 DATA_DIR=./data node src/index.ts
 
 ### Почта для восстановления аккаунта
 
-Чтобы сервер мог отправлять коды восстановления, задайте ему переменные окружения (на Render: **Environment → Add Environment Variable**, в Docker: рядом с `DOMAIN`). Подойдёт один из вариантов:
+Чтобы сервер мог отправлять коды восстановления, задайте ему переменные окружения (на Render: **Environment → Add Environment Variable**, на VPS: в файле `.env`). Подойдёт один из вариантов:
 
 | Переменные | Сервис |
 | --- | --- |
@@ -127,18 +169,18 @@ cd server && npm install && PORT=8787 DATA_DIR=./data node src/index.ts
 
 ### Звонки и TURN-сервер
 
-Звук идёт напрямую между компьютерами (WebRTC). Чтобы найти прямой путь через домашние роутеры, приложение по умолчанию спрашивает свой внешний адрес у публичных STUN-серверов Google и Cloudflare. Сам разговор через них не идёт. Обычно этого достаточно, и на Render ничего настраивать не нужно.
+Звук идёт напрямую между компьютерами (WebRTC). Чтобы найти прямой путь через домашние роутеры, приложение спрашивает свой внешний адрес у публичных STUN-серверов Google и Cloudflare; сам разговор через них не идёт. **Обычно этого достаточно: для звонков ничего настраивать не нужно**, в том числе на Render.
 
-TURN-сервер нужен в двух случаях: если у кого-то строгая сеть (корпоративная, мобильный интернет с CGNAT) и звонок не соединяется, или если вы хотите, чтобы собеседник не видел ваш IP (настройка «Скрывать мой IP в звонках»). TURN пересылает уже зашифрованный звук и прочитать его не может.
+TURN-сервер нужен в двух случаях:
 
-На VPS из варианта 3 откройте порты 3478 (UDP и TCP) и 49160–49200 (UDP) и запустите вместе с TURN:
+- у кого-то строгая сеть (корпоративная, мобильный интернет, некоторые провайдеры) и звонок «Не удалось соединиться»;
+- вы хотите, чтобы собеседник не видел ваш IP (Настройки → Аудио → «Скрывать мой IP в звонках»).
 
-```bash
-DOMAIN=chat.example.com TURN_SECRET=$(openssl rand -hex 32) TURN_URLS=turn:chat.example.com:3478 \
-  docker compose --profile turn up -d
-```
+TURN пересылает уже зашифрованный звук и прочитать его не может. На бесплатном Render его не запустить (Render не принимает UDP), нужен VPS из варианта 3: заполните в `.env` строки `TURN_SECRET` и `TURN_URLS` и запустите с `--profile turn`. Ретранслятор сам раздаёт приложениям временные пароли к TURN (на сутки).
 
-Ретранслятор сам раздаёт приложениям временные пароли к TURN (на сутки). Подойдёт и любой другой TURN-сервер: `TURN_URLS` + `TURN_SECRET` (coturn `static-auth-secret`) или `TURN_USERNAME` + `TURN_PASSWORD`. Свои STUN-серверы задаются в `STUN_URLS`. На бесплатном Render TURN запустить нельзя: он не принимает UDP.
+Как проверить: в приложении откройте **Настройки → Аудио**. Если у пункта «Скрывать мой IP в звонках» написано «Звук пойдёт через TURN-сервер…», сервер раздаёт TURN.
+
+Если у VPS нет публичного IP прямо на сетевом интерфейсе (AWS, Google Cloud), TURN нужно дополнительно указать внешний адрес; проще выбрать провайдера с обычным публичным IP. Подойдёт и любой другой TURN-сервер: `TURN_URLS` + `TURN_SECRET` (coturn `static-auth-secret`) или `TURN_USERNAME` + `TURN_PASSWORD`. Свои STUN-серверы задаются в `STUN_URLS`.
 
 ### Дальше
 

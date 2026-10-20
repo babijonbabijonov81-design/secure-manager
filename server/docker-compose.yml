@@ -1,9 +1,11 @@
-# Relay + automatic HTTPS with Caddy. Set DOMAIN to a domain pointing at this server:
-#   DOMAIN=chat.example.com docker compose up -d
-# For account recovery by email also pass BREVO_API_KEY (or RESEND_API_KEY / SMTP_URL) and MAIL_FROM.
-# Optional TURN server for calls (strict NATs, "hide my IP"): open UDP/TCP 3478 and UDP 49160-49200, then
-#   DOMAIN=chat.example.com TURN_SECRET=$(openssl rand -hex 32) TURN_URLS=turn:chat.example.com:3478 \
-#     docker compose --profile turn up -d
+# Сервер Veil + автоматический HTTPS (Caddy) + необязательный TURN для звонков.
+# Пошаговая инструкция: README.md → «Вариант 3. Свой VPS с HTTPS».
+# Настройки берутся из файла .env рядом с этим файлом:
+#   DOMAIN=chat.example.com                      домен, который указывает на этот сервер (обязательно)
+#   TURN_SECRET=...  TURN_URLS=turn:chat.example.com:3478   TURN для звонков (по желанию)
+#   BREVO_API_KEY=...  MAIL_FROM=Veil <you@example.com>     почта для восстановления (по желанию)
+# Запуск: docker compose --profile turn up -d   (без TURN: docker compose up -d)
+# Для TURN откройте порты 3478 (UDP и TCP) и 49160–49200 (UDP).
 services:
   relay:
     build: .

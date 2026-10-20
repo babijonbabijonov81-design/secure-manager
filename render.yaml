@@ -1,4 +1,4 @@
-# One-click deployment of the relay on Render (https://render.com): New → Blueprint → this repo.
+# Сервер Veil на Render (https://render.com) в один клик: New → Blueprint → этот репозиторий.
 services:
   - type: web
     name: veil-relay
@@ -12,8 +12,9 @@ services:
         value: memory
       - key: RELAY_NAME
         value: Veil Relay
-      # Email for account recovery codes (optional). Brevo works on Render's free plan:
-      # create an API key at brevo.com and use a sender address verified there.
+      # Почта для кодов восстановления (по желанию). Brevo работает на бесплатном Render:
+      # создайте API-ключ на brevo.com и укажите адрес отправителя, подтверждённый там.
+      # Звонки на Render работают без настройки; TURN здесь запустить нельзя (нет UDP).
       - key: BREVO_API_KEY
         sync: false
       - key: MAIL_FROM
