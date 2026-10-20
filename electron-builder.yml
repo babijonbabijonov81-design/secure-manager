@@ -1,0 +1,71 @@
+appId: app.veil.messenger
+productName: Veil
+copyright: Copyright © 2026 Veil
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**/*
+  - resources/**/*
+  - package.json
+  - '!**/*.map'
+asar: true
+artifactName: Veil-${version}-${os}-${arch}.${ext}
+
+mac:
+  category: public.app-category.social-networking
+  icon: build/icon.png
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # Ad-hoc signature: required for Apple Silicon. For distribution without warnings,
+  # replace with a "Developer ID Application" identity and enable notarization.
+  identity: '-'
+  hardenedRuntime: false
+  extendInfo:
+    NSHumanReadableCopyright: Veil — end-to-end encrypted messenger
+dmg:
+  title: Veil ${version}
+  artifactName: Veil-${version}-mac-${arch}.${ext}
+  contents:
+    - x: 140
+      y: 190
+    - x: 400
+      y: 190
+      type: link
+      path: /Applications
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+    - target: portable
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Veil
+  installerLanguages: [ru_RU, en_US]
+  multiLanguageInstaller: true
+  artifactName: Veil-${version}-win-${arch}-setup.${ext}
+portable:
+  artifactName: Veil-${version}-win-portable.${ext}
+
+linux:
+  icon: build/icon.png
+  category: Network
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  maintainer: Veil
+  synopsis: End-to-end encrypted messenger
+
+publish: null

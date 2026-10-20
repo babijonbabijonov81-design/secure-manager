@@ -1,0 +1,14 @@
+# One-click deployment of the relay on Render (https://render.com): New → Blueprint → this repo.
+services:
+  - type: web
+    name: veil-relay
+    runtime: docker
+    rootDir: server
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATA_DIR
+        value: memory
+      - key: RELAY_NAME
+        value: Veil Relay

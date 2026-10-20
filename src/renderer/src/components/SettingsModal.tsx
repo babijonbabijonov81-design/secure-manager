@@ -93,6 +93,11 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
                 <Row title="Звуки" text="Короткий сигнал при новом сообщении.">
                   <Toggle label="Звуки" on={s.sounds} onChange={(v) => set({ sounds: v })} />
                 </Row>
+                {bridge && bridge.platform !== 'linux' && (
+                  <Row title="Защита от снимков экрана" text="Окно Veil будет чёрным на скриншотах, записях и при демонстрации экрана.">
+                    <Toggle label="Защита от снимков экрана" on={s.screenProtection} onChange={(v) => set({ screenProtection: v })} />
+                  </Row>
+                )}
                 <Row title="Автоблокировка" text="Заблокировать Veil после бездействия. Ключи удаляются из памяти.">
                   <select
                     className="input"

@@ -21,6 +21,8 @@ export interface VeilBridge {
   notify(options: { title: string; body: string; tag?: string; silent?: boolean }): void;
   onNotificationClick(callback: (tag: string) => void): () => void;
   setBadge(count: number): void;
+  setTheme(theme: 'dark' | 'light'): void;
+  setContentProtection(enabled: boolean): void;
   focus(): void;
   openExternal(url: string): void;
   saveFile(name: string, data: Uint8Array): Promise<boolean>;

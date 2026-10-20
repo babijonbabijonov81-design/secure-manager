@@ -15,6 +15,8 @@ export interface Settings {
   /** Minutes of inactivity before the app locks itself; 0 disables auto-lock. */
   autoLockMinutes: number;
   enterToSend: boolean;
+  /** Hide the window from screenshots and screen sharing (Windows and macOS). */
+  screenProtection: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -27,6 +29,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sounds: true,
   autoLockMinutes: 15,
   enterToSend: true,
+  screenProtection: false,
 };
 
 export interface SignedPreKeyRecord {

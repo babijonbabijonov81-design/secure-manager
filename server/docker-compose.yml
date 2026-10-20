@@ -1,0 +1,20 @@
+# Relay + automatic HTTPS with Caddy. Set DOMAIN to a domain pointing at this server:
+#   DOMAIN=chat.example.com docker compose up -d
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - relay-data:/data
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    command: caddy reverse-proxy --from ${DOMAIN:?set DOMAIN} --to relay:8787
+    volumes:
+      - caddy-data:/data
+volumes:
+  relay-data:
+  caddy-data:

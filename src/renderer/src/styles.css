@@ -687,7 +687,7 @@ button:disabled {
   margin-bottom: 28px;
 }
 .brand-logo {
-  filter: drop-shadow(0 14px 30px rgba(var(--accent-rgb), 0.45));
+  filter: drop-shadow(0 16px 30px rgba(0, 0, 0, 0.35));
   animation: logo-in 0.8s var(--spring) both;
 }
 @keyframes logo-in {
@@ -987,6 +987,7 @@ button:disabled {
 }
 .rail .logo-btn {
   margin-bottom: 14px;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.25));
   transition: transform 0.3s var(--spring);
 }
 .rail .logo-btn:hover {

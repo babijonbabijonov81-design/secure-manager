@@ -26,7 +26,8 @@ export const cspPlugin = (): Plugin => ({
 export default defineConfig({
   main: {
     build: {
-      externalizeDeps: true,
+      // noble is ESM-only: bundle it into the CommonJS main process instead of requiring it.
+      externalizeDeps: { exclude: ['@noble/curves', '@noble/hashes', '@noble/ciphers'] },
     },
   },
   preload: {

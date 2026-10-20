@@ -27,6 +27,7 @@ export function applyAppearance(theme: Theme, accent: Accent): void {
   const resolved = theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme;
   root.dataset.theme = resolved;
   root.dataset.accent = accent;
+  bridge?.setTheme(resolved);
   try {
     localStorage.setItem(THEME_KEY, JSON.stringify({ theme, accent }));
   } catch {

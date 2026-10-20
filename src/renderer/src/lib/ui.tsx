@@ -1,23 +1,37 @@
 import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { avatarGradient, initials } from './format.ts';
 
+const SHIELD = 'M32 9.5 49.5 15.6V30.2c0 11.1-7.3 19.9-17.5 24.8C21.8 50.1 14.5 41.3 14.5 30.2V15.6Z';
+
+/** App mark: white tile with a four-colour shield and a check mark (same artwork as the app icon). */
 export function Logo({ size = 44 }: { size?: number }) {
+  const id = useId().replace(/:/g, '');
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true" className="logo">
       <defs>
-        <linearGradient id="veil-logo-g" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" style={{ stopColor: 'var(--accent, #7c5cff)' }} />
-          <stop offset="1" style={{ stopColor: 'var(--accent-2, #4f8cff)' }} />
+        <linearGradient id={`${id}-tile`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#ffffff" />
+          <stop offset="1" stopColor="#eef1f6" />
         </linearGradient>
+        <linearGradient id={`${id}-gloss`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#fff" stopOpacity="0.22" />
+          <stop offset="0.5" stopColor="#fff" stopOpacity="0" />
+        </linearGradient>
+        <clipPath id={`${id}-clip`}>
+          <path d={SHIELD} />
+        </clipPath>
       </defs>
-      <rect width="64" height="64" rx="19" fill="url(#veil-logo-g)" />
-      <path
-        d="M32 13.5c-10.8 0-19.5 7.6-19.5 17 0 5.3 2.8 10 7.2 13.1l-1.6 7.4 8.4-4.3c1.8.5 3.6.7 5.5.7 10.8 0 19.5-7.6 19.5-17s-8.7-16.9-19.5-16.9z"
-        fill="#fff"
-      />
-      <circle cx="32" cy="27.6" r="4.4" fill="url(#veil-logo-g)" />
-      <path d="M29.6 30.4h4.8l1.4 8.1h-7.6z" fill="url(#veil-logo-g)" />
+      <rect x="0.5" y="0.5" width="63" height="63" rx="14.5" fill={`url(#${id}-tile)`} stroke="#d9dee8" />
+      <g clipPath={`url(#${id}-clip)`}>
+        <rect width="32" height="32" fill="#4285F4" />
+        <rect x="32" width="32" height="32" fill="#EA4335" />
+        <rect y="32" width="32" height="32" fill="#34A853" />
+        <rect x="32" y="32" width="32" height="32" fill="#FBBC05" />
+        <path d="M32 0V64M0 32H64" stroke="#fff" strokeWidth="1.6" />
+        <path d={SHIELD} fill={`url(#${id}-gloss)`} />
+      </g>
+      <path d="M24.2 31.6 29.6 37 40.2 26.4" fill="none" stroke="#fff" strokeWidth="4.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

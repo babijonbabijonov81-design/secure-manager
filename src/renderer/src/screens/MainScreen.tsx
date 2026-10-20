@@ -44,6 +44,12 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
 
   useEffect(() => () => revokeAttachmentUrls(), []);
 
+  const screenProtection = snapshot.settings.screenProtection;
+  useEffect(() => {
+    bridge?.setContentProtection(screenProtection);
+    return () => bridge?.setContentProtection(false);
+  }, [screenProtection]);
+
   // Notifications & sounds for incoming messages.
   useEffect(() => {
     incomingRef.current = (contact, message) => {
