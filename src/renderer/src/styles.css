@@ -2453,47 +2453,116 @@ button:disabled {
   height: 30px;
   border-radius: 9px;
 }
+.msg-row.picking .msg-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+/* Reaction bar: rendered in a portal (position: fixed) and slides out of the reaction button. */
 .reaction-picker {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  z-index: 15;
+  position: fixed;
+  z-index: 140;
   display: flex;
-  flex-wrap: wrap;
-  max-width: 320px;
   gap: 2px;
   padding: 5px;
   border-radius: 999px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
-  animation: pop-up 0.18s var(--spring);
+  animation: picker-out 0.26s var(--spring);
 }
 :root[data-theme='dark'] .reaction-picker {
   background: var(--surface-2);
 }
-.msg-row.in .reaction-picker {
-  left: 0;
-}
-.msg-row.out .reaction-picker {
-  right: 0;
+.reaction-picker.expanded {
+  display: grid;
+  grid-template-columns: repeat(6, 40px);
+  border-radius: 22px;
+  padding: 7px;
 }
 .reaction-picker button {
-  width: 38px;
-  height: 38px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  font-size: 22px;
-  transition: transform 0.15s var(--spring);
+  font-size: 23px;
+  line-height: 1;
+  transition:
+    transform 0.16s var(--spring),
+    background 0.12s;
+  animation: reaction-out 0.34s var(--spring) backwards;
+  animation-delay: calc(var(--i, 0) * 24ms);
 }
-.reaction-picker button:hover {
-  transform: scale(1.25);
+.reaction-picker.below button {
+  animation-name: reaction-out-below;
+}
+.reaction-picker.expanded button {
+  animation-delay: calc(var(--i, 0) * 12ms);
+}
+.reaction-picker button:hover,
+.reaction-picker button:focus-visible {
+  transform: scale(1.28);
   background: var(--surface-hover);
+  outline: none;
+}
+.reaction-picker button:active {
+  transform: scale(1.05);
 }
 .reaction-picker button.active {
   background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1.5px rgba(var(--accent-rgb), 0.55);
 }
 .reaction-picker .more {
-  font-size: 20px;
   color: var(--text-2);
+}
+@keyframes picker-out {
+  from {
+    opacity: 0;
+    transform: scale(0.35);
+  }
+}
+@keyframes reaction-out {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.3);
+  }
+}
+@keyframes reaction-out-below {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.3);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reaction-picker,
+  .reaction-picker button {
+    animation: none;
+  }
+}
+/* quick reactions on top of the message context menu */
+.menu-reactions {
+  display: flex;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 2px 2px 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.context-menu .menu-reactions button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 20px;
+  transition: transform 0.15s var(--spring);
+}
+.context-menu .menu-reactions button:hover {
+  transform: scale(1.2);
+}
+.context-menu .menu-reactions button.active {
+  background: var(--accent-soft);
 }
 .reactions {
   display: flex;

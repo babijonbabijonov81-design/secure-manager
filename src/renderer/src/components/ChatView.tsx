@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
-import { attachmentsOf, MAX_ATTACHMENT_BYTES, type Attachment, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
+import { attachmentsOf, MAX_ATTACHMENT_BYTES, QUICK_REACTIONS, type Attachment, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
 import { attachmentUrl, saveAttachment } from '../lib/attachments.ts';
 import { formatDay, sameDay, systemText, timerLabel } from '../lib/format.ts';
 import { copyImage, copyText, prepareFile } from '../lib/media.ts';
@@ -356,7 +356,31 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
           onSend={(caption, compress) => void sendPending(caption, compress)}
         />
       )}
-      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems}
+          onClose={() => setMenu(null)}
+          header={
+            <div className="menu-reactions">
+              {QUICK_REACTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  aria-label={`Реакция ${emoji}`}
+                  className={menu.message.reactions?.me === emoji ? 'active' : ''}
+                  onClick={() => {
+                    setMenu(null);
+                    onReact(menu.message, emoji);
+                  }}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          }
+        />
+      )}
       {lightbox && <Lightbox messenger={messenger} items={lightbox.items} start={lightbox.index} onClose={() => setLightbox(null)} />}
     </section>
   );

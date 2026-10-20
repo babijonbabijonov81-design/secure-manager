@@ -13,16 +13,16 @@ import {
   SmilePlus,
   Timer,
 } from 'lucide-react';
-import { memo, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
-import { attachmentsOf, QUICK_REACTIONS, type Attachment, type Message } from '../../../core/types.ts';
+import { attachmentsOf, type Attachment, type Message } from '../../../core/types.ts';
 import { saveAttachment, useAttachmentUrl } from '../lib/attachments.ts';
 import { formatSize, formatTime, isEmojiOnly, remaining } from '../lib/format.ts';
+import { ReactionPicker } from './ReactionPicker.tsx';
 import { VoicePlayer } from './VoicePlayer.tsx';
 
 const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/g;
-const MORE_REACTIONS = ['👏', '🙏', '🎉', '😍', '🤔', '😡', '💯', '👌', '😎', '🤝', '💔', '🥰'];
 
 function openLink(e: MouseEvent, href: string) {
   e.preventDefault();
@@ -135,7 +135,8 @@ interface BubbleProps {
 
 export const Bubble = memo(function Bubble(props: BubbleProps) {
   const { message, messenger, contactName, groupStart, groupEnd, highlighted } = props;
-  const [picker, setPicker] = useState<'closed' | 'quick' | 'more'>('closed');
+  const [pickerAnchor, setPickerAnchor] = useState<HTMLElement | null>(null);
+  const closePicker = useCallback(() => setPickerAnchor(null), []);
   const atts = attachmentsOf(message);
   const images = atts.filter((a) => a.kind === 'image');
   const files = atts.filter((a) => a.kind === 'file');
@@ -168,17 +169,16 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
   }
 
   const react = (emoji: string) => {
-    setPicker('closed');
+    setPickerAnchor(null);
     props.onReact(message, emoji);
   };
 
   return (
     <div
-      className={`msg-row ${message.dir}${groupStart ? ' group-start' : ''}${groupEnd ? ' group-end' : ''}${highlighted ? ' highlight' : ''}`}
+      className={`msg-row ${message.dir}${groupStart ? ' group-start' : ''}${groupEnd ? ' group-end' : ''}${highlighted ? ' highlight' : ''}${pickerAnchor ? ' picking' : ''}`}
       data-testid="message"
       data-dir={message.dir}
       id={`msg-${message.id}`}
-      onMouseLeave={() => picker !== 'closed' && setPicker('closed')}
     >
       <div className="msg-col">
         <div className="bubble-line">
@@ -211,7 +211,14 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
           </div>
 
           <div className="msg-actions">
-            <button className="icon-btn sm" title="Реакция" aria-label="Реакция" onClick={() => setPicker(picker === 'closed' ? 'quick' : 'closed')}>
+            <button
+              className={`icon-btn sm${pickerAnchor ? ' active' : ''}`}
+              title="Реакция"
+              aria-label="Реакция"
+              aria-expanded={!!pickerAnchor}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => setPickerAnchor(pickerAnchor ? null : e.currentTarget)}
+            >
               <SmilePlus size={17} />
             </button>
             <button className="icon-btn sm" title="Ответить" aria-label="Ответить" onClick={() => props.onReply(message)}>
@@ -227,20 +234,7 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
             </button>
           </div>
 
-          {picker !== 'closed' && (
-            <div className="reaction-picker" role="menu">
-              {(picker === 'quick' ? [...QUICK_REACTIONS] : MORE_REACTIONS).map((emoji) => (
-                <button key={emoji} className={reactions?.me === emoji ? 'active' : ''} onClick={() => react(emoji)}>
-                  {emoji}
-                </button>
-              ))}
-              {picker === 'quick' && (
-                <button className="more" onClick={() => setPicker('more')} aria-label="Другие реакции">
-                  +
-                </button>
-              )}
-            </div>
-          )}
+          {pickerAnchor && <ReactionPicker anchor={pickerAnchor} current={reactions?.me} onPick={react} onClose={closePicker} />}
         </div>
 
         {chips.length > 0 && (
