@@ -22,6 +22,8 @@ const bridge: VeilBridge = {
   },
   notify: (options) => ipcRenderer.send('notify', options),
   onNotificationClick: (callback) => listen('notification-click', callback),
+  closeNotification: (tag) => ipcRenderer.send('notify:close', tag),
+  onCallAction: (callback) => listen('call-action', callback),
   setBadge: (count) => ipcRenderer.send('badge', count),
   setTheme: (theme) => ipcRenderer.send('theme', theme),
   setContentProtection: (enabled) => ipcRenderer.send('content-protection', enabled),

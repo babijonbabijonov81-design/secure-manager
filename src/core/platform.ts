@@ -25,6 +25,8 @@ export interface NotificationCardData {
   accent: string;
   title: string;
   body: string;
+  /** Incoming call: answer/decline buttons, stays until the call is settled. */
+  call?: boolean;
 }
 
 export interface VeilBridge {
@@ -40,6 +42,10 @@ export interface VeilBridge {
   /** With `card`, Veil's own styled notification is shown instead of the system one. */
   notify(options: { title: string; body: string; tag?: string; silent?: boolean; card?: NotificationCardData }): void;
   onNotificationClick(callback: (tag: string) => void): () => void;
+  /** Removes a notification card (e.g. an incoming call that was answered or ended). */
+  closeNotification(tag: string): void;
+  /** Answer/decline pressed on an incoming call card. */
+  onCallAction(callback: (action: { tag: string; action: 'accept' | 'decline' }) => void): () => void;
   setBadge(count: number): void;
   setTheme(theme: 'dark' | 'light'): void;
   setContentProtection(enabled: boolean): void;

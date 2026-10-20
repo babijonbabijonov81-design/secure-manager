@@ -8,6 +8,7 @@ import {
   Info,
   LockKeyhole,
   Paperclip,
+  Phone,
   RotateCcw,
   ShieldCheck,
   Sticker,
@@ -34,11 +35,12 @@ interface Props {
   infoOpen: boolean;
   onToggleInfo(): void;
   onShowSafety(): void;
+  onCall(contactId: string): void;
 }
 
 const GROUP_GAP_MS = 3 * 60 * 1000;
 
-export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo, onShowSafety }: Props) {
+export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo, onShowSafety, onCall }: Props) {
   const messages = snapshot.conversations[contact.id] ?? [];
   const typing = !!snapshot.typing[contact.id];
   const online = !!snapshot.online[contact.id];
@@ -153,6 +155,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
     [messenger, contact.id],
   );
   const onCopy = useCallback((message: Message) => void copy(message), [copy]);
+  const onCallBack = useCallback(() => onCall(contact.id), [onCall, contact.id]);
   const onJump = useCallback((id: string) => {
     const el = document.getElementById(`msg-${id}`);
     if (!el) return;
@@ -164,6 +167,11 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
   const menuItems = useMemo<MenuItem[]>(() => {
     if (!menu) return [];
     const m = menu.message;
+    if (m.call)
+      return [
+        { label: 'Позвонить', icon: <Phone size={16} />, onClick: () => onCall(contact.id) },
+        { label: 'Удалить из истории', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, false) },
+      ];
     const atts = attachmentsOf(m);
     const items: MenuItem[] = [{ label: 'Ответить', icon: <CornerUpLeft size={16} />, onClick: () => setReplyTo(m) }];
     const selection = window.getSelection()?.toString().trim();
@@ -185,7 +193,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
     if (m.dir === 'out' && m.status !== 'failed' && m.status !== 'pending')
       items.push({ label: 'Удалить у всех', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, true) });
     return items;
-  }, [menu, messenger, contact.id, toast, onRetry, copy, snapshot.stickers]);
+  }, [menu, messenger, contact.id, toast, onRetry, copy, snapshot.stickers, onCall]);
 
   const onDragEnter = (e: DragEvent) => {
     if (!e.dataTransfer.types.includes('Files')) return;
@@ -229,7 +237,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
     }
     const next = messages[i + 1];
     const continues = (a: Message | undefined, b: Message | undefined) =>
-      !!a && !!b && a.dir === b.dir && b.ts - a.ts < GROUP_GAP_MS && sameDay(a.ts, b.ts);
+      !!a && !!b && !a.call && !b.call && a.dir === b.dir && b.ts - a.ts < GROUP_GAP_MS && sameDay(a.ts, b.ts);
     rows.push(
       <Bubble
         key={message.id}
@@ -246,6 +254,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
         onReact={onReact}
         onCopy={onCopy}
         onJump={onJump}
+        onCallBack={onCallBack}
       />,
     );
     previous = message;
@@ -292,6 +301,9 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
               <Hourglass size={14} /> {timerLabel(contact.timer, true)}
             </span>
           )}
+          <button className="icon-btn" onClick={() => onCall(contact.id)} aria-label="Позвонить" title="Аудиозвонок" disabled={contact.blocked}>
+            <Phone size={19} />
+          </button>
           <button className={`icon-btn${infoOpen ? ' active' : ''}`} onClick={onToggleInfo} aria-label="Информация о чате">
             <Info size={20} />
           </button>
@@ -363,21 +375,23 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
           items={menuItems}
           onClose={() => setMenu(null)}
           header={
-            <div className="menu-reactions">
-              {QUICK_REACTIONS.map((emoji) => (
-                <button
-                  key={emoji}
-                  aria-label={`Реакция ${emoji}`}
-                  className={menu.message.reactions?.me === emoji ? 'active' : ''}
-                  onClick={() => {
-                    setMenu(null);
-                    onReact(menu.message, emoji);
-                  }}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
+            !menu.message.call && (
+              <div className="menu-reactions">
+                {QUICK_REACTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    aria-label={`Реакция ${emoji}`}
+                    className={menu.message.reactions?.me === emoji ? 'active' : ''}
+                    onClick={() => {
+                      setMenu(null);
+                      onReact(menu.message, emoji);
+                    }}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )
           }
         />
       )}

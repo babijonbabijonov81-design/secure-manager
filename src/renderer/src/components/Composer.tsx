@@ -4,6 +4,7 @@ import { snippetOf, type Messenger } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
 import type { Contact, Message, Settings, StickerMeta } from '../../../core/types.ts';
 import { EMOJI_GROUPS } from '../lib/emoji.ts';
+import { MicrophoneError, openMicrophone } from '../lib/audio.ts';
 import { analyseAudio, formatDuration } from '../lib/media.ts';
 import { autocorrect, ignoreWord } from '../lib/text.ts';
 import { useToast } from '../lib/ui.tsx';
@@ -12,7 +13,7 @@ import { StickerPanel } from './StickerPanel.tsx';
 interface Props {
   messenger: Messenger;
   contact: Contact;
-  settings: Pick<Settings, 'enterToSend' | 'autocorrect' | 'spellcheck'>;
+  settings: Pick<Settings, 'enterToSend' | 'autocorrect' | 'spellcheck' | 'audio'>;
   stickers: StickerMeta[];
   replyTo: Message | null;
   onCancelReply(): void;
@@ -194,8 +195,7 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
 
   const startRecording = async () => {
     try {
-      if (bridge && !(await bridge.requestMicrophone())) throw new Error('denied');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const stream = await openMicrophone(settings.audio);
       const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
       const recorder = new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: 32_000 });
       const chunks: Blob[] = [];
@@ -208,8 +208,8 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
       setLevels([]);
       setElapsed(0);
       setRecording({ recorder, stream, chunks, startedAt: Date.now(), analyser, context });
-    } catch {
-      toast('Нет доступа к микрофону. Разрешите его в настройках системы', 'error');
+    } catch (error) {
+      toast(error instanceof MicrophoneError ? error.message : 'Нет доступа к микрофону. Разрешите его в настройках системы', 'error');
     }
   };
 

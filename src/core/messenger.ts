@@ -6,6 +6,7 @@ import {
   USERNAME_RE,
   type AccountStatus,
   type BackupMeta,
+  type IceServer,
   type PreKeyBundle,
   type RegisterFrame,
   type UserInfo,
@@ -50,6 +51,8 @@ import {
   type Attachment,
   type AttachmentKind,
   type AttachmentMeta,
+  type CallRecord,
+  type CallSignal,
   type Contact,
   type Content,
   type Message,
@@ -77,6 +80,14 @@ export interface MessengerEvents {
   /** A new incoming message the UI may want to notify about. */
   onIncoming?(contact: Contact, message: Message): void;
 }
+
+/** Receives call signals; returns false if it knows nothing about that call. */
+export type CallHandler = (contact: Contact, signal: CallSignal) => boolean;
+
+/** Used when the relay does not announce its own STUN/TURN servers. */
+export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+/** A call offer that waited longer than this in the relay queue is stale. */
+const CALL_OFFER_TTL_MS = 60_000;
 
 export interface CreateAccountOptions {
   storage: StorageBackend;
@@ -131,7 +142,23 @@ export class MessengerError extends Error {
 }
 
 /** Short text describing a message, for reply quotes and previews. */
+const CALL_TITLES: Record<CallRecord['status'], [string, string]> = {
+  done: ['Исходящий звонок', 'Входящий звонок'],
+  missed: ['Без ответа', 'Пропущенный звонок'],
+  declined: ['Звонок отклонён', 'Отклонённый звонок'],
+  cancelled: ['Отменённый звонок', 'Пропущенный звонок'],
+  busy: ['Линия занята', 'Пропущенный звонок'],
+  failed: ['Звонок не удался', 'Звонок не удался'],
+  unavailable: ['Не в сети', 'Пропущенный звонок'],
+};
+
+/** "Исходящий звонок", "Пропущенный звонок"… */
+export function callTitle(message: Message): string {
+  return message.call ? CALL_TITLES[message.call.status]?.[message.dir === 'out' ? 0 : 1] ?? 'Звонок' : '';
+}
+
 export function snippetOf(message: Message): string {
+  if (message.call) return `📞 ${callTitle(message)}`;
   if (message.text) return message.text.slice(0, 200);
   const atts = attachmentsOf(message);
   const first = atts[0];
@@ -339,6 +366,10 @@ export class Messenger {
   needsTotp = false;
   /** After restoring from a backup: open fresh sessions with every contact. */
   helloPending = false;
+  /** Set by the UI that runs WebRTC. */
+  callHandler: CallHandler | null = null;
+  private relayIce: IceServer[] | undefined;
+  private endedCalls = new Set<string>();
   private readonly store: SecureStore;
   private meta: VaultMeta;
   private readonly events: MessengerEvents;
@@ -470,6 +501,7 @@ export class Messenger {
         this.changed();
       },
       onReady: (frame) => {
+        this.relayIce = Array.isArray(frame.ice) ? frame.ice : undefined;
         pendingHooks?.ready();
         pendingHooks = undefined;
         void this.afterReady(frame.opkCount, frame.spkId);
@@ -1208,7 +1240,7 @@ export class Messenger {
   async react(contactId: string, messageId: string, emoji: string): Promise<void> {
     const contact = this.requireContact(contactId);
     const message = this.conversations.get(contactId)?.find((m) => m.id === messageId);
-    if (!message || message.dir === 'system') return;
+    if (!message || message.dir === 'system' || message.call) return;
     const next = message.reactions?.me === emoji ? '' : cleanEmoji(emoji);
     this.patchMessages(contactId, new Set([messageId]), (m) => ({ ...m, reactions: { ...m.reactions, me: next || undefined } }));
     await this.sendControl(contact, { t: 'react', id: messageId, e: next });
@@ -1248,6 +1280,79 @@ export class Messenger {
     if (on && Date.now() - last < 3000) return;
     this.lastTypingSent.set(contactId, on ? Date.now() : 0);
     void this.sendEphemeral(contactId, { t: 'typ', on });
+  }
+
+  // ---- calls ---------------------------------------------------------------------------
+
+  /** STUN/TURN servers for calls: the relay's own, or public STUN. */
+  get iceServers(): { servers: IceServer[]; hasTurn: boolean } {
+    const servers = this.relayIce?.length ? this.relayIce : DEFAULT_ICE_SERVERS;
+    return { servers, hasTurn: servers.some((s) => s.urls.some((u) => /^turns?:/.test(u))) };
+  }
+
+  /**
+   * Sends a call signal. Offers and answers go as ephemeral signals (dropped if the peer is
+   * offline, so nobody gets a stale ringing call); `end` is queued, so a caller who gave up
+   * still leaves a missed call behind.
+   */
+  async sendCallSignal(contactId: string, signal: CallSignal): Promise<'delivered' | 'offline' | 'queued'> {
+    const contact = this.requireContact(contactId);
+    if (contact.blocked) throw new MessengerError('blocked', 'Пользователь заблокирован');
+    if (!this.relay || this.relay.status !== 'online') throw new MessengerError('offline', 'Нет соединения с сервером');
+    const content: Content = { t: 'call', ts: Date.now(), ...signal };
+    if (signal.k !== 'end' && this.confirmedSession(contactId)) return (await this.sendEphemeral(contactId, content)) ? 'delivered' : 'offline';
+    await this.sendControl(contact, content);
+    return 'queued';
+  }
+
+  /** Adds a call to the chat history (local only, never sent). */
+  logCall(contactId: string, dir: 'in' | 'out', call: CallRecord, callId?: string): void {
+    const contact = this.contacts[contactId];
+    if (!contact) return;
+    if (callId) this.endedCalls.add(callId);
+    const now = Date.now();
+    const message: Message = { id: randomId(), dir, ts: now, at: now, call, ...(dir === 'in' ? { readSent: true } : {}) };
+    this.addMessage(contactId, message);
+    const missed = dir === 'in' && call.status !== 'done' && call.status !== 'declined';
+    const patch: Partial<Contact> = { lastActivity: now };
+    if (missed) {
+      patch.unread = contact.unread + 1;
+      if (contact.archived && !contact.muted) patch.archived = false;
+    }
+    const updated = this.updateContact(contactId, patch)!;
+    if (missed && !updated.muted) this.events.onIncoming?.(updated, message);
+  }
+
+  private handleCall(contact: Contact, content: Extract<Content, { t: 'call' }>, queued: boolean): void {
+    const id = typeof content.id === 'string' && content.id.length <= 64 ? content.id : '';
+    if (!id) return;
+    let signal: CallSignal;
+    switch (content.k) {
+      case 'offer':
+      case 'answer': {
+        if (typeof content.sdp !== 'string' || content.sdp.length > 20_000) return;
+        // An offer that sat in the queue (the peer was offline) is not a ringing call any more.
+        if (content.k === 'offer' && queued && Math.abs(Date.now() - (Number(content.ts) || 0)) > CALL_OFFER_TTL_MS) return;
+        signal = { k: content.k, id, sdp: content.sdp };
+        break;
+      }
+      case 'ring':
+        signal = { k: 'ring', id };
+        break;
+      case 'end': {
+        const reasons = ['hangup', 'decline', 'busy', 'cancel', 'timeout', 'failed'] as const;
+        signal = { k: 'end', id, r: reasons.includes(content.r) ? content.r : 'hangup' };
+        break;
+      }
+      default:
+        return;
+    }
+    if (signal.k === 'offer' && this.endedCalls.has(id)) return;
+    const known = this.callHandler?.(contact, signal) ?? false;
+    // A caller gave up before we saw the offer (we were offline): leave a missed call.
+    if (!known && signal.k === 'end' && (signal.r === 'cancel' || signal.r === 'timeout') && !this.endedCalls.has(id)) {
+      this.logCall(contact.id, 'in', { status: 'missed' }, id);
+    }
   }
 
   // ---- presence ------------------------------------------------------------------------
@@ -1351,6 +1456,7 @@ export class Messenger {
         this.markOnline(contactId);
         this.setTyping(contactId, content.on);
       } else if (content.t === 'pres') this.handlePresence(contact, content);
+      else if (content.t === 'call') this.handleCall(contact, content, false);
       return;
     }
 
@@ -1518,6 +1624,9 @@ export class Messenger {
         this.handlePresence(contact, content);
         return;
       case 'hi':
+        return;
+      case 'call':
+        this.handleCall(contact, content, true);
         return;
       case 'prof':
         if (typeof content.n === 'string' && content.n.trim()) this.updateContact(contact.id, { displayName: content.n.trim().slice(0, 64) });

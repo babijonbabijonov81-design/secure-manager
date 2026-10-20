@@ -9,16 +9,20 @@ import {
   FileText,
   ImageIcon,
   MoreHorizontal,
+  Phone,
+  PhoneIncoming,
+  PhoneMissed,
+  PhoneOutgoing,
   RotateCcw,
   SmilePlus,
   Timer,
 } from 'lucide-react';
 import { memo, useCallback, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
-import type { Messenger } from '../../../core/messenger.ts';
+import { callTitle, type Messenger } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
 import { attachmentsOf, type Attachment, type Message } from '../../../core/types.ts';
 import { saveAttachment, useAttachmentUrl } from '../lib/attachments.ts';
-import { formatSize, formatTime, isEmojiOnly, remaining } from '../lib/format.ts';
+import { formatCallDuration, formatSize, formatTime, isEmojiOnly, remaining } from '../lib/format.ts';
 import { ReactionPicker } from './ReactionPicker.tsx';
 import { VoicePlayer } from './VoicePlayer.tsx';
 
@@ -131,6 +135,36 @@ interface BubbleProps {
   onReact(message: Message, emoji: string): void;
   onCopy(message: Message): void;
   onJump(id: string): void;
+  onCallBack(): void;
+}
+
+/** A call in the chat history: direction, outcome, length and a call-back button. */
+function CallRow({ message, onContext, onCallBack }: { message: Message; onContext: BubbleProps['onContext']; onCallBack(): void }) {
+  const call = message.call!;
+  const failed = call.status !== 'done';
+  const missedIn = message.dir === 'in' && failed && call.status !== 'declined';
+  const Icon = missedIn ? PhoneMissed : message.dir === 'out' ? PhoneOutgoing : PhoneIncoming;
+  return (
+    <div className={`msg-row ${message.dir} group-start group-end`} data-testid="call-record" id={`msg-${message.id}`}>
+      <div className="msg-col">
+        <div className={`bubble call-bubble${missedIn ? ' missed' : ''}${failed ? ' failed' : ''}`} onContextMenu={(e) => onContext(e, message)}>
+          <span className="call-icon">
+            <Icon size={18} />
+          </span>
+          <span className="call-info">
+            <b>{callTitle(message)}</b>
+            <span>
+              {formatTime(message.ts)}
+              {call.dur ? ` · ${formatCallDuration(call.dur)}` : ''}
+            </span>
+          </span>
+          <button className="icon-btn sm call-back" onClick={onCallBack} aria-label="Перезвонить" title="Перезвонить">
+            <Phone size={17} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export const Bubble = memo(function Bubble(props: BubbleProps) {
@@ -172,6 +206,8 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
     setPickerAnchor(null);
     props.onReact(message, emoji);
   };
+
+  if (message.call) return <CallRow message={message} onContext={props.onContext} onCallBack={props.onCallBack} />;
 
   return (
     <div

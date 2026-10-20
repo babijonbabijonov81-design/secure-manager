@@ -12,6 +12,7 @@ export interface NotificationCard {
   gradient: string;
   theme: 'dark' | 'light';
   accent: string;
+  call?: boolean;
 }
 
 const WIDTH = 372;
@@ -24,11 +25,13 @@ interface Card {
   id: number;
   window: BrowserWindow;
   tag?: string;
+  call?: boolean;
 }
 
 let counter = 0;
 const cards: Card[] = [];
 let onClick: (tag?: string) => void = () => {};
+let onAction: (tag: string, action: 'accept' | 'decline') => void = () => {};
 
 function layout(): void {
   const area = screen.getPrimaryDisplay().workArea;
@@ -49,8 +52,18 @@ function close(id: number): void {
   layout();
 }
 
-export function setupNotificationCards(clickHandler: (tag?: string) => void): void {
+export function setupNotificationCards(
+  clickHandler: (tag?: string) => void,
+  actionHandler: (tag: string, action: 'accept' | 'decline') => void,
+): void {
   onClick = clickHandler;
+  onAction = actionHandler;
+  ipcMain.on('card:action', (event, action: unknown) => {
+    const card = cards.find((c) => c.window.webContents === event.sender);
+    if (!card?.tag || (action !== 'accept' && action !== 'decline')) return;
+    onAction(card.tag, action);
+    close(card.id);
+  });
   ipcMain.on('card:click', (event) => {
     const card = cards.find((c) => c.window.webContents === event.sender);
     if (!card) return;
@@ -64,8 +77,9 @@ export function setupNotificationCards(clickHandler: (tag?: string) => void): vo
 }
 
 export function showNotificationCard(data: NotificationCard): void {
-  // Newest on top of the stack; drop the oldest beyond the limit.
-  while (cards.length >= MAX_CARDS) close(cards[cards.length - 1].id);
+  // Newest on top of the stack; drop the oldest beyond the limit (never a ringing call).
+  if (data.tag) closeCard(data.tag);
+  while (cards.length >= MAX_CARDS) close((cards.findLast((c) => !c.call) ?? cards[cards.length - 1]).id);
   const window = new BrowserWindow({
     width: WIDTH,
     height: HEIGHT,
@@ -91,7 +105,7 @@ export function showNotificationCard(data: NotificationCard): void {
   });
   window.setAlwaysOnTop(true, 'screen-saver');
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  const card: Card = { id: ++counter, window, tag: data.tag };
+  const card: Card = { id: ++counter, window, tag: data.tag, call: data.call };
   cards.unshift(card);
   layout();
   window.webContents.once('did-finish-load', () => {
@@ -102,6 +116,10 @@ export function showNotificationCard(data: NotificationCard): void {
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   if (process.env.ELECTRON_RENDERER_URL) void window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/card.html`);
   else void window.loadFile(join(__dirname, '../renderer/card.html'));
+}
+
+export function closeCard(tag: string): void {
+  for (const card of cards.filter((c) => c.tag === tag)) close(card.id);
 }
 
 export function closeAllCards(): void {

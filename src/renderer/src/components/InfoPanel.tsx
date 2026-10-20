@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Ban, Bell, BellOff, Eraser, Hourglass, Pin, PinOff, RotateCcw, ShieldCheck, ShieldQuestion, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Ban, Bell, BellOff, Eraser, Hourglass, Phone, Pin, PinOff, RotateCcw, ShieldCheck, ShieldQuestion, Trash2, TriangleAlert, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { formatSafetyNumber } from '../../../core/crypto/fingerprint.ts';
 import type { Messenger } from '../../../core/messenger.ts';
@@ -13,12 +13,14 @@ export function InfoPanel({
   messenger,
   contact,
   online,
+  onCall,
   onClose,
   onDeleted,
 }: {
   messenger: Messenger;
   contact: Contact;
   online: boolean;
+  onCall(): void;
   onClose(): void;
   onDeleted(): void;
 }) {
@@ -58,6 +60,11 @@ export function InfoPanel({
               </span>
             )}
           </div>
+          {!contact.blocked && (
+            <button className="btn btn-sm btn-secondary hero-call" onClick={onCall}>
+              <Phone size={15} /> Позвонить
+            </button>
+          )}
         </div>
 
         <div className="section" id="safety">

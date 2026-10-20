@@ -6,6 +6,7 @@ import {
   LockKeyhole,
   Mail,
   Maximize,
+  Mic,
   Monitor,
   Moon,
   Palette,
@@ -17,25 +18,28 @@ import {
   Trash2,
   TriangleAlert,
   UserRound,
+  Volume2,
   X,
 } from 'lucide-react';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { WrongPasswordError } from '../../../core/crypto/vault.ts';
 import type { Messenger } from '../../../core/messenger.ts';
 import type { AccountStatus } from '../../../../server/src/shared/protocol.ts';
 import { bridge, type EmbeddedServerStatus, type UpdateState } from '../../../core/platform.ts';
 import { probeServer } from '../../../core/relay-client.ts';
-import type { Accent, MessengerSnapshot, Settings, Theme } from '../../../core/types.ts';
+import type { Accent, AudioSettings, MessengerSnapshot, Settings, Theme } from '../../../core/types.ts';
+import { canChooseOutput, meterStream, openMicrophone, Tones, useAudioDevices } from '../lib/audio.ts';
 import { formatDay, formatTime } from '../lib/format.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
 import { CodeInput, RecoveryEmailDialog, TotpDisableDialog, TotpSetupDialog } from './SecurityDialogs.tsx';
 
-export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'server' | 'security' | 'about';
+export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'about';
 
 const TABS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: 'profile', label: 'Профиль', icon: <UserRound size={18} /> },
   { id: 'privacy', label: 'Конфиденциальность', icon: <ShieldCheck size={18} /> },
   { id: 'appearance', label: 'Оформление', icon: <Palette size={18} /> },
+  { id: 'audio', label: 'Аудио', icon: <Mic size={18} /> },
   { id: 'server', label: 'Сервер', icon: <Server size={18} /> },
   { id: 'security', label: 'Безопасность', icon: <KeyRound size={18} /> },
   { id: 'about', label: 'О Veil', icon: <Info size={18} /> },
@@ -200,6 +204,7 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
                 )}
               </div>
             )}
+            {tab === 'audio' && <AudioTab messenger={messenger} snapshot={snapshot} />}
             {tab === 'server' && <ServerTab messenger={messenger} snapshot={snapshot} />}
             {tab === 'security' && <SecurityTab messenger={messenger} snapshot={snapshot} onDeleted={onDeleted} />}
             {tab === 'about' && <AboutTab />}
@@ -218,6 +223,125 @@ function Row({ title, text, children }: { title: string; text?: string; children
         {text && <span>{text}</span>}
       </div>
       {children}
+    </div>
+  );
+}
+
+/** Microphone and speakers for calls and voice messages. */
+function AudioTab({ messenger, snapshot }: { messenger: Messenger; snapshot: MessengerSnapshot }) {
+  const audio = snapshot.settings.audio;
+  const setAudio = (patch: Partial<AudioSettings>) => messenger.updateSettings({ audio: { ...audio, ...patch } });
+  const { inputs, outputs, refresh } = useAudioDevices();
+  const meter = useRef<HTMLDivElement>(null);
+  const [micError, setMicError] = useState('');
+  const tones = useMemo(() => new Tones(), []);
+  useEffect(() => () => tones.stop(), [tones]);
+  const { hasTurn } = messenger.iceServers;
+
+  // Live level of the chosen microphone while this tab is open (this also reveals device names).
+  const { input, echoCancellation, noiseSuppression, autoGainControl } = audio;
+  useEffect(() => {
+    let cancelled = false;
+    let stopMeter = () => {};
+    let stream: MediaStream | null = null;
+    openMicrophone({ input, output: '', echoCancellation, noiseSuppression, autoGainControl })
+      .then((opened) => {
+        stream = opened;
+        if (cancelled) return opened.getTracks().forEach((t) => t.stop());
+        setMicError('');
+        void refresh();
+        stopMeter = meterStream(opened, (level) => meter.current?.style.setProperty('--level', level.toFixed(3)));
+      })
+      .catch((error: Error) => !cancelled && setMicError(error.message));
+    return () => {
+      cancelled = true;
+      stopMeter();
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+  }, [input, echoCancellation, noiseSuppression, autoGainControl, refresh]);
+
+  const missing = (list: MediaDeviceInfo[], id: string) => id && !list.some((d) => d.deviceId === id);
+  return (
+    <div>
+      <div className="field" style={{ marginBottom: 16 }}>
+        <label className="field-label" htmlFor="audio-input">
+          Микрофон
+        </label>
+        <select id="audio-input" className="input" value={audio.input} onChange={(e) => setAudio({ input: e.target.value })}>
+          <option value="">Как в системе</option>
+          {inputs.map((d, i) => (
+            <option key={d.deviceId} value={d.deviceId}>
+              {d.label || `Микрофон ${i + 1}`}
+            </option>
+          ))}
+          {missing(inputs, audio.input) && <option value={audio.input}>Отключённый микрофон</option>}
+        </select>
+        <div className="mic-meter" ref={meter} aria-hidden="true">
+          {Array.from({ length: 24 }, (_, i) => (
+            <i key={i} style={{ '--i': i / 24 } as CSSProperties} />
+          ))}
+        </div>
+        <span className={micError ? 'field-error' : 'field-hint'}>{micError || 'Скажите что-нибудь — полоска должна двигаться.'}</span>
+      </div>
+
+      {canChooseOutput && (
+        <div className="field" style={{ marginBottom: 12 }}>
+          <label className="field-label" htmlFor="audio-output">
+            Динамики или наушники
+          </label>
+          <div className="audio-output">
+            <select id="audio-output" className="input" value={audio.output} onChange={(e) => setAudio({ output: e.target.value })}>
+              <option value="">Как в системе</option>
+              {outputs.map((d, i) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.label || `Устройство ${i + 1}`}
+                </option>
+              ))}
+              {missing(outputs, audio.output) && <option value={audio.output}>Отключённое устройство</option>}
+            </select>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                tones.setOutput(audio.output);
+                tones.play('test');
+              }}
+            >
+              <Volume2 size={15} /> Проверить
+            </button>
+          </div>
+        </div>
+      )}
+
+      <Row title="Шумоподавление" text="Убирает фоновый шум: вентилятор, клавиатуру, улицу.">
+        <Toggle label="Шумоподавление" on={audio.noiseSuppression} onChange={(v) => setAudio({ noiseSuppression: v })} />
+      </Row>
+      <Row title="Эхоподавление" text="Нужно, если вы говорите без наушников.">
+        <Toggle label="Эхоподавление" on={audio.echoCancellation} onChange={(v) => setAudio({ echoCancellation: v })} />
+      </Row>
+      <Row title="Автоматическая громкость" text="Выравнивает громкость голоса, если вы отходите от микрофона.">
+        <Toggle label="Автоматическая громкость" on={audio.autoGainControl} onChange={(v) => setAudio({ autoGainControl: v })} />
+      </Row>
+      <Row
+        title="Скрывать мой IP в звонках"
+        text={
+          hasTurn
+            ? 'Звук пойдёт через TURN-сервер вашего ретранслятора. Расшифровать его сервер не может, но задержка может быть чуть больше.'
+            : 'Недоступно: на сервере не настроен TURN. Звонки идут напрямую между компьютерами, поэтому собеседник видит ваш IP-адрес.'
+        }
+      >
+        <Toggle
+          label="Скрывать мой IP в звонках"
+          on={snapshot.settings.callsRelayOnly}
+          onChange={(v) => (hasTurn || !v) && messenger.updateSettings({ callsRelayOnly: v })}
+        />
+      </Row>
+      <div className="notice info" style={{ marginTop: 14 }}>
+        <LockKeyhole size={16} />
+        <span>
+          Звонки шифруются на устройствах (DTLS-SRTP). Ключи согласуются через сквозное шифрование Veil, поэтому ни сервер, ни посредник не
+          могут подслушать разговор.
+        </span>
+      </div>
     </div>
   );
 }
@@ -665,7 +789,7 @@ function AboutTab() {
         <h1 style={{ fontSize: 24 }}>
           <span className="gradient-text">Veil</span>
         </h1>
-        <p>Версия {bridge?.version ?? '1.1.1'} · открытый исходный код</p>
+        <p>Версия {bridge?.version ?? '1.2.0'} · открытый исходный код</p>
       </div>
       <UpdatesSection />
       <div className="section">

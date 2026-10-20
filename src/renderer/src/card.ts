@@ -9,9 +9,14 @@ interface CardData {
   gradient: string;
   theme: 'dark' | 'light';
   accent: string;
+  call?: boolean;
 }
 
-const api = (window as unknown as { card: { onData(cb: (d: CardData) => void): void; click(): void; close(): void } }).card;
+const api = (
+  window as unknown as {
+    card: { onData(cb: (d: CardData) => void): void; click(): void; close(): void; action(a: 'accept' | 'decline'): void };
+  }
+).card;
 const LIFETIME_MS = 6500;
 const el = (id: string) => document.getElementById(id)!;
 
@@ -24,7 +29,10 @@ function dismiss(): void {
   setTimeout(() => api.close(), 220);
 }
 
+let isCall = false;
+
 function run(): void {
+  if (isCall) return; // a ringing call stays until it is answered, declined or over
   startedAt = Date.now();
   timer = setTimeout(dismiss, remaining);
   const bar = el('bar');
@@ -49,6 +57,15 @@ api.onData((data) => {
   el('title').textContent = data.title;
   el('body').textContent = data.body;
   el('initials').textContent = data.initials;
+  isCall = !!data.call;
+  if (isCall) {
+    // Its own buttons must stay reachable, so the card itself is not a button.
+    el('card').setAttribute('role', 'alertdialog');
+    el('card').setAttribute('aria-label', `${data.title}: ${data.body}`);
+    el('card').classList.add('call');
+    el('actions').hidden = false;
+    el('close').hidden = true;
+  }
   (el('initials').parentElement as HTMLElement).style.background = data.gradient;
   requestAnimationFrame(() => {
     el('card').classList.add('shown');
@@ -61,5 +78,11 @@ el('close').addEventListener('click', (event) => {
   event.stopPropagation();
   dismiss();
 });
+for (const action of ['accept', 'decline'] as const) {
+  el(action).addEventListener('click', (event) => {
+    event.stopPropagation();
+    api.action(action);
+  });
+}
 el('card').addEventListener('mouseenter', pause);
 el('card').addEventListener('mouseleave', run);

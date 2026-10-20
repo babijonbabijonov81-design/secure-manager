@@ -177,7 +177,7 @@ const lastMessage = (messages: Message[] | undefined) => {
 };
 
 function StatusTicks({ message }: { message: Message }) {
-  if (message.dir !== 'out') return null;
+  if (message.dir !== 'out' || message.call) return null;
   if (message.status === 'pending') return <Clock size={14} className="ticks" style={{ color: 'var(--text-3)' }} />;
   if (message.status === 'failed') return <TriangleAlert size={14} className="ticks" style={{ color: 'var(--danger)' }} />;
   if (message.status === 'sent') return <Check size={15} className="ticks" style={{ color: 'var(--text-3)' }} />;

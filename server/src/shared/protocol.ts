@@ -106,9 +106,16 @@ export type ClientFrame =
   | { type: 'ack'; ids: string[] }
   | { type: 'ping' };
 
+/** STUN/TURN server for calls, in the shape RTCPeerConnection expects. */
+export interface IceServer {
+  urls: string[];
+  username?: string;
+  credential?: string;
+}
+
 export type ServerFrame =
   | { type: 'hello'; nonce: string; version: number; name: string }
-  | { type: 'ready'; userId: string; username: string; opkCount: number; spkId: number | null; queued: number }
+  | { type: 'ready'; userId: string; username: string; opkCount: number; spkId: number | null; queued: number; ice?: IceServer[] }
   | { type: 'error'; reqId?: string; code: ErrorCode; message: string }
   | { type: 'result'; reqId: string; data?: unknown }
   | { type: 'msg'; id: string; ts: number }

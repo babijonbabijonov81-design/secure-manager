@@ -1,19 +1,21 @@
 import { DownloadCloud, Lock, LockKeyhole, Maximize2, MessageCircle, MessageSquarePlus, Minimize2, Moon, Settings, ShieldCheck, Sun, Timer, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
-import { bridge, type UpdateState } from '../../../core/platform.ts';
+import { bridge, type NotificationCardData, type UpdateState } from '../../../core/platform.ts';
 import type { Contact, Message } from '../../../core/types.ts';
 import { applyAppearance } from '../App.tsx';
+import { CallOverlay } from '../components/CallOverlay.tsx';
 import { ChatList } from '../components/ChatList.tsx';
 import { ChatView } from '../components/ChatView.tsx';
 import { InfoPanel } from '../components/InfoPanel.tsx';
 import { NewChatModal } from '../components/NewChatModal.tsx';
 import { SettingsModal, type SettingsTab } from '../components/SettingsModal.tsx';
 import { revokeAttachmentUrls } from '../lib/attachments.ts';
+import { CallManager } from '../lib/calls.ts';
 import { snippetOf } from '../../../core/messenger.ts';
 import { avatarGradient, initials } from '../lib/format.ts';
 import { playChime, setBadge, showNotification } from '../lib/notify.ts';
-import { Avatar, Logo } from '../lib/ui.tsx';
+import { Avatar, Logo, useToast } from '../lib/ui.tsx';
 
 interface Props {
   messenger: Messenger;
@@ -23,6 +25,20 @@ interface Props {
 }
 
 const STATUS_TEXT = { online: 'В сети', connecting: 'Подключение…', offline: 'Нет связи' } as const;
+
+/** Data for Veil's own notification card, styled like the app right now. */
+function cardData(contact: Contact, body: string, call = false): NotificationCardData {
+  const root = document.documentElement;
+  return {
+    title: contact.displayName,
+    body,
+    initials: initials(contact.displayName),
+    gradient: avatarGradient(contact.id),
+    theme: root.dataset.theme === 'light' ? 'light' : 'dark',
+    accent: getComputedStyle(root).getPropertyValue('--accent').trim() || '#7c5cff',
+    ...(call ? { call } : {}),
+  };
+}
 
 export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props) {
   const snapshot = useSyncExternalStore(messenger.subscribe, messenger.getSnapshot);
@@ -60,22 +76,8 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
       if (settings.sounds) playChime();
       if (settings.notifications && !focused) {
         const body = settings.notificationPreview ? snippetOf(message) || 'Сообщение' : 'Новое зашифрованное сообщение';
-        if (bridge && settings.notificationStyle === 'veil') {
-          const root = document.documentElement;
-          bridge.notify({
-            title: contact.displayName,
-            body,
-            tag: contact.id,
-            card: {
-              title: contact.displayName,
-              body,
-              initials: initials(contact.displayName),
-              gradient: avatarGradient(contact.id),
-              theme: root.dataset.theme === 'light' ? 'light' : 'dark',
-              accent: getComputedStyle(root).getPropertyValue('--accent').trim() || '#7c5cff',
-            },
-          });
-        } else showNotification(contact.displayName, body, contact.id, () => setActiveId(contact.id));
+        if (bridge && settings.notificationStyle === 'veil') bridge.notify({ title: contact.displayName, body, tag: contact.id, card: cardData(contact, body) });
+        else showNotification(contact.displayName, body, contact.id, () => setActiveId(contact.id));
       }
     };
     return () => {
@@ -83,7 +85,65 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
     };
   }, [messenger, incomingRef]);
 
-  useEffect(() => bridge?.onNotificationClick((id) => setActiveId(id)), []);
+  // Audio calls: one manager per unlocked account; locking hangs up.
+  const toast = useToast();
+  const [calls, setCalls] = useState<CallManager | null>(null);
+  useEffect(() => {
+    const manager = new CallManager(messenger, {
+      onIncoming: (contact, callId) => {
+        if (document.hasFocus() && !document.hidden) return;
+        const settings = messenger.getSnapshot().settings;
+        const body = 'Входящий аудиозвонок';
+        if (bridge && settings.notificationStyle === 'veil') bridge.notify({ title: contact.displayName, body, tag: `call:${callId}`, card: cardData(contact, body, true) });
+        else showNotification(contact.displayName, body, `call:${callId}`, () => manager.setMinimized(false));
+      },
+      onSettled: (callId) => bridge?.closeNotification(`call:${callId}`),
+    });
+    setCalls(manager);
+    const offAction = bridge?.onCallAction(({ tag, action }) => {
+      const call = manager.getState();
+      if (!call || tag !== `call:${call.id}`) return;
+      if (action === 'accept') {
+        setActiveId(call.contactId);
+        manager.setMinimized(false);
+        void manager.accept();
+      } else manager.decline();
+    });
+    return () => {
+      offAction?.();
+      manager.dispose();
+      setCalls(null);
+    };
+  }, [messenger]);
+  // Locking hangs up first, while the call can still be logged and the other side told.
+  const lock = useCallback(() => {
+    calls?.hangup();
+    onLock();
+  }, [calls, onLock]);
+  const audio = snapshot.settings.audio;
+  useEffect(() => calls?.applySettings(), [calls, audio]);
+  const startCall = useCallback(
+    (contactId: string) => {
+      if (!calls) return;
+      setActiveId(contactId);
+      calls.start(contactId).catch((error: Error) => toast(error.message, 'error'));
+    },
+    [calls, toast],
+  );
+
+  useEffect(
+    () =>
+      bridge?.onNotificationClick((tag) => {
+        const call = calls?.getState();
+        if (tag.startsWith('call:')) {
+          if (call && tag === `call:${call.id}`) {
+            setActiveId(call.contactId);
+            calls!.setMinimized(false);
+          }
+        } else setActiveId(tag);
+      }),
+    [calls],
+  );
 
   // In-app updates.
   const [update, setUpdate] = useState<UpdateState | null>(null);
@@ -109,12 +169,13 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
     const touch = () => (last = Date.now());
     const events = ['mousemove', 'keydown', 'mousedown', 'wheel', 'focus'] as const;
     for (const e of events) window.addEventListener(e, touch, { passive: true });
-    const timer = setInterval(() => Date.now() - last > lockAfter * 60_000 && onLock(), 10_000);
+    // Never lock in the middle of a call.
+    const timer = setInterval(() => Date.now() - last > lockAfter * 60_000 && !calls?.getState() && onLock(), 10_000);
     return () => {
       clearInterval(timer);
       for (const e of events) window.removeEventListener(e, touch);
     };
-  }, [lockAfter, onLock]);
+  }, [lockAfter, onLock, calls]);
 
   // Keyboard shortcuts.
   useEffect(() => {
@@ -130,7 +191,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
         setModal({ kind: 'new' });
       } else if (key === 'l') {
         e.preventDefault();
-        onLock();
+        lock();
       } else if (key === ',') {
         e.preventDefault();
         setModal({ kind: 'settings' });
@@ -138,7 +199,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onLock]);
+  }, [lock]);
 
   const active = snapshot.contacts.find((c) => c.id === activeId) ?? null;
   const select = useCallback((id: string) => setActiveId(id), []);
@@ -160,6 +221,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
           </button>
         </div>
       )}
+      {calls && <CallOverlay calls={calls} contacts={snapshot.contacts} />}
       {update && !updateHidden && ['available', 'downloading', 'ready'].includes(update.status) && (
         <div className="banner update">
           <DownloadCloud size={15} />
@@ -219,7 +281,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
             </button>
           </div>
           <div className="tooltip-wrap" data-tip="Заблокировать">
-            <button className="icon-btn" aria-label="Заблокировать" onClick={onLock}>
+            <button className="icon-btn" aria-label="Заблокировать" onClick={lock}>
               <Lock size={20} />
             </button>
           </div>
@@ -254,6 +316,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
             infoOpen={infoOpen}
             onToggleInfo={() => setInfoOpen((v) => !v)}
             onShowSafety={() => setInfoOpen(true)}
+            onCall={startCall}
           />
         ) : (
           <section className="chat">
@@ -290,6 +353,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
             messenger={messenger}
             contact={active}
             online={!!snapshot.online[active.id]}
+            onCall={() => startCall(active.id)}
             onClose={() => setInfoOpen(false)}
             onDeleted={() => {
               setInfoOpen(false);

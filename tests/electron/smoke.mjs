@@ -1,6 +1,6 @@
 // Launches the built desktop app, creates an account against the embedded relay and
 // takes a screenshot. Run after `npm run build` (on Linux CI: under xvfb-run).
-//   node tests/electron/smoke.mjs [screenshot.png] [card.png]
+//   node tests/electron/smoke.mjs [screenshot.png] [card.png] [call-card.png]
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,6 +54,29 @@ try {
     await card.waitForTimeout(600);
     await card.screenshot({ path: process.argv[3], omitBackground: true });
   }
+
+  // An incoming-call card: its buttons reach the app, then the card closes.
+  await page.evaluate(() => {
+    window.__callActions = [];
+    window.veil.onCallAction((a) => window.__callActions.push(a));
+    window.veil.notify({
+      title: 'Алиса',
+      body: 'Входящий аудиозвонок',
+      tag: 'call:smoke',
+      card: { title: 'Алиса', body: 'Входящий аудиозвонок', initials: 'АЛ', gradient: 'linear-gradient(135deg, #ff6b8b, #ff9a5a)', theme: 'dark', accent: '#7c5cff', call: true },
+    });
+  });
+  const callCard = await app.waitForEvent('window', { predicate: (w) => w.url().includes('card.html') && w !== card, timeout: 10_000 });
+  await callCard.getByRole('button', { name: 'Ответить' }).waitFor({ timeout: 10_000 });
+  if (process.argv[4]) {
+    await callCard.waitForTimeout(600);
+    await callCard.screenshot({ path: process.argv[4], omitBackground: true });
+  }
+  await callCard.getByRole('button', { name: 'Ответить' }).click();
+  await page.waitForFunction(() => window.__callActions.length > 0, null, { timeout: 5000 });
+  const action = await page.evaluate(() => window.__callActions[0]);
+  if (action.tag !== 'call:smoke' || action.action !== 'accept') throw new Error(`call action: ${JSON.stringify(action)}`);
+  console.log('call card ok');
 
   const maximized = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isMaximized()));
   console.log('maximized on first launch:', maximized);

@@ -131,3 +131,21 @@ export function passwordStrength(password: string): number {
   if (/\d/.test(password) && /[^\p{L}\d]/u.test(password)) score++;
   return Math.min(4, score);
 }
+
+/** Running call timer: 0:07, 12:34, 1:02:03. */
+export function formatClock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
+}
+
+/** Call length in words: "45 сек", "2 мин 31 сек", "1 ч 5 мин". */
+export function formatCallDuration(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} сек`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h) return `${h} ч ${m} мин`;
+  return s % 60 ? `${m} мин ${s % 60} сек` : `${m} мин`;
+}

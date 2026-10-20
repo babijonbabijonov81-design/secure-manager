@@ -25,7 +25,7 @@ import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
-import { closeAllCards, setupNotificationCards, showNotificationCard, type NotificationCard } from './notifications.ts';
+import { closeAllCards, closeCard, setupNotificationCards, showNotificationCard, type NotificationCard } from './notifications.ts';
 import { setupUpdater } from './updater.ts';
 import trayIconPath from '../../resources/tray.png?asset';
 import windowIconPath from '../../resources/icon.png?asset';
@@ -348,6 +348,7 @@ function registerIpc(): void {
     if (!trusted(event)) return;
     if (options.card) {
       showNotificationCard({ ...options.card, tag: options.tag });
+      if (options.card.call && !mainWindow?.isFocused()) mainWindow?.flashFrame(true);
       return;
     }
     if (!Notification.isSupported()) return;
@@ -362,6 +363,10 @@ function registerIpc(): void {
       if (options.tag) mainWindow?.webContents.send('notification-click', options.tag);
     });
     notification.show();
+  });
+
+  ipcMain.on('notify:close', (event, tag: unknown) => {
+    if (trusted(event) && typeof tag === 'string') closeCard(tag);
   });
 
   ipcMain.on('badge', (event, count: number) => {
@@ -493,7 +498,7 @@ app.on('window-all-closed', () => {
 
 app.whenReady().then(async () => {
   // Only what the app uses: notifications, clipboard writes and the microphone (voice
-  // messages, audio only). No camera, location, screen capture etc.
+  // messages and calls, audio only). No camera, location, screen capture etc.
   const allowed = (permission: string, mediaTypes?: string[]) =>
     permission === 'notifications' ||
     permission === 'clipboard-sanitized-write' ||
@@ -501,9 +506,11 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) =>
     callback(allowed(permission, (details as { mediaTypes?: string[] }).mediaTypes)),
   );
-  session.defaultSession.setPermissionCheckHandler((_wc, permission, _origin, details) =>
-    allowed(permission, (details as { mediaType?: string }).mediaType ? [(details as { mediaType: string }).mediaType] : undefined),
-  );
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, _origin, details) => {
+    const mediaType = (details as { mediaType?: string }).mediaType;
+    // "unknown" is asked when listing devices: needed to show microphone names in Settings → Audio.
+    return allowed(permission, mediaType && mediaType !== 'unknown' ? [mediaType] : undefined);
+  });
   if (!isMac) {
     try {
       session.defaultSession.setSpellCheckerLanguages(['ru', 'en-US']);
@@ -514,10 +521,16 @@ app.whenReady().then(async () => {
 
   registerIpc();
   createMenu();
-  setupNotificationCards((tag) => {
-    showWindow();
-    if (tag) mainWindow?.webContents.send('notification-click', tag);
-  });
+  setupNotificationCards(
+    (tag) => {
+      showWindow();
+      if (tag) mainWindow?.webContents.send('notification-click', tag);
+    },
+    (tag, action) => {
+      if (action === 'accept') showWindow();
+      mainWindow?.webContents.send('call-action', { tag, action });
+    },
+  );
   setupUpdater(
     () => mainWindow,
     () => {

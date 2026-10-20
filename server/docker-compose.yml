@@ -1,6 +1,9 @@
 # Relay + automatic HTTPS with Caddy. Set DOMAIN to a domain pointing at this server:
 #   DOMAIN=chat.example.com docker compose up -d
 # For account recovery by email also pass BREVO_API_KEY (or RESEND_API_KEY / SMTP_URL) and MAIL_FROM.
+# Optional TURN server for calls (strict NATs, "hide my IP"): open UDP/TCP 3478 and UDP 49160-49200, then
+#   DOMAIN=chat.example.com TURN_SECRET=$(openssl rand -hex 32) TURN_URLS=turn:chat.example.com:3478 \
+#     docker compose --profile turn up -d
 services:
   relay:
     build: .
@@ -10,6 +13,8 @@ services:
       - RESEND_API_KEY
       - SMTP_URL
       - MAIL_FROM
+      - TURN_URLS
+      - TURN_SECRET
     volumes:
       - relay-data:/data
   caddy:
@@ -21,6 +26,17 @@ services:
     command: caddy reverse-proxy --from ${DOMAIN:?set DOMAIN} --to relay:8787
     volumes:
       - caddy-data:/data
+  turn:
+    image: coturn/coturn:4.6
+    profiles: [turn]
+    restart: unless-stopped
+    network_mode: host
+    command: >
+      -n --log-file=stdout --no-cli --fingerprint
+      --use-auth-secret --static-auth-secret=${TURN_SECRET:-} --realm=${DOMAIN:-veil}
+      --listening-port=3478 --min-port=49160 --max-port=49200
+      --no-multicast-peers --no-loopback-peers
+      --denied-peer-ip=10.0.0.0-10.255.255.255 --denied-peer-ip=172.16.0.0-172.31.255.255 --denied-peer-ip=192.168.0.0-192.168.255.255
 volumes:
   relay-data:
   caddy-data:

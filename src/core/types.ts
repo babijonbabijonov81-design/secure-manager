@@ -4,6 +4,16 @@ import type { ConnectionStatus } from './relay-client.ts';
 export type Theme = 'dark' | 'light' | 'system';
 export type Accent = 'violet' | 'blue' | 'teal' | 'rose' | 'amber';
 
+export interface AudioSettings {
+  /** Microphone deviceId; '' is the system default. */
+  input: string;
+  /** Speakers/headphones deviceId; '' is the system default. */
+  output: string;
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+}
+
 export interface Settings {
   theme: Theme;
   accent: Accent;
@@ -23,6 +33,9 @@ export interface Settings {
   autocorrect: boolean;
   /** Who sees when you were last online: exact time, or only "recently". */
   lastSeen: 'everyone' | 'nobody';
+  audio: AudioSettings;
+  /** Calls only through the relay's TURN server, so the other side never learns your IP. */
+  callsRelayOnly: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -40,6 +53,8 @@ export const DEFAULT_SETTINGS: Settings = {
   spellcheck: true,
   autocorrect: true,
   lastSeen: 'everyone',
+  audio: { input: '', output: '', echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  callsRelayOnly: false,
 };
 
 export interface SignedPreKeyRecord {
@@ -127,6 +142,23 @@ export type SystemEvent =
   | { kind: 'keychange' }
   | { kind: 'reset' };
 
+/** A call as shown in the chat; kept only on this device. */
+export interface CallRecord {
+  status: 'done' | 'missed' | 'declined' | 'cancelled' | 'busy' | 'failed' | 'unavailable';
+  /** Seconds of conversation. */
+  dur?: number;
+}
+
+/** Why a call ended, as told to the other side. */
+export type CallEndReason = 'hangup' | 'decline' | 'busy' | 'cancel' | 'timeout' | 'failed';
+
+/** WebRTC signalling, carried end-to-end encrypted; `sdp` includes all ICE candidates. */
+export type CallSignal =
+  | { k: 'offer'; id: string; sdp: string }
+  | { k: 'ring'; id: string }
+  | { k: 'answer'; id: string; sdp: string }
+  | { k: 'end'; id: string; r: CallEndReason };
+
 export interface ReplyRef {
   id: string;
   text: string;
@@ -155,6 +187,7 @@ export interface Message {
   deleted?: boolean;
   readSent?: boolean;
   sys?: SystemEvent;
+  call?: CallRecord;
 }
 
 export const attachmentsOf = (message: Message): Attachment[] => message.atts ?? (message.att ? [message.att] : []);
@@ -185,7 +218,8 @@ export type Content =
   | { t: 'pres'; s: 'on' | 'off' | 'hidden'; ask?: 1 }
   /** Sent after restoring from a backup to open fresh sessions with every contact. */
   | { t: 'hi' }
-  | { t: 'prof'; n: string };
+  | { t: 'prof'; n: string }
+  | ({ t: 'call'; ts: number } & CallSignal);
 
 export interface OutboxItem {
   qid: string;

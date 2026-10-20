@@ -24,6 +24,7 @@ import {
   type BackupMeta,
   type ClientFrame,
   type ErrorCode,
+  type IceServer,
   type OneTimePreKeyPublic,
   type RegisterFrame,
   type ServerFrame,
@@ -45,6 +46,37 @@ export interface RelayOptions {
   log?: (message: string) => void;
   /** Sends verification and recovery codes; without it email features are unavailable. */
   mailer?: Mailer | null;
+  /** STUN/TURN servers handed to clients for calls. */
+  ice?: IceOptions;
+}
+
+export interface IceOptions {
+  stun?: string[];
+  turn?: string[];
+  /** coturn `static-auth-secret`: clients get time-limited credentials (TURN REST API). */
+  secret?: string;
+  /** Fixed TURN credentials, if no secret is used. */
+  username?: string;
+  credential?: string;
+}
+
+const TURN_CREDENTIAL_TTL_S = 24 * 60 * 60;
+
+/** ICE servers for one client. With a shared secret, credentials expire after a day. */
+export function iceServersFor(options: IceOptions | undefined, userId: string, now = Date.now()): IceServer[] | undefined {
+  if (!options) return undefined;
+  const servers: IceServer[] = [];
+  if (options.stun?.length) servers.push({ urls: options.stun });
+  if (options.turn?.length) {
+    if (options.secret) {
+      const username = `${Math.floor(now / 1000) + TURN_CREDENTIAL_TTL_S}:${userId.slice(0, 16)}`;
+      const credential = createHmac('sha1', options.secret).update(username).digest('base64');
+      servers.push({ urls: options.turn, username, credential });
+    } else if (options.username && options.credential) {
+      servers.push({ urls: options.turn, username: options.username, credential: options.credential });
+    }
+  }
+  return servers.length ? servers : undefined;
 }
 
 export interface RelayHandle {
@@ -279,6 +311,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       opkCount: user.opks.length,
       spkId: user.spk?.id ?? null,
       queued: store.queueOf(user.userId).length,
+      ice: iceServersFor(options.ice, user.userId),
     });
     await deliverQueued(conn);
   };
