@@ -148,7 +148,9 @@ npm version 1.0.1
 git push --follow-tags
 ```
 
-GitHub Actions прогонит тесты, соберёт Windows, macOS и Linux и опубликует релиз с установщиками.
+Можно и без терминала: на GitHub откройте **Actions → Build desktop apps → Run workflow**, поставьте галочку **release** и нажмите **Run workflow**. Версия берётся из `package.json`.
+
+GitHub Actions прогонит тесты, соберёт установщики и опубликует релиз.
 
 ### Структура
 
