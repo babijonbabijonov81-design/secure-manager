@@ -1,0 +1,16 @@
+{
+  "name": "veil-relay",
+  "version": "1.0.0",
+  "description": "Veil zero-knowledge relay server: stores and forwards only end-to-end encrypted envelopes",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "start": "node src/index.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.4.0",
+    "ws": "^8.22.0"
+  }
+}
