@@ -3,6 +3,7 @@
 //   RESEND_API_KEY + MAIL_FROM   (https://resend.com)
 //   SMTP_URL       + MAIL_FROM   (e.g. smtps://user:app-password@smtp.gmail.com:465)
 //   MAIL_LOG=1                   (development: print codes to the server log instead)
+//   MAIL_LOG=/path/mail.jsonl    (tests: append messages to a file)
 
 export type Mailer = (message: { to: string; subject: string; html: string; text: string }) => Promise<void>;
 
@@ -52,6 +53,14 @@ export function mailerFromEnv(env: NodeJS.ProcessEnv, log: (message: string) => 
   }
   if (env.MAIL_LOG === '1') {
     return async ({ to, text }) => log(`[mail to ${to}] ${text}`);
+  }
+  if (env.MAIL_LOG) {
+    // Testing: append messages as JSON lines to the given file.
+    const file = env.MAIL_LOG;
+    return async ({ to, text }) => {
+      const { appendFile } = await import('node:fs/promises');
+      await appendFile(file, `${JSON.stringify({ to, text, at: Date.now() })}\n`);
+    };
   }
   return null;
 }

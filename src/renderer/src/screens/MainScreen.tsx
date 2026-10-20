@@ -1,7 +1,7 @@
-import { Lock, LockKeyhole, MessageCircle, MessageSquarePlus, Moon, Settings, ShieldCheck, Sun, Timer, WifiOff } from 'lucide-react';
+import { DownloadCloud, Lock, LockKeyhole, Maximize2, MessageCircle, MessageSquarePlus, Minimize2, Moon, Settings, ShieldCheck, Sun, Timer, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
-import { bridge } from '../../../core/platform.ts';
+import { bridge, type UpdateState } from '../../../core/platform.ts';
 import type { Contact, Message } from '../../../core/types.ts';
 import { applyAppearance } from '../App.tsx';
 import { ChatList } from '../components/ChatList.tsx';
@@ -10,7 +10,8 @@ import { InfoPanel } from '../components/InfoPanel.tsx';
 import { NewChatModal } from '../components/NewChatModal.tsx';
 import { SettingsModal, type SettingsTab } from '../components/SettingsModal.tsx';
 import { revokeAttachmentUrls } from '../lib/attachments.ts';
-import { previewOf } from '../lib/format.ts';
+import { snippetOf } from '../../../core/messenger.ts';
+import { avatarGradient, initials } from '../lib/format.ts';
 import { playChime, setBadge, showNotification } from '../lib/notify.ts';
 import { Avatar, Logo } from '../lib/ui.tsx';
 
@@ -58,9 +59,23 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
       const settings = messenger.getSnapshot().settings;
       if (settings.sounds) playChime();
       if (settings.notifications && !focused) {
-        showNotification(contact.displayName, settings.notificationPreview ? previewOf(message) : 'Новое зашифрованное сообщение', contact.id, () =>
-          setActiveId(contact.id),
-        );
+        const body = settings.notificationPreview ? snippetOf(message) || 'Сообщение' : 'Новое зашифрованное сообщение';
+        if (bridge && settings.notificationStyle === 'veil') {
+          const root = document.documentElement;
+          bridge.notify({
+            title: contact.displayName,
+            body,
+            tag: contact.id,
+            card: {
+              title: contact.displayName,
+              body,
+              initials: initials(contact.displayName),
+              gradient: avatarGradient(contact.id),
+              theme: root.dataset.theme === 'light' ? 'light' : 'dark',
+              accent: getComputedStyle(root).getPropertyValue('--accent').trim() || '#7c5cff',
+            },
+          });
+        } else showNotification(contact.displayName, body, contact.id, () => setActiveId(contact.id));
       }
     };
     return () => {
@@ -69,6 +84,18 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
   }, [messenger, incomingRef]);
 
   useEffect(() => bridge?.onNotificationClick((id) => setActiveId(id)), []);
+
+  // In-app updates.
+  const [update, setUpdate] = useState<UpdateState | null>(null);
+  const [updateHidden, setUpdateHidden] = useState(false);
+  useEffect(() => {
+    if (!bridge) return;
+    void bridge.update.state().then(setUpdate);
+    return bridge.update.onState(setUpdate);
+  }, []);
+
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => bridge?.onFullscreen(setFullscreen), []);
 
   const unread = snapshot.contacts.reduce((sum, c) => sum + (c.muted ? 0 : c.unread), 0);
   useEffect(() => setBadge(unread), [unread]);
@@ -128,6 +155,24 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
           <div className="titlebar-title">
             <Logo size={16} /> Veil
           </div>
+          <button className="titlebar-btn" onClick={() => bridge!.toggleFullscreen()} title={fullscreen ? 'Выйти из полноэкранного режима (F11)' : 'На весь экран (F11)'}>
+            {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+        </div>
+      )}
+      {update && !updateHidden && ['available', 'downloading', 'ready'].includes(update.status) && (
+        <div className="banner update">
+          <DownloadCloud size={15} />
+          {update.status === 'available' && <>Доступна новая версия Veil {update.version}</>}
+          {update.status === 'downloading' && <>Загрузка обновления… {update.percent ?? 0}%</>}
+          {update.status === 'ready' && <>Обновление {update.version} готово</>}
+          {update.status === 'available' && (
+            <button onClick={() => bridge!.update.download()}>{update.manual ? 'Скачать' : 'Обновить'}</button>
+          )}
+          {update.status === 'ready' && <button onClick={() => bridge!.update.install()}>Перезапустить</button>}
+          <button className="banner-close" onClick={() => setUpdateHidden(true)} aria-label="Скрыть">
+            <X size={14} />
+          </button>
         </div>
       )}
       {snapshot.fatal && (
@@ -185,7 +230,20 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
           </div>
         </nav>
 
-        <ChatList ref={searchRef} snapshot={snapshot} activeId={activeId} onSelect={select} onNewChat={() => setModal({ kind: 'new' })} />
+        <ChatList
+          ref={searchRef}
+          messenger={messenger}
+          snapshot={snapshot}
+          activeId={activeId}
+          onSelect={select}
+          onNewChat={() => setModal({ kind: 'new' })}
+          onDeleted={(id) => {
+            if (id === activeId) {
+              setActiveId(null);
+              setInfoOpen(false);
+            }
+          }}
+        />
 
         {active ? (
           <ChatView
@@ -231,6 +289,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
             key={`info-${active.id}`}
             messenger={messenger}
             contact={active}
+            online={!!snapshot.online[active.id]}
             onClose={() => setInfoOpen(false)}
             onDeleted={() => {
               setInfoOpen(false);

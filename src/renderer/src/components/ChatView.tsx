@@ -1,10 +1,29 @@
-import { Copy, Download, Hourglass, Info, LockKeyhole, Paperclip, RotateCcw, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  CornerUpLeft,
+  Download,
+  Hourglass,
+  Info,
+  LockKeyhole,
+  Paperclip,
+  RotateCcw,
+  ShieldCheck,
+  Sticker,
+  Trash2,
+  TriangleAlert,
+  X,
+} from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
-import { MAX_ATTACHMENT_BYTES, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
-import { readFile, saveAttachment } from '../lib/attachments.ts';
+import { attachmentsOf, MAX_ATTACHMENT_BYTES, type Attachment, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
+import { attachmentUrl, saveAttachment } from '../lib/attachments.ts';
 import { formatDay, sameDay, systemText, timerLabel } from '../lib/format.ts';
+import { copyImage, copyText, prepareFile } from '../lib/media.ts';
+import { presenceText } from '../lib/text.ts';
 import { Avatar, ContextMenu, useEscape, useToast, type MenuItem } from '../lib/ui.tsx';
+import { AttachmentPreview } from './AttachmentPreview.tsx';
 import { Bubble } from './Bubble.tsx';
 import { Composer } from './Composer.tsx';
 
@@ -22,12 +41,17 @@ const GROUP_GAP_MS = 3 * 60 * 1000;
 export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo, onShowSafety }: Props) {
   const messages = snapshot.conversations[contact.id] ?? [];
   const typing = !!snapshot.typing[contact.id];
+  const online = !!snapshot.online[contact.id];
   const toast = useToast();
   const scroller = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [menu, setMenu] = useState<{ x: number; y: number; message: Message } | null>(null);
-  const [lightbox, setLightbox] = useState<{ url: string; message: Message } | null>(null);
+  const [lightbox, setLightbox] = useState<{ items: Attachment[]; index: number } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const [pending, setPending] = useState<File[]>([]);
   const dragDepth = useRef(0);
 
   // Mark as read while the chat is visible and the window focused.
@@ -57,7 +81,6 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
   }, [messages.length, typing, lastOut]);
 
   // Keep pinned to the bottom while images decode and bubbles grow.
-  const inner = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scroller.current;
     if (!el || !inner.current) return;
@@ -73,50 +96,96 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
     if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
-  const sendFiles = useCallback(
-    async (files: File[]) => {
-      for (const file of files) {
-        if (file.size > MAX_ATTACHMENT_BYTES) {
-          toast(`«${file.name}» больше 20 МБ`, 'error');
-          continue;
-        }
-        try {
-          await messenger.sendFile(contact.id, await readFile(file));
-        } catch (e) {
-          toast((e as Error).message, 'error');
-        }
+  const queueFiles = useCallback(
+    (files: File[]) => {
+      const ok = files.filter((f) => {
+        if (f.size > MAX_ATTACHMENT_BYTES) toast(`«${f.name}» больше 20 МБ`, 'error');
+        return f.size <= MAX_ATTACHMENT_BYTES;
+      });
+      if (ok.length) setPending((list) => [...list, ...ok]);
+    },
+    [toast],
+  );
+
+  const sendPending = async (caption: string, compress: boolean) => {
+    const files = pending;
+    const reply = replyTo?.id;
+    setPending([]);
+    setReplyTo(null);
+    try {
+      const prepared = await Promise.all(files.map((f) => prepareFile(f, compress)));
+      await messenger.sendMedia(contact.id, prepared, { caption, replyTo: reply });
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
+  };
+
+  const copy = useCallback(
+    async (message: Message) => {
+      try {
+        const images = attachmentsOf(message).filter((a) => a.kind === 'image' || a.kind === 'sticker');
+        if (message.text) await copyText(message.text);
+        else if (images.length) {
+          const data = await messenger.getAttachment(images[0].id);
+          if (!data) throw new Error('missing');
+          await copyImage(data, images[0].mime);
+        } else return;
+        toast(message.text ? 'Текст скопирован' : 'Изображение скопировано', 'success');
+      } catch {
+        toast('Не удалось скопировать', 'error');
       }
     },
-    [messenger, contact.id, toast],
+    [messenger, toast],
   );
 
   const onContext = useCallback((e: MouseEvent, message: Message) => {
     e.preventDefault();
+    e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, message });
   }, []);
-  const onOpenImage = useCallback((url: string, message: Message) => setLightbox({ url, message }), []);
+  const onOpenMedia = useCallback((message: Message, index: number) => {
+    setLightbox({ items: attachmentsOf(message).filter((a) => a.kind === 'image'), index });
+  }, []);
   const onRetry = useCallback((message: Message) => void messenger.retryMessage(contact.id, message.id), [messenger, contact.id]);
+  const onReply = useCallback((message: Message) => setReplyTo(message), []);
+  const onReact = useCallback(
+    (message: Message, emoji: string) => void messenger.react(contact.id, message.id, emoji).catch(() => {}),
+    [messenger, contact.id],
+  );
+  const onCopy = useCallback((message: Message) => void copy(message), [copy]);
+  const onJump = useCallback((id: string) => {
+    const el = document.getElementById(`msg-${id}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlight(id);
+    setTimeout(() => setHighlight((h) => (h === id ? null : h)), 1600);
+  }, []);
 
   const menuItems = useMemo<MenuItem[]>(() => {
     if (!menu) return [];
     const m = menu.message;
-    const items: MenuItem[] = [];
-    if (m.text && !m.deleted)
+    const atts = attachmentsOf(m);
+    const items: MenuItem[] = [{ label: 'Ответить', icon: <CornerUpLeft size={16} />, onClick: () => setReplyTo(m) }];
+    const selection = window.getSelection()?.toString().trim();
+    if (selection) items.push({ label: 'Копировать выделенное', icon: <Copy size={16} />, onClick: () => void copyText(selection).then(() => toast('Скопировано', 'success')) });
+    if (m.text) items.push({ label: 'Копировать текст', icon: <Copy size={16} />, onClick: () => void copy(m) });
+    else if (atts.some((a) => a.kind === 'image' || a.kind === 'sticker'))
+      items.push({ label: 'Копировать изображение', icon: <Copy size={16} />, onClick: () => void copy(m) });
+    for (const att of atts.filter((a) => a.kind !== 'sticker'))
+      items.push({ label: atts.length > 1 ? `Сохранить «${att.name}»` : 'Сохранить файл', icon: <Download size={16} />, onClick: () => void saveAttachment(messenger, att) });
+    const sticker = atts.find((a) => a.kind === 'sticker' && a.sticker);
+    if (sticker && !snapshot.stickers.some((s) => s.id === sticker.sticker))
       items.push({
-        label: 'Копировать',
-        icon: <Copy size={16} />,
-        onClick: () => {
-          void navigator.clipboard.writeText(m.text!);
-          toast('Скопировано', 'success');
-        },
+        label: 'Сохранить в мои стикеры',
+        icon: <Sticker size={16} />,
+        onClick: () => void messenger.saveSticker(sticker).then(() => toast('Стикер сохранён', 'success')),
       });
-    if (m.att && !m.deleted) items.push({ label: 'Сохранить файл', icon: <Download size={16} />, onClick: () => void saveAttachment(messenger, m.att!) });
     if (m.status === 'failed') items.push({ label: 'Отправить снова', icon: <RotateCcw size={16} />, onClick: () => onRetry(m) });
     items.push({ label: 'Удалить у меня', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, false) });
-    if (m.dir === 'out' && !m.deleted && m.status !== 'failed' && m.status !== 'pending')
+    if (m.dir === 'out' && m.status !== 'failed' && m.status !== 'pending')
       items.push({ label: 'Удалить у всех', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, true) });
     return items;
-  }, [menu, messenger, contact.id, toast, onRetry]);
+  }, [menu, messenger, contact.id, toast, onRetry, copy, snapshot.stickers]);
 
   const onDragEnter = (e: DragEvent) => {
     if (!e.dataTransfer.types.includes('Files')) return;
@@ -131,7 +200,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
     e.preventDefault();
     dragDepth.current = 0;
     setDragging(false);
-    if (e.dataTransfer.files.length) void sendFiles([...e.dataTransfer.files]);
+    if (e.dataTransfer.files.length) queueFiles([...e.dataTransfer.files]);
   };
 
   const rows: ReactNode[] = [];
@@ -166,28 +235,33 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
         key={message.id}
         message={message}
         messenger={messenger}
+        contactName={contact.displayName}
         groupStart={!continues(previous, message)}
         groupEnd={!continues(message, next)}
+        highlighted={highlight === message.id}
         onContext={onContext}
-        onOpenImage={onOpenImage}
+        onOpenMedia={onOpenMedia}
         onRetry={onRetry}
+        onReply={onReply}
+        onReact={onReact}
+        onCopy={onCopy}
+        onJump={onJump}
       />,
     );
     previous = message;
   });
 
+  const status = typing ? null : presenceText(contact, online);
+
   return (
-    <section
-      className="chat"
-      onDragEnter={onDragEnter}
-      onDragLeave={onDragLeave}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={onDrop}
-    >
+    <section className="chat" onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <div className="chat-bg" />
       <header className="chat-header">
         <button className="who" onClick={onToggleInfo}>
-          <Avatar name={contact.displayName} seed={contact.id} size={42} />
+          <span className="avatar-wrap">
+            <Avatar name={contact.displayName} seed={contact.id} size={42} />
+            {online && <i className="online-dot" />}
+          </span>
           <div style={{ minWidth: 0 }}>
             <div className="name">
               {contact.displayName}
@@ -202,6 +276,8 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
                   <i />
                 </span>
               </div>
+            ) : status ? (
+              <div className={`sub${online ? ' online' : ''}`}>{status}</div>
             ) : (
               <div className="sub">
                 <LockKeyhole size={12} className="lock" />
@@ -252,7 +328,15 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
       </div>
 
       {!contact.blocked && (
-        <Composer messenger={messenger} contact={contact} enterToSend={snapshot.settings.enterToSend} onFiles={(f) => void sendFiles(f)} />
+        <Composer
+          messenger={messenger}
+          contact={contact}
+          settings={snapshot.settings}
+          stickers={snapshot.stickers}
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(null)}
+          onFiles={queueFiles}
+        />
       )}
 
       {dragging && (
@@ -263,30 +347,87 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
           </div>
         </div>
       )}
+      {pending.length > 0 && (
+        <AttachmentPreview
+          files={pending}
+          onAdd={queueFiles}
+          onRemove={(i) => setPending((list) => list.filter((_, j) => j !== i))}
+          onClose={() => setPending([])}
+          onSend={(caption, compress) => void sendPending(caption, compress)}
+        />
+      )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
-      {lightbox && <Lightbox url={lightbox.url} onSave={() => void saveAttachment(messenger, lightbox.message.att!)} onClose={() => setLightbox(null)} />}
+      {lightbox && <Lightbox messenger={messenger} items={lightbox.items} start={lightbox.index} onClose={() => setLightbox(null)} />}
     </section>
   );
 }
 
-function Lightbox({ url, onSave, onClose }: { url: string; onSave(): void; onClose(): void }) {
+function Lightbox({ messenger, items, start, onClose }: { messenger: Messenger; items: Attachment[]; start: number; onClose(): void }) {
+  const [index, setIndex] = useState(start);
+  const [url, setUrl] = useState<string | null>(null);
+  const toast = useToast();
+  const att = items[index];
   useEscape(onClose);
+  useEffect(() => {
+    let alive = true;
+    setUrl(null);
+    void attachmentUrl(messenger, att).then((u) => alive && setUrl(u));
+    return () => {
+      alive = false;
+    };
+  }, [messenger, att]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') setIndex((i) => Math.max(0, i - 1));
+      if (e.key === 'ArrowRight') setIndex((i) => Math.min(items.length - 1, i + 1));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [items.length]);
+  const stop = (fn: () => void) => (e: MouseEvent) => {
+    e.stopPropagation();
+    fn();
+  };
   return (
     <div className="lightbox" onClick={onClose}>
-      <img src={url} alt="" onClick={(e) => e.stopPropagation()} />
-      <button
-        className="icon-btn dl"
-        onClick={(e) => {
-          e.stopPropagation();
-          onSave();
-        }}
-        aria-label="Сохранить"
-      >
-        <Download size={20} />
-      </button>
-      <button className="icon-btn" onClick={onClose} aria-label="Закрыть">
-        <X size={20} />
-      </button>
+      {url && <img src={url} alt="" onClick={(e) => e.stopPropagation()} />}
+      {items.length > 1 && (
+        <>
+          <span className="lightbox-count">
+            {index + 1} / {items.length}
+          </span>
+          {index > 0 && (
+            <button className="icon-btn nav prev" onClick={stop(() => setIndex(index - 1))} aria-label="Предыдущее">
+              <ChevronLeft size={26} />
+            </button>
+          )}
+          {index < items.length - 1 && (
+            <button className="icon-btn nav next" onClick={stop(() => setIndex(index + 1))} aria-label="Следующее">
+              <ChevronRight size={26} />
+            </button>
+          )}
+        </>
+      )}
+      <div className="lightbox-actions">
+        <button
+          className="icon-btn"
+          onClick={stop(() =>
+            void messenger.getAttachment(att.id).then(async (data) => {
+              if (data) await copyImage(data, att.mime);
+              toast('Изображение скопировано', 'success');
+            }),
+          )}
+          aria-label="Копировать"
+        >
+          <Copy size={19} />
+        </button>
+        <button className="icon-btn" onClick={stop(() => void saveAttachment(messenger, att))} aria-label="Сохранить">
+          <Download size={20} />
+        </button>
+        <button className="icon-btn" onClick={onClose} aria-label="Закрыть">
+          <X size={20} />
+        </button>
+      </div>
     </div>
   );
 }

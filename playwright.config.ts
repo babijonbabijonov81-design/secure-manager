@@ -1,4 +1,12 @@
 import { defineConfig } from '@playwright/test';
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/** The test relay "sends" email by appending to this file (shared by runner and workers). */
+export const MAIL_FILE = join(tmpdir(), 'veil-e2e-mail.jsonl');
+process.env.VEIL_E2E_MAIL = MAIL_FILE;
+if (!process.env.TEST_WORKER_INDEX) rmSync(MAIL_FILE, { force: true });
 
 // End-to-end tests run the UI in Chromium against a real relay server.
 // PW_CHROMIUM lets environments with a preinstalled browser skip `playwright install`.
@@ -8,12 +16,17 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   use: {
     viewport: { width: 1360, height: 860 },
-    launchOptions: process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {},
+    launchOptions: {
+      ...(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {}),
+      // A fake microphone for voice messages.
+      args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
+    },
+    permissions: ['clipboard-read', 'clipboard-write'],
   },
   webServer: [
     {
       command: 'node server/src/index.ts',
-      env: { PORT: '8790', DATA_DIR: 'memory' },
+      env: { PORT: '8790', DATA_DIR: 'memory', MAIL_LOG: MAIL_FILE },
       url: 'http://127.0.0.1:8790/health',
       reuseExistingServer: false,
     },

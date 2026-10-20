@@ -2,11 +2,31 @@
 // embedded relay. All cryptography happens in the renderer; this process only ever
 // stores and moves already-encrypted bytes.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, session, shell, Tray, type IpcMainInvokeEvent } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  ClipboardItem,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  Notification,
+  screen,
+  session,
+  shell,
+  systemPreferences,
+  Tray,
+  type IpcMainInvokeEvent,
+  type MenuItemConstructorOptions,
+  type Rectangle,
+} from 'electron';
 import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
+import { closeAllCards, setupNotificationCards, showNotificationCard, type NotificationCard } from './notifications.ts';
+import { setupUpdater } from './updater.ts';
 import trayIconPath from '../../resources/tray.png?asset';
 import windowIconPath from '../../resources/icon.png?asset';
 
@@ -40,6 +60,7 @@ const configFile = () => join(userData(), 'config.json');
 interface AppConfig {
   embeddedServer?: { autoStart: boolean; port: number };
   trayHintShown?: boolean;
+  window?: { bounds?: Rectangle; maximized?: boolean; fullscreen?: boolean };
 }
 
 async function readConfig(): Promise<AppConfig> {
@@ -63,10 +84,21 @@ const TITLEBAR = {
   light: { color: '#f6f7fb', symbolColor: '#5a6075' },
 };
 
-function createWindow(): void {
+/** Saved size and position, if they still fit on a connected display. */
+function restoredBounds(saved: Rectangle | undefined): Partial<Rectangle> {
+  if (!saved) return {};
+  const visible = screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    return saved.x < a.x + a.width - 100 && saved.x + saved.width > a.x + 100 && saved.y >= a.y - 20 && saved.y < a.y + a.height - 100;
+  });
+  return visible ? saved : { width: saved.width, height: saved.height };
+}
+
+function createWindow(state: AppConfig['window'] = undefined): void {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
+    ...restoredBounds(state?.bounds),
     minWidth: 920,
     minHeight: 620,
     show: false,
@@ -81,12 +113,76 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true,
-      spellcheck: false,
+      spellcheck: true,
       devTools: !app.isPackaged,
     },
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  // First launch opens maximized; afterwards the last size, position and state are restored.
+  mainWindow.once('ready-to-show', () => {
+    if (!state || state.maximized) mainWindow?.maximize();
+    if (state?.fullscreen) mainWindow?.setFullScreen(true);
+    mainWindow?.show();
+  });
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  const saveState = () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      const win = mainWindow;
+      if (!win || win.isDestroyed() || win.isMinimized()) return;
+      const normal = !win.isMaximized() && !win.isFullScreen();
+      void readConfig().then((config) =>
+        writeConfig({
+          window: {
+            bounds: normal ? win.getBounds() : config.window?.bounds,
+            maximized: win.isMaximized(),
+            fullscreen: win.isFullScreen(),
+          },
+        }),
+      );
+    }, 500);
+  };
+  for (const event of ['resize', 'move', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen'] as const) {
+    mainWindow.on(event as 'resize', saveState);
+  }
+  mainWindow.on('enter-full-screen', () => mainWindow?.webContents.send('fullscreen', true));
+  mainWindow.on('leave-full-screen', () => mainWindow?.webContents.send('fullscreen', false));
+
+  // F11 toggles full screen on Windows and Linux (macOS uses the green button / ⌃⌘F).
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F11' && !isMac) {
+      event.preventDefault();
+      mainWindow?.setFullScreen(!mainWindow.isFullScreen());
+    }
+  });
+
+  // Right-click on text: spelling suggestions and the usual clipboard actions.
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const items: MenuItemConstructorOptions[] = [];
+    if (params.misspelledWord) {
+      for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
+        items.push({ label: suggestion, click: () => mainWindow?.webContents.replaceMisspelling(suggestion) });
+      }
+      if (!params.dictionarySuggestions.length) items.push({ label: 'Нет вариантов', enabled: false });
+      items.push({
+        label: 'Добавить в словарь',
+        click: () => mainWindow?.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      });
+      items.push({ type: 'separator' });
+    }
+    if (params.isEditable) {
+      items.push(
+        { label: 'Вырезать', role: 'cut', enabled: params.editFlags.canCut },
+        { label: 'Копировать', role: 'copy', enabled: params.editFlags.canCopy },
+        { label: 'Вставить', role: 'paste', enabled: params.editFlags.canPaste },
+        { type: 'separator' },
+        { label: 'Выделить всё', role: 'selectAll' },
+      );
+    } else if (params.selectionText.trim()) {
+      items.push({ label: 'Копировать', role: 'copy' });
+    }
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: mainWindow! });
+  });
 
   // Never open other windows or navigate away from the app; links go to the browser.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -248,9 +344,19 @@ function registerIpc(): void {
     await rm(vaultDir(), { recursive: true, force: true });
   });
 
-  ipcMain.on('notify', (event, options: { title: string; body: string; tag?: string; silent?: boolean }) => {
-    if (!trusted(event) || !Notification.isSupported()) return;
-    const notification = new Notification({ title: String(options.title), body: String(options.body), silent: !!options.silent });
+  ipcMain.on('notify', (event, options: { title: string; body: string; tag?: string; silent?: boolean; card?: NotificationCard }) => {
+    if (!trusted(event)) return;
+    if (options.card) {
+      showNotificationCard({ ...options.card, tag: options.tag });
+      return;
+    }
+    if (!Notification.isSupported()) return;
+    const notification = new Notification({
+      title: String(options.title),
+      body: String(options.body),
+      silent: !!options.silent,
+      icon: isMac ? undefined : windowIconPath,
+    });
     notification.on('click', () => {
       showWindow();
       if (options.tag) mainWindow?.webContents.send('notification-click', options.tag);
@@ -277,6 +383,32 @@ function registerIpc(): void {
 
   ipcMain.on('content-protection', (event, enabled: boolean) => {
     if (trusted(event)) mainWindow?.setContentProtection(!!enabled);
+  });
+
+  ipcMain.on('clipboard:text', (event, text: string) => {
+    if (trusted(event) && typeof text === 'string') void clipboard.writeText(text);
+  });
+  // The renderer converts images to PNG first.
+  ipcMain.on('clipboard:image', (event, data: Uint8Array) => {
+    if (!trusted(event) || !(data instanceof Uint8Array)) return;
+    void clipboard.write([new ClipboardItem({ 'image/png': new Blob([data as BlobPart], { type: 'image/png' }) })]);
+  });
+
+  ipcMain.on('spell:enable', (event, enabled: boolean) => {
+    if (trusted(event)) session.defaultSession.setSpellCheckerEnabled(!!enabled);
+  });
+  ipcMain.on('spell:add', (event, word: string) => {
+    if (trusted(event) && typeof word === 'string' && word.length < 64) session.defaultSession.addWordToSpellCheckerDictionary(word);
+  });
+
+  handle('mic:request', async () => {
+    if (!isMac) return true;
+    if (systemPreferences.getMediaAccessStatus('microphone') === 'granted') return true;
+    return systemPreferences.askForMediaAccess('microphone');
+  });
+
+  ipcMain.on('fullscreen:toggle', (event) => {
+    if (trusted(event) && mainWindow) mainWindow.setFullScreen(!mainWindow.isFullScreen());
   });
 
   ipcMain.on('open-external', (event, url: string) => {
@@ -346,6 +478,7 @@ app.on('second-instance', showWindow);
 app.on('activate', showWindow);
 app.on('before-quit', () => {
   quitting = true;
+  closeAllCards();
 });
 app.on('will-quit', (event) => {
   if (!relay) return;
@@ -359,14 +492,40 @@ app.on('window-all-closed', () => {
 });
 
 app.whenReady().then(async () => {
-  // The app needs no camera, microphone, location etc.
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => callback(permission === 'notifications'));
-  session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'notifications');
+  // Only what the app uses: notifications, clipboard writes and the microphone (voice
+  // messages, audio only). No camera, location, screen capture etc.
+  const allowed = (permission: string, mediaTypes?: string[]) =>
+    permission === 'notifications' ||
+    permission === 'clipboard-sanitized-write' ||
+    (permission === 'media' && (!mediaTypes || mediaTypes.every((t) => t === 'audio')));
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) =>
+    callback(allowed(permission, (details as { mediaTypes?: string[] }).mediaTypes)),
+  );
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, _origin, details) =>
+    allowed(permission, (details as { mediaType?: string }).mediaType ? [(details as { mediaType: string }).mediaType] : undefined),
+  );
+  if (!isMac) {
+    try {
+      session.defaultSession.setSpellCheckerLanguages(['ru', 'en-US']);
+    } catch {
+      // dictionaries unavailable on this system
+    }
+  }
 
   registerIpc();
   createMenu();
+  setupNotificationCards((tag) => {
+    showWindow();
+    if (tag) mainWindow?.webContents.send('notification-click', tag);
+  });
+  setupUpdater(
+    () => mainWindow,
+    () => {
+      quitting = true;
+    },
+  );
   const config = await readConfig();
   if (config.embeddedServer?.autoStart) await startEmbeddedRelay(config.embeddedServer.port);
-  createWindow();
+  createWindow(config.window);
   createTray();
 });

@@ -1,9 +1,10 @@
-import { Eye, EyeOff, KeyRound, LockKeyhole } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, LockKeyhole, Smartphone } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { WrongPasswordError } from '../../../core/crypto/vault.ts';
 import { unlock, type Messenger, type MessengerEvents } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
 import type { StorageBackend } from '../../../core/storage.ts';
+import { CodeInput } from '../components/SecurityDialogs.tsx';
 import { Backdrop, ConfirmDialog, Logo } from '../lib/ui.tsx';
 
 export function LockScreen({
@@ -24,6 +25,8 @@ export function LockScreen({
   const [error, setError] = useState('');
   const [shake, setShake] = useState(0);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [pending, setPending] = useState<Messenger | null>(null);
+  const [code, setCode] = useState('');
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -32,7 +35,11 @@ export function LockScreen({
     setError('');
     try {
       const messenger = await unlock(storage, password, events, setProgress);
-      onUnlock(messenger);
+      if (messenger.needsTotp) {
+        setPending(messenger);
+        setBusy(false);
+        setPassword('');
+      } else onUnlock(messenger);
     } catch (err) {
       setError(err instanceof WrongPasswordError ? 'Неверный пароль' : (err as Error).message);
       setShake((n) => n + 1);
@@ -41,6 +48,58 @@ export function LockScreen({
       setProgress(0);
     }
   };
+
+  const submitCode = (e: FormEvent) => {
+    e.preventDefault();
+    if (!pending) return;
+    if (pending.completeTotp(code)) onUnlock(pending);
+    else {
+      setError('Неверный код. Проверьте время на телефоне');
+      setShake((n) => n + 1);
+      setCode('');
+    }
+  };
+
+  if (pending) {
+    return (
+      <>
+        <Backdrop />
+        <div className="center-stage">
+          <form className={`glass-card${shake ? ' shake' : ''}`} key={shake} onSubmit={submitCode} style={{ maxWidth: 400 }}>
+            <div className="brand" style={{ marginBottom: 22 }}>
+              <div className="lock-anim" style={{ width: 84, height: 84 }}>
+                <div className="core">
+                  <Smartphone size={28} />
+                </div>
+              </div>
+              <h1 style={{ fontSize: 22 }}>Код подтверждения</h1>
+              <p>Откройте Google Authenticator и введите 6-значный код для Veil.</p>
+            </div>
+            <div className="form">
+              <CodeInput value={code} onChange={setCode} label="Код из Google Authenticator" autoFocus />
+              {error && <span className="field-error">{error}</span>}
+              <button className="btn btn-primary btn-lg btn-block" disabled={code.length !== 6}>
+                Войти
+              </button>
+              <div style={{ textAlign: 'center' }}>
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => {
+                    void pending.lock();
+                    setPending(null);
+                    setError('');
+                  }}
+                >
+                  Назад
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>

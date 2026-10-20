@@ -1,26 +1,34 @@
 import {
   Check,
+  DownloadCloud,
   Info,
   KeyRound,
   LockKeyhole,
+  Mail,
+  Maximize,
   Monitor,
   Moon,
   Palette,
   RefreshCw,
   Server,
   ShieldCheck,
+  Smartphone,
   Sun,
   Trash2,
+  TriangleAlert,
   UserRound,
   X,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { WrongPasswordError } from '../../../core/crypto/vault.ts';
 import type { Messenger } from '../../../core/messenger.ts';
-import { bridge, type EmbeddedServerStatus } from '../../../core/platform.ts';
+import type { AccountStatus } from '../../../../server/src/shared/protocol.ts';
+import { bridge, type EmbeddedServerStatus, type UpdateState } from '../../../core/platform.ts';
 import { probeServer } from '../../../core/relay-client.ts';
 import type { Accent, MessengerSnapshot, Settings, Theme } from '../../../core/types.ts';
-import { Avatar, ConfirmDialog, Logo, Toggle, useEscape, useToast } from '../lib/ui.tsx';
+import { formatDay, formatTime } from '../lib/format.ts';
+import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
+import { CodeInput, RecoveryEmailDialog, TotpDisableDialog, TotpSetupDialog } from './SecurityDialogs.tsx';
 
 export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'server' | 'security' | 'about';
 
@@ -78,6 +86,22 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
             {tab === 'profile' && <ProfileTab messenger={messenger} snapshot={snapshot} />}
             {tab === 'privacy' && (
               <div>
+                <div className="field" style={{ marginBottom: 6 }}>
+                  <span className="field-label">Время последнего захода</span>
+                  <div className="segmented">
+                    <button className={s.lastSeen === 'everyone' ? 'active' : ''} onClick={() => set({ lastSeen: 'everyone' })}>
+                      «в сети» и время захода
+                    </button>
+                    <button className={s.lastSeen === 'nobody' ? 'active' : ''} onClick={() => set({ lastSeen: 'nobody' })}>
+                      «был(а) недавно»
+                    </button>
+                  </div>
+                  <span className="field-hint">
+                    {s.lastSeen === 'everyone'
+                      ? 'Собеседники видят, когда вы в сети и когда заходили. Статус передаётся только им и в зашифрованном виде.'
+                      : 'Собеседники видят только «был(а) недавно» — ни статуса «в сети», ни точного времени.'}
+                  </span>
+                </div>
                 <Row title="Отчёты о прочтении" text="Собеседник увидит, что вы прочитали сообщение. Если выключить — вы тоже не увидите его отчёты.">
                   <Toggle label="Отчёты о прочтении" on={s.readReceipts} onChange={(v) => set({ readReceipts: v })} />
                 </Row>
@@ -90,6 +114,15 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
                 <Row title="Текст в уведомлениях" text="Если выключено, уведомление покажет только имя — текст не попадёт в системный журнал.">
                   <Toggle label="Текст в уведомлениях" on={s.notificationPreview} onChange={(v) => set({ notificationPreview: v })} />
                 </Row>
+                {bridge && (
+                  <Row title="Красивые уведомления" text="Карточки Veil в углу экрана вместо системных уведомлений.">
+                    <Toggle
+                      label="Красивые уведомления"
+                      on={s.notificationStyle === 'veil'}
+                      onChange={(v) => set({ notificationStyle: v ? 'veil' : 'system' })}
+                    />
+                  </Row>
+                )}
                 <Row title="Звуки" text="Короткий сигнал при новом сообщении.">
                   <Toggle label="Звуки" on={s.sounds} onChange={(v) => set({ sounds: v })} />
                 </Row>
@@ -152,10 +185,23 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
                 <Row title="Отправка по Enter" text="Иначе — Ctrl+Enter (⌘+Enter на Mac), а Enter переносит строку.">
                   <Toggle label="Отправка по Enter" on={s.enterToSend} onChange={(v) => set({ enterToSend: v })} />
                 </Row>
+                <Row title="Проверка орфографии" text="Подчёркивать слова с ошибками. Правый клик — варианты исправления.">
+                  <Toggle label="Проверка орфографии" on={s.spellcheck} onChange={(v) => set({ spellcheck: v })} />
+                </Row>
+                <Row title="Автоисправление" text="Исправлять опечатки после пробела. Backspace сразу после исправления — отменить.">
+                  <Toggle label="Автоисправление" on={s.autocorrect} onChange={(v) => set({ autocorrect: v })} />
+                </Row>
+                {bridge && (
+                  <Row title="Во весь экран" text="Также клавиша F11 (на Mac — ⌃⌘F).">
+                    <button className="btn btn-secondary btn-sm" onClick={() => bridge!.toggleFullscreen()}>
+                      <Maximize size={15} /> Переключить
+                    </button>
+                  </Row>
+                )}
               </div>
             )}
             {tab === 'server' && <ServerTab messenger={messenger} snapshot={snapshot} />}
-            {tab === 'security' && <SecurityTab messenger={messenger} onDeleted={onDeleted} />}
+            {tab === 'security' && <SecurityTab messenger={messenger} snapshot={snapshot} onDeleted={onDeleted} />}
             {tab === 'about' && <AboutTab />}
           </div>
         </div>
@@ -323,14 +369,24 @@ function ServerTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Me
   );
 }
 
-function SecurityTab({ messenger, onDeleted }: { messenger: Messenger; onDeleted(): void }) {
+function SecurityTab({ messenger, snapshot, onDeleted }: { messenger: Messenger; snapshot: MessengerSnapshot; onDeleted(): void }) {
   const [oldPassword, setOld] = useState('');
   const [newPassword, setNew] = useState('');
   const [repeat, setRepeat] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [dialog, setDialog] = useState<'totp' | 'totp-off' | 'email' | 'email-off' | 'delete' | null>(null);
+  const [status, setStatus] = useState<AccountStatus | null>(null);
+  const [backingUp, setBackingUp] = useState(false);
   const toast = useToast();
+  const { security } = snapshot;
+
+  useEffect(() => {
+    messenger
+      .accountStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  }, [messenger, security.totp, security.recoveryEmail]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -351,11 +407,88 @@ function SecurityTab({ messenger, onDeleted }: { messenger: Messenger; onDeleted
     }
   };
 
+  const mailMissing = status && !status.mail;
+
   return (
     <>
-      <form className="form" onSubmit={submit}>
+      <div className="section">
         <div className="section-title">
-          <LockKeyhole size={16} style={{ color: 'var(--accent)' }} /> Смена пароля
+          <Smartphone size={16} /> Двухфакторная аутентификация
+          {security.totp && <span className="chip success" style={{ marginLeft: 'auto' }}>Включена</span>}
+        </div>
+        <p>
+          Код из Google Authenticator будет нужен при каждом входе в Veil и при восстановлении аккаунта. Даже зная пароль, без вашего телефона
+          войти не получится.
+        </p>
+        {security.totp ? (
+          <button className="btn btn-secondary btn-sm" onClick={() => setDialog('totp-off')}>
+            Отключить
+          </button>
+        ) : (
+          <button className="btn btn-primary btn-sm" onClick={() => setDialog('totp')} disabled={snapshot.status !== 'online'}>
+            Подключить Google Authenticator
+          </button>
+        )}
+      </div>
+
+      <div className="section">
+        <div className="section-title">
+          <Mail size={16} /> Восстановление по почте
+          {security.recoveryEmail && <span className="chip success" style={{ marginLeft: 'auto' }}>Включено</span>}
+        </div>
+        {security.recoveryEmail ? (
+          <>
+            <p>
+              Почта: <b className="selectable">{security.recoveryEmail}</b>
+              <br />
+              Резервная копия (ключи, контакты, текст переписки, зашифровано паролем):{' '}
+              {security.lastBackupAt ? `обновлена ${formatDay(security.lastBackupAt).toLowerCase()} в ${formatTime(security.lastBackupAt)}` : 'ещё не создана'}
+            </p>
+            <div className="form-actions" style={{ marginTop: 0 }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                disabled={backingUp || snapshot.status !== 'online'}
+                onClick={async () => {
+                  setBackingUp(true);
+                  try {
+                    await messenger.backupNow();
+                    toast('Резервная копия обновлена', 'success');
+                  } catch (e) {
+                    toast((e as Error).message, 'error');
+                  } finally {
+                    setBackingUp(false);
+                  }
+                }}
+              >
+                {backingUp ? <span className="spinner" /> : <RefreshCw size={15} />} Обновить копию
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setDialog('email')}>
+                Сменить почту
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setDialog('email-off')}>
+                Отключить
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p>Если вы смените компьютер или переустановите Veil, аккаунт и переписку можно будет вернуть по коду из письма и вашему паролю.</p>
+            <button className="btn btn-primary btn-sm" onClick={() => setDialog('email')} disabled={snapshot.status !== 'online' || !!mailMissing}>
+              Указать почту
+            </button>
+          </>
+        )}
+        {mailMissing && (
+          <div className="notice">
+            <TriangleAlert size={16} />
+            <span>Ваш сервер не настроен для отправки писем. Владельцу сервера нужно указать почтовый сервис (инструкция в README, раздел «Почта»).</span>
+          </div>
+        )}
+      </div>
+
+      <form className="section" onSubmit={submit}>
+        <div className="section-title">
+          <LockKeyhole size={16} /> Смена пароля
         </div>
         <input className="input" type="password" placeholder="Текущий пароль" aria-label="Текущий пароль" value={oldPassword} onChange={(e) => setOld(e.target.value)} />
         <input className="input" type="password" placeholder="Новый пароль" aria-label="Новый пароль" value={newPassword} onChange={(e) => setNew(e.target.value)} />
@@ -365,30 +498,154 @@ function SecurityTab({ messenger, onDeleted }: { messenger: Messenger; onDeleted
           {busy ? <span className="spinner" /> : 'Изменить пароль'}
         </button>
       </form>
-      <div className="divider" style={{ margin: '8px 0' }} />
+
       <div className="section" style={{ borderColor: 'rgba(255,92,122,0.25)' }}>
         <div className="section-title" style={{ color: 'var(--danger)' }}>
           <Trash2 size={16} style={{ color: 'var(--danger)' }} /> Удаление аккаунта
         </div>
-        <p>Аккаунт будет удалён с сервера, а все ключи и переписка — с этого устройства. Отменить это нельзя.</p>
-        <button className="btn btn-danger btn-sm" onClick={() => setConfirmDelete(true)}>
+        <p>Аккаунт будет удалён с сервера вместе с резервной копией, а все ключи и переписка — с этого устройства. Отменить это нельзя.</p>
+        <button className="btn btn-danger btn-sm" onClick={() => setDialog('delete')}>
           Удалить аккаунт навсегда
         </button>
       </div>
-      {confirmDelete && (
-        <ConfirmDialog
-          title="Удалить аккаунт?"
-          text="Все сообщения, контакты и ключи будут уничтожены. Имя пользователя освободится."
-          confirm="Удалить навсегда"
-          danger
-          onClose={() => setConfirmDelete(false)}
-          onConfirm={async () => {
-            await messenger.deleteAccount();
-            onDeleted();
-          }}
-        />
-      )}
+
+      {dialog === 'totp' && <TotpSetupDialog messenger={messenger} onClose={() => setDialog(null)} />}
+      {dialog === 'totp-off' && <TotpDisableDialog messenger={messenger} onClose={() => setDialog(null)} />}
+      {dialog === 'email' && <RecoveryEmailDialog messenger={messenger} onClose={() => setDialog(null)} />}
+      {dialog === 'email-off' && <RemoveEmailDialog messenger={messenger} needsTotp={security.totp} onClose={() => setDialog(null)} />}
+      {dialog === 'delete' && <DeleteAccountDialog messenger={messenger} needsTotp={security.totp} onClose={() => setDialog(null)} onDeleted={onDeleted} />}
     </>
+  );
+}
+
+function RemoveEmailDialog({ messenger, needsTotp, onClose }: { messenger: Messenger; needsTotp: boolean; onClose(): void }) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  return (
+    <Modal title="Отключить восстановление?" onClose={onClose} width={420}>
+      <form
+        className="modal-body"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          try {
+            await messenger.removeRecoveryEmail(needsTotp ? code : undefined);
+            onClose();
+          } catch (err) {
+            setError((err as Error).message);
+            setBusy(false);
+          }
+        }}
+      >
+        <p>Резервная копия будет удалена с сервера. Без неё аккаунт нельзя будет вернуть на новом устройстве.</p>
+        {needsTotp && <CodeInput value={code} onChange={setCode} label="Код из Google Authenticator" autoFocus />}
+        {error && <span className="field-error">{error}</span>}
+        <div className="form-actions">
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Отмена
+          </button>
+          <button className="btn btn-danger" style={{ flex: 1 }} disabled={busy || (needsTotp && code.length !== 6)}>
+            {busy ? <span className="spinner" /> : 'Отключить'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function DeleteAccountDialog({
+  messenger,
+  needsTotp,
+  onClose,
+  onDeleted,
+}: {
+  messenger: Messenger;
+  needsTotp: boolean;
+  onClose(): void;
+  onDeleted(): void;
+}) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  return (
+    <Modal title="Удалить аккаунт?" onClose={onClose} width={420}>
+      <form
+        className="modal-body"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          try {
+            await messenger.deleteAccount(needsTotp ? code : undefined);
+            onDeleted();
+          } catch (err) {
+            setError((err as Error).message);
+            setBusy(false);
+          }
+        }}
+      >
+        <p>Все сообщения, контакты и ключи будут уничтожены. Имя пользователя освободится.</p>
+        {needsTotp && <CodeInput value={code} onChange={setCode} label="Код из Google Authenticator" autoFocus />}
+        {error && <span className="field-error">{error}</span>}
+        <div className="form-actions">
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Отмена
+          </button>
+          <button className="btn btn-danger" style={{ flex: 1 }} disabled={busy || (needsTotp && code.length !== 6)}>
+            {busy ? <span className="spinner" /> : 'Удалить навсегда'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function UpdatesSection() {
+  const [state, setState] = useState<UpdateState | null>(null);
+  useEffect(() => {
+    if (!bridge) return;
+    void bridge.update.state().then(setState);
+    return bridge.update.onState(setState);
+  }, []);
+  if (!bridge || !state) return null;
+  const text: Record<UpdateState['status'], string> = {
+    idle: 'Обновления проверяются автоматически',
+    checking: 'Проверяем обновления…',
+    available: `Доступна версия ${state.version}`,
+    none: 'У вас последняя версия',
+    downloading: `Загрузка обновления… ${state.percent ?? 0}%`,
+    ready: `Версия ${state.version} загружена и готова к установке`,
+    error: state.error ?? 'Не удалось проверить обновления',
+  };
+  return (
+    <div className="section">
+      <div className="section-title">
+        <DownloadCloud size={16} /> Обновления
+      </div>
+      <p style={state.status === 'error' ? { color: 'var(--danger)' } : undefined}>{text[state.status]}</p>
+      {state.status === 'downloading' && (
+        <div className="progress">
+          <div style={{ width: `${state.percent ?? 0}%` }} />
+        </div>
+      )}
+      <div className="form-actions" style={{ marginTop: 0 }}>
+        {state.status === 'available' && (
+          <button className="btn btn-primary btn-sm" onClick={() => bridge!.update.download()}>
+            {state.manual ? 'Скачать новую версию' : 'Загрузить и установить'}
+          </button>
+        )}
+        {state.status === 'ready' && (
+          <button className="btn btn-primary btn-sm" onClick={() => bridge!.update.install()}>
+            Перезапустить и обновить
+          </button>
+        )}
+        {['idle', 'none', 'error'].includes(state.status) && (
+          <button className="btn btn-secondary btn-sm" onClick={() => void bridge!.update.check()}>
+            <RefreshCw size={15} /> Проверить сейчас
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -399,6 +656,7 @@ function AboutTab() {
     ['Метаданные', 'Sealed sender: сервер не знает отправителя; размер скрыт дополнением Padmé'],
     ['Хранение на диске', 'Все данные зашифрованы ключом из пароля (scrypt, 128 МиБ)'],
     ['Проверка собеседника', '60-значный код безопасности'],
+    ['Вход', 'Пароль + Google Authenticator (TOTP), по желанию'],
   ];
   return (
     <>
@@ -407,8 +665,9 @@ function AboutTab() {
         <h1 style={{ fontSize: 24 }}>
           <span className="gradient-text">Veil</span>
         </h1>
-        <p>Версия {bridge?.version ?? '1.0.0'} · открытый исходный код</p>
+        <p>Версия {bridge?.version ?? '1.1.0'} · открытый исходный код</p>
       </div>
+      <UpdatesSection />
       <div className="section">
         {items.map(([title, text]) => (
           <div key={title} className="setting-row" style={{ padding: '8px 0' }}>

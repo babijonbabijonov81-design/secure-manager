@@ -1648,7 +1648,8 @@ export class Messenger {
 
   /** Step 1: a new secret for the authenticator app (shown as a QR code). */
   beginTotpSetup(): { secret: string; url: string } {
-    const secret = base32Encode(random(20));
+    // Reuse a pending secret so a re-rendered dialog never shows a different QR code.
+    const secret = this.pendingTotpSecret ?? base32Encode(random(20));
     this.pendingTotpSecret = secret;
     return { secret, url: otpauthUrl(secret, `@${this.account.username}`) };
   }

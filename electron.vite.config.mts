@@ -33,6 +33,9 @@ export default defineConfig({
   preload: {
     build: {
       externalizeDeps: true,
+      rollupOptions: {
+        input: { index: 'src/preload/index.ts', card: 'src/preload/card.ts' },
+      },
     },
   },
   renderer: {
@@ -40,7 +43,8 @@ export default defineConfig({
     plugins: [react(), cspPlugin()],
     build: {
       rollupOptions: {
-        input: 'src/renderer/index.html',
+        // The main window and the notification cards.
+        input: { index: 'src/renderer/index.html', card: 'src/renderer/card.html' },
       },
     },
   },

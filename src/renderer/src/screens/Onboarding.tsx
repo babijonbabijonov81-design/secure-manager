@@ -23,6 +23,7 @@ import { probeServer } from '../../../core/relay-client.ts';
 import type { StorageBackend } from '../../../core/storage.ts';
 import { passwordStrength } from '../lib/format.ts';
 import { Backdrop, Logo, Toggle } from '../lib/ui.tsx';
+import { RecoveryFlow } from './Recovery.tsx';
 
 type Step = 'welcome' | 'server' | 'profile' | 'creating';
 const STEPS: Step[] = ['welcome', 'server', 'profile', 'creating'];
@@ -51,6 +52,7 @@ export function Onboarding({
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<{ field?: 'username' | 'password' | 'server'; text: string } | null>(null);
   const [progress, setProgress] = useState({ text: '', value: 0 });
+  const [recovering, setRecovering] = useState(false);
 
   useEffect(() => {
     if (!bridge) {
@@ -150,6 +152,9 @@ export function Onboarding({
       <Backdrop />
       {bridge && <div className="titlebar" style={{ background: 'transparent', borderBottom: 0, position: 'fixed', inset: '0 0 auto 0' }} />}
       <div className="center-stage">
+        {recovering ? (
+          <RecoveryFlow storage={storage} events={events} initialServer={server} onBack={() => setRecovering(false)} onDone={onDone} />
+        ) : (
         <div className="glass-card" key={step}>
           {step === 'welcome' && (
             <>
@@ -194,6 +199,11 @@ export function Onboarding({
               <button className="btn btn-primary btn-lg btn-block" onClick={() => setStep('server')}>
                 Создать аккаунт <ArrowRight size={18} />
               </button>
+              <div style={{ textAlign: 'center', marginTop: 14 }}>
+                <button className="link-btn" onClick={() => setRecovering(true)}>
+                  У меня уже есть аккаунт — восстановить по почте
+                </button>
+              </div>
             </>
           )}
 
@@ -397,6 +407,7 @@ export function Onboarding({
             </div>
           )}
         </div>
+        )}
       </div>
     </>
   );

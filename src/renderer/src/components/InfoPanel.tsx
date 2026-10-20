@@ -1,14 +1,27 @@
-import { Ban, Bell, BellOff, Eraser, Hourglass, Pin, PinOff, RotateCcw, ShieldCheck, ShieldQuestion, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Ban, Bell, BellOff, Eraser, Hourglass, Pin, PinOff, RotateCcw, ShieldCheck, ShieldQuestion, Trash2, TriangleAlert, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { formatSafetyNumber } from '../../../core/crypto/fingerprint.ts';
 import type { Messenger } from '../../../core/messenger.ts';
 import { TIMER_OPTIONS, type Contact } from '../../../core/types.ts';
 import { timerLabel } from '../lib/format.ts';
+import { presenceText } from '../lib/text.ts';
 import { Avatar, ConfirmDialog, useToast } from '../lib/ui.tsx';
 
 type Confirm = 'clear' | 'delete' | 'block' | 'reset' | null;
 
-export function InfoPanel({ messenger, contact, onClose, onDeleted }: { messenger: Messenger; contact: Contact; onClose(): void; onDeleted(): void }) {
+export function InfoPanel({
+  messenger,
+  contact,
+  online,
+  onClose,
+  onDeleted,
+}: {
+  messenger: Messenger;
+  contact: Contact;
+  online: boolean;
+  onClose(): void;
+  onDeleted(): void;
+}) {
   const toast = useToast();
   const [confirm, setConfirm] = useState<Confirm>(null);
   const safety = useMemo(() => formatSafetyNumber(messenger.safetyNumber(contact.id)), [messenger, contact.id]);
@@ -29,6 +42,7 @@ export function InfoPanel({ messenger, contact, onClose, onDeleted }: { messenge
             {contact.verified && <ShieldCheck size={18} style={{ color: 'var(--success)' }} />}
           </h4>
           {contact.username && <span className="handle selectable">@{contact.username}</span>}
+          {presenceText(contact, online) && <span className={`presence${online ? ' online' : ''}`}>{presenceText(contact, online)}</span>}
           <div style={{ marginTop: 8 }}>
             {contact.verified ? (
               <span className="chip success">
@@ -92,6 +106,10 @@ export function InfoPanel({ messenger, contact, onClose, onDeleted }: { messenge
           <button className="action-item" onClick={() => messenger.setPinned(contact.id, !contact.pinned)}>
             {contact.pinned ? <PinOff size={18} /> : <Pin size={18} />}
             <span className="grow">{contact.pinned ? 'Открепить чат' : 'Закрепить чат'}</span>
+          </button>
+          <button className="action-item" onClick={() => messenger.setArchived(contact.id, !contact.archived)}>
+            {contact.archived ? <ArchiveRestore size={18} /> : <Archive size={18} />}
+            <span className="grow">{contact.archived ? 'Вернуть из архива' : 'В архив'}</span>
           </button>
           <button className="action-item" onClick={() => messenger.setMuted(contact.id, !contact.muted)}>
             {contact.muted ? <Bell size={18} /> : <BellOff size={18} />}

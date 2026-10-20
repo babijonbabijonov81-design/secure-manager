@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- CSP is injected at build time (see electron.vite.config.mts) -->
+    <title>Veil</title>
+  </head>
+  <body>
+    <div id="card" class="card" role="button" tabindex="-1">
+      <div class="avatar"><span id="initials"></span><i class="badge"></i></div>
+      <div class="content">
+        <div class="head"><b id="title"></b><span class="time">сейчас</span></div>
+        <div id="body" class="body"></div>
+      </div>
+      <button id="close" class="close" aria-label="Закрыть">✕</button>
+      <div class="timer"><div id="bar"></div></div>
+    </div>
+    <script type="module" src="./src/card.ts"></script>
+  </body>
+</html>

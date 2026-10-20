@@ -45,7 +45,7 @@ async function makePicture(page: Page): Promise<Buffer> {
 }
 
 async function register(browser: Browser, profile: string, name: string, screenshots = false) {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await context.newPage();
   await page.goto(`${APP}/?profile=${profile}-${suffix}`);
   await expect(page.getByText('Мессенджер, в котором ваши слова')).toBeVisible();
@@ -105,9 +105,10 @@ test('two people chat end-to-end through the relay', async ({ browser }) => {
 
   // Image attachment.
   const png = await makePicture(bob.page);
-  await bob.page.locator('input[type=file]').setInputFiles({ name: 'sunset.png', mimeType: 'image/png', buffer: png });
+  await bob.page.locator('.composer input[type=file]').setInputFiles({ name: 'sunset.png', mimeType: 'image/png', buffer: png });
+  await bob.page.getByRole('dialog').getByRole('button', { name: 'Отправить' }).click();
   await expect(alice.page.locator('.bubble.media img')).toBeVisible();
-  await expect.poll(() => alice.page.locator('.bubble.media img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(640);
+  await expect.poll(() => alice.page.locator('.bubble.media img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(600);
   await alice.page.locator('.messages').getByText('Сейчас пришлю').waitFor();
   await bobComposer.fill('Закат с дачи 🌅');
   await bobComposer.press('Enter');

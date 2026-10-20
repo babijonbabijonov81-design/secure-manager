@@ -1,12 +1,28 @@
-import { AlertCircle, Ban, Check, CheckCheck, Clock, Download, FileText, ImageIcon, RotateCcw, Timer } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  CheckCheck,
+  Clock,
+  Copy,
+  CornerUpLeft,
+  Download,
+  FileText,
+  ImageIcon,
+  MoreHorizontal,
+  RotateCcw,
+  SmilePlus,
+  Timer,
+} from 'lucide-react';
 import { memo, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
-import type { Message } from '../../../core/types.ts';
+import { attachmentsOf, QUICK_REACTIONS, type Attachment, type Message } from '../../../core/types.ts';
 import { saveAttachment, useAttachmentUrl } from '../lib/attachments.ts';
 import { formatSize, formatTime, isEmojiOnly, remaining } from '../lib/format.ts';
+import { VoicePlayer } from './VoicePlayer.tsx';
 
 const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/g;
+const MORE_REACTIONS = ['👏', '🙏', '🎉', '😍', '🤔', '😡', '💯', '👌', '😎', '🤝', '💔', '🥰'];
 
 function openLink(e: MouseEvent, href: string) {
   e.preventDefault();
@@ -58,98 +74,187 @@ function Countdown({ expiresAt }: { expiresAt: number }) {
   );
 }
 
-/** Display size for an image bubble: fits 320×360, small pictures are shown at least 140px wide. */
+/** Display box for one picture: fits 340×380, small pictures at least 160 px wide. */
 function imageBox(w = 320, h = 240): { width: number; height: number } {
-  let scale = Math.min(1, 320 / w, 360 / h);
-  if (w * scale < 140) scale = Math.min(140 / w, 360 / h);
+  let scale = Math.min(1, 340 / w, 380 / h);
+  if (w * scale < 160) scale = Math.min(160 / w, 380 / h);
   return { width: Math.round(w * scale), height: Math.round(h * scale) };
+}
+
+function AlbumImage({ messenger, att, style, onOpen }: { messenger: Messenger; att: Attachment; style?: object; onOpen(): void }) {
+  const url = useAttachmentUrl(messenger, att);
+  return url ? (
+    <img src={url} alt={att.name} style={style} onClick={onOpen} draggable={false} />
+  ) : (
+    <div className="img-placeholder" style={style}>
+      <ImageIcon size={26} />
+    </div>
+  );
+}
+
+function Album({ messenger, images, onOpen }: { messenger: Messenger; images: Attachment[]; onOpen(index: number): void }) {
+  if (images.length === 1) {
+    const box = imageBox(images[0].w, images[0].h);
+    return (
+      <div className="album one">
+        <AlbumImage messenger={messenger} att={images[0]} style={box} onOpen={() => onOpen(0)} />
+      </div>
+    );
+  }
+  return (
+    <div className={`album n${Math.min(images.length, 5)}`}>
+      {images.map((att, i) => (
+        <AlbumImage key={att.id} messenger={messenger} att={att} onOpen={() => onOpen(i)} />
+      ))}
+    </div>
+  );
+}
+
+function StickerImage({ messenger, att }: { messenger: Messenger; att: Attachment }) {
+  const url = useAttachmentUrl(messenger, att);
+  const ratio = (att.w ?? 1) / (att.h ?? 1);
+  const size = ratio >= 1 ? { width: 168, height: 168 / ratio } : { width: 168 * ratio, height: 168 };
+  return url ? <img className="sticker" src={url} alt="Стикер" style={size} draggable={false} /> : <div className="sticker" style={size} />;
 }
 
 interface BubbleProps {
   message: Message;
   messenger: Messenger;
+  contactName: string;
   groupStart: boolean;
   groupEnd: boolean;
+  highlighted: boolean;
   onContext(e: MouseEvent, message: Message): void;
-  onOpenImage(url: string, message: Message): void;
+  onOpenMedia(message: Message, index: number): void;
   onRetry(message: Message): void;
+  onReply(message: Message): void;
+  onReact(message: Message, emoji: string): void;
+  onCopy(message: Message): void;
+  onJump(id: string): void;
 }
 
-export const Bubble = memo(function Bubble({ message, messenger, groupStart, groupEnd, onContext, onOpenImage, onRetry }: BubbleProps) {
-  const url = useAttachmentUrl(messenger, message.att);
+export const Bubble = memo(function Bubble(props: BubbleProps) {
+  const { message, messenger, contactName, groupStart, groupEnd, highlighted } = props;
+  const [picker, setPicker] = useState<'closed' | 'quick' | 'more'>('closed');
+  const atts = attachmentsOf(message);
+  const images = atts.filter((a) => a.kind === 'image');
+  const files = atts.filter((a) => a.kind === 'file');
+  const voice = atts.find((a) => a.kind === 'voice');
+  const sticker = atts.find((a) => a.kind === 'sticker');
+  const out = message.dir === 'out';
+
   const meta = (
     <span className="meta">
       {message.expiresAt && <Countdown expiresAt={message.expiresAt} />}
       {formatTime(message.ts)}
-      {message.dir === 'out' && <StatusIcon status={message.status} />}
+      {out && <StatusIcon status={message.status} />}
     </span>
   );
-  const rowClass = `msg-row ${message.dir}${groupStart ? ' group-start' : ''}${groupEnd ? ' group-end' : ''}`;
 
-  let content: ReactNode;
   let bubbleClass = 'bubble';
-  if (message.deleted) {
-    bubbleClass += ' deleted';
-    content = (
-      <>
-        <Ban size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
-        Сообщение удалено
-        {meta}
-      </>
-    );
-  } else if (message.att?.kind === 'image') {
-    bubbleClass += ' media';
-    const size = imageBox(message.att.w, message.att.h);
-    content = (
-      <>
-        {url ? (
-          <img src={url} alt={message.att.name} style={size} onClick={() => onOpenImage(url, message)} draggable={false} />
-        ) : (
-          <div className="img-placeholder" style={size}>
-            <ImageIcon size={28} />
-          </div>
-        )}
-        {message.text && <div style={{ padding: '6px 8px 2px' }}>{linkify(message.text)}</div>}
-        {meta}
-      </>
-    );
-  } else if (message.att) {
-    const att = message.att;
-    content = (
-      <>
-        <div className="file-card">
-          <button className="file-icon" onClick={() => void saveAttachment(messenger, att)} aria-label="Сохранить файл">
-            <Download size={20} />
-          </button>
-          <div className="file-info">
-            <span className="file-name" title={att.name}>
-              <FileText size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
-              {att.name}
-            </span>
-            <span className="file-size">{formatSize(att.size)}</span>
-          </div>
-        </div>
-        {meta}
-      </>
-    );
-  } else {
-    if (isEmojiOnly(message.text)) bubbleClass += ' emoji-only';
-    content = (
-      <>
-        {linkify(message.text ?? '')}
-        {meta}
-      </>
-    );
+  const mediaOnly = images.length > 0 && !message.text && !files.length && !message.reply;
+  if (sticker) bubbleClass += ' sticker-bubble';
+  else if (mediaOnly) bubbleClass += ' media';
+  else if (images.length) bubbleClass += ' with-media';
+  else if (!atts.length && isEmojiOnly(message.text)) bubbleClass += ' emoji-only';
+  if (voice) bubbleClass += ' voice-bubble';
+
+  const reactions = message.reactions;
+  const chips: { emoji: string; count: number; mine: boolean }[] = [];
+  if (reactions?.me && reactions.me === reactions.them) chips.push({ emoji: reactions.me, count: 2, mine: true });
+  else {
+    if (reactions?.them) chips.push({ emoji: reactions.them, count: 1, mine: false });
+    if (reactions?.me) chips.push({ emoji: reactions.me, count: 1, mine: true });
   }
 
+  const react = (emoji: string) => {
+    setPicker('closed');
+    props.onReact(message, emoji);
+  };
+
   return (
-    <div className={rowClass} data-testid="message" data-dir={message.dir}>
+    <div
+      className={`msg-row ${message.dir}${groupStart ? ' group-start' : ''}${groupEnd ? ' group-end' : ''}${highlighted ? ' highlight' : ''}`}
+      data-testid="message"
+      data-dir={message.dir}
+      id={`msg-${message.id}`}
+      onMouseLeave={() => picker !== 'closed' && setPicker('closed')}
+    >
       <div className="msg-col">
-        <div className={bubbleClass} onContextMenu={(e) => onContext(e, message)}>
-          {content}
+        <div className="bubble-line">
+          <div className={bubbleClass} onContextMenu={(e) => props.onContext(e, message)} onDoubleClick={() => react('❤️')}>
+            {message.reply && (
+              <button className="quote" onClick={() => props.onJump(message.reply!.id)}>
+                <b>{message.reply.out ? 'Вы' : contactName}</b>
+                <span>{message.reply.text || 'Сообщение'}</span>
+              </button>
+            )}
+            {sticker && <StickerImage messenger={messenger} att={sticker} />}
+            {images.length > 0 && <Album messenger={messenger} images={images} onOpen={(i) => props.onOpenMedia(message, i)} />}
+            {files.map((att) => (
+              <div className="file-card" key={att.id}>
+                <button className="file-icon" onClick={() => void saveAttachment(messenger, att)} aria-label="Сохранить файл">
+                  <Download size={20} />
+                </button>
+                <div className="file-info">
+                  <span className="file-name" title={att.name}>
+                    <FileText size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
+                    {att.name}
+                  </span>
+                  <span className="file-size">{formatSize(att.size)}</span>
+                </div>
+              </div>
+            ))}
+            {voice && <VoicePlayer messenger={messenger} att={voice} />}
+            {message.text && <div className={images.length ? 'caption' : 'text'}>{linkify(message.text)}</div>}
+            {meta}
+          </div>
+
+          <div className="msg-actions">
+            <button className="icon-btn sm" title="Реакция" aria-label="Реакция" onClick={() => setPicker(picker === 'closed' ? 'quick' : 'closed')}>
+              <SmilePlus size={17} />
+            </button>
+            <button className="icon-btn sm" title="Ответить" aria-label="Ответить" onClick={() => props.onReply(message)}>
+              <CornerUpLeft size={17} />
+            </button>
+            {(message.text || images.length === 1) && (
+              <button className="icon-btn sm" title="Копировать" aria-label="Копировать" onClick={() => props.onCopy(message)}>
+                <Copy size={16} />
+              </button>
+            )}
+            <button className="icon-btn sm" title="Ещё" aria-label="Ещё" onClick={(e) => props.onContext(e, message)}>
+              <MoreHorizontal size={17} />
+            </button>
+          </div>
+
+          {picker !== 'closed' && (
+            <div className="reaction-picker" role="menu">
+              {(picker === 'quick' ? [...QUICK_REACTIONS] : MORE_REACTIONS).map((emoji) => (
+                <button key={emoji} className={reactions?.me === emoji ? 'active' : ''} onClick={() => react(emoji)}>
+                  {emoji}
+                </button>
+              ))}
+              {picker === 'quick' && (
+                <button className="more" onClick={() => setPicker('more')} aria-label="Другие реакции">
+                  +
+                </button>
+              )}
+            </div>
+          )}
         </div>
+
+        {chips.length > 0 && (
+          <div className="reactions">
+            {chips.map((chip) => (
+              <button key={`${chip.emoji}${chip.mine}`} className={chip.mine ? 'mine' : ''} onClick={() => react(chip.emoji)}>
+                {chip.emoji}
+                {chip.count > 1 && <span>{chip.count}</span>}
+              </button>
+            ))}
+          </div>
+        )}
         {message.status === 'failed' && (
-          <button className="retry" onClick={() => onRetry(message)}>
+          <button className="retry" onClick={() => props.onRetry(message)}>
             <RotateCcw size={12} /> Не отправлено — повторить
           </button>
         )}

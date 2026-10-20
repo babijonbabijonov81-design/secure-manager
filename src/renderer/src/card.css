@@ -1,0 +1,150 @@
+:root {
+  --bg: rgba(20, 23, 32, 0.94);
+  --text: #eef0f6;
+  --muted: #a4aabb;
+  --border: rgba(255, 255, 255, 0.1);
+  --accent: #7c5cff;
+}
+:root[data-theme='light'] {
+  --bg: rgba(255, 255, 255, 0.96);
+  --text: #141824;
+  --muted: #5a6075;
+  --border: rgba(20, 24, 40, 0.1);
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: 'Inter Variable', -apple-system, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+.card {
+  position: absolute;
+  inset: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  border-radius: 18px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(20px);
+  cursor: pointer;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(40px) scale(0.98);
+  transition:
+    opacity 0.25s ease,
+    transform 0.35s cubic-bezier(0.2, 0.9, 0.25, 1.15);
+}
+.card.shown {
+  opacity: 1;
+  transform: none;
+}
+.card.leaving {
+  opacity: 0;
+  transform: translateX(30px);
+  transition-duration: 0.2s;
+}
+.card:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.avatar {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: #fff;
+  font-weight: 700;
+  font-size: 17px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+.badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 7px;
+  border: 2px solid var(--bg);
+  background:
+    linear-gradient(90deg, transparent 47%, #fff 47%, #fff 53%, transparent 53%),
+    linear-gradient(0deg, transparent 47%, #fff 47%, #fff 53%, transparent 53%),
+    conic-gradient(from 0deg, #ea4335 0 25%, #fbbc05 0 50%, #34a853 0 75%, #4285f4 0);
+}
+.content {
+  flex: 1;
+  min-width: 0;
+}
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.head b {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.time {
+  font-size: 11px;
+  color: var(--muted);
+  padding-right: 18px;
+}
+.body {
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.card:hover .close {
+  opacity: 1;
+}
+.close:hover {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--text);
+}
+.timer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+}
+.timer > div {
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  opacity: 0.8;
+}
