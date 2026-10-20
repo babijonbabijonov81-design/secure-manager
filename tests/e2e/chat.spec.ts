@@ -97,7 +97,8 @@ test('two people chat end-to-end through the relay', async ({ browser }) => {
   // Bob has the chat open, so Alice sees her messages as read.
   await expect(alice.page.locator('[aria-label="Прочитано"]').first()).toBeVisible();
 
-  // Typing indicator.
+  // Typing indicator. Wait for Bob's last message first: its arrival clears the indicator.
+  await expect(alice.page.locator('.messages').getByText('👍', { exact: true })).toBeVisible();
   await bobComposer.pressSequentially('Сейчас пришлю', { delay: 30 });
   await expect(alice.page.locator('.chat-header .sub.typing')).toBeVisible();
   await bobComposer.press('Enter');
