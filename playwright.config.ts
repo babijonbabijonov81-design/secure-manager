@@ -18,9 +18,11 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: 'npx vite --config vite.web.config.mts --port 5179 --strictPort',
+      // Bind explicitly: "localhost" may resolve to IPv6 only on CI runners.
+      command: 'npx vite --config vite.web.config.mts --host 127.0.0.1 --port 5179 --strictPort',
       url: 'http://127.0.0.1:5179',
       reuseExistingServer: false,
+      timeout: 120_000,
     },
   ],
 });
