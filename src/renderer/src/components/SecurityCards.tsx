@@ -1,8 +1,10 @@
-import { ArrowRightLeft, Check, KeyRound, ShieldAlert, ShieldCheck, Siren, X } from 'lucide-react';
+import { ArrowRightLeft, Check, KeyRound, ScrollText, ShieldAlert, ShieldCheck, Siren, X } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 import { formatSafetyNumber } from '../../../core/crypto/fingerprint.ts';
+import { WrongPasswordError } from '../../../core/crypto/vault.ts';
 import type { Messenger } from '../../../core/messenger.ts';
-import { isSavedChat, type MessengerSnapshot } from '../../../core/types.ts';
+import { isSavedChat, type MessengerSnapshot, type SecurityEvent, type SecurityEventKind } from '../../../core/types.ts';
+import { formatDay, formatTime } from '../lib/format.ts';
 import { ConfirmDialog, Modal, Toggle, useToast } from '../lib/ui.tsx';
 
 const BACKUP_FRESH_MS = 31 * 24 * 60 * 60 * 1000;
@@ -208,6 +210,143 @@ function DuressDialog({ messenger, onClose, onDone }: { messenger: Messenger; on
           </button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+const EVENT_TEXT: Record<SecurityEventKind, (detail?: string) => string> = {
+  login: (d) => `Вход в Veil${d === 'pin' ? ' по PIN' : d === 'fingerprint' ? ' по отпечатку' : ' по паролю'}`,
+  login_failed: (d) => `Неверный пароль или PIN перед входом: ${d ?? 1}`,
+  device_new: (d) => `Новый компьютер в аккаунте${d ? `: ${d}` : ''}`,
+  device_revoked: (d) => `Компьютер отвязан${d ? `: ${d}` : ''}`,
+  transfer_in: () => 'Аккаунт перенесён на этот компьютер (Мост)',
+  key_change: (d) => `Сменился ключ контакта${d ? ` «${d}»` : ''}`,
+  password_change: () => 'Пароль Veil изменён',
+  totp_on: () => 'Google Authenticator подключён',
+  totp_off: () => 'Google Authenticator отключён',
+  email_on: (d) => `Почта для восстановления: ${d ?? 'указана'}`,
+  email_off: () => 'Восстановление по почте отключено',
+  duress_on: (d) => `Аварийный пароль включён${d ? ` (${d})` : ''}`,
+  duress_off: () => 'Аварийный пароль выключен',
+  backup_export: () => 'Сохранена резервная копия .veil',
+  backup_import: () => 'Аккаунт восстановлен из файла .veil',
+};
+
+/** Events someone else could have caused: they get «Это не я». */
+const SUSPICIOUS = new Set<SecurityEventKind>(['login', 'login_failed', 'device_new', 'password_change', 'totp_off', 'email_on', 'email_off', 'duress_off', 'backup_export']);
+
+/** «Журнал безопасности»: local, encrypted, with «Это не я» on each event. */
+export function SecurityLogSection({ messenger, snapshot, onDevices }: { messenger: Messenger; snapshot: MessengerSnapshot; onDevices(): void }) {
+  const [all, setAll] = useState(false);
+  const [notMe, setNotMe] = useState<SecurityEvent | null>(null);
+  const events = snapshot.securityLog.slice(0, all ? 200 : 6);
+  return (
+    <div className="section" data-testid="security-log">
+      <div className="section-title">
+        <ScrollText size={16} /> Журнал безопасности
+      </div>
+      <p>Хранится только на этом компьютере, зашифрованным. Увидели то, чего не делали, — нажмите «Это не я».</p>
+      {events.length === 0 && <span className="field-hint">Пока событий нет.</span>}
+      <ul className="log-list">
+        {events.map((e) => (
+          <li key={e.id} className={`log-row ${e.kind}`}>
+            <span className="grow">
+              <b>{EVENT_TEXT[e.kind]?.(e.detail) ?? e.kind}</b>
+              <span>
+                {formatDay(e.ts)}, {formatTime(e.ts)}
+              </span>
+            </span>
+            {SUSPICIOUS.has(e.kind) && (
+              <button className="btn btn-sm btn-ghost" onClick={() => setNotMe(e)}>
+                Это не я
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {snapshot.securityLog.length > 6 && (
+        <button className="link-btn" onClick={() => setAll((v) => !v)}>
+          {all ? 'Свернуть' : `Показать всё (${snapshot.securityLog.length})`}
+        </button>
+      )}
+      {notMe && <NotMeDialog messenger={messenger} event={notMe} onClose={() => setNotMe(null)} onDevices={onDevices} />}
+    </div>
+  );
+}
+
+/** «Это не я»: change the password and unlink other computers, step by step. */
+function NotMeDialog({ messenger, event, onClose, onDevices }: { messenger: Messenger; event: SecurityEvent; onClose(): void; onDevices(): void }) {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [repeat, setRepeat] = useState('');
+  const [changed, setChanged] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (next.length < 8) return setError('Новый пароль — не короче 8 символов');
+    if (next !== repeat) return setError('Пароли не совпадают');
+    setBusy(true);
+    try {
+      await messenger.changePassword(current, next);
+      setChanged(true);
+      toast('Пароль изменён', 'success');
+    } catch (err) {
+      setError(err instanceof WrongPasswordError ? 'Текущий пароль введён неверно' : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="Это не я" onClose={onClose} width={480}>
+      <div className="modal-body">
+        <div className="notice warn">
+          <ShieldAlert size={16} />
+          <span>
+            «{EVENT_TEXT[event.kind]?.(event.detail)}» — {formatDay(event.ts).toLowerCase()} в {formatTime(event.ts)}. Если это были не вы, сделайте два
+            шага ниже.
+          </span>
+        </div>
+        <form className="section" onSubmit={(e) => void submit(e)}>
+          <div className="section-title">
+            <span className="step-num">1</span> Смените пароль Veil
+          </div>
+          {changed ? (
+            <span className="chip success">Пароль изменён</span>
+          ) : (
+            <>
+              <input className="input" type="password" placeholder="Текущий пароль" aria-label="Текущий пароль (это не я)" value={current} onChange={(e) => setCurrent(e.target.value)} />
+              <input className="input" type="password" placeholder="Новый пароль" aria-label="Новый пароль (это не я)" value={next} onChange={(e) => setNext(e.target.value)} />
+              <input className="input" type="password" placeholder="Повторите новый пароль" aria-label="Повторите новый пароль (это не я)" value={repeat} onChange={(e) => setRepeat(e.target.value)} />
+              {error && <span className="field-error">{error}</span>}
+              <button className="btn btn-primary btn-sm" disabled={busy || !current || !next}>
+                {busy ? <span className="spinner" /> : 'Сменить пароль'}
+              </button>
+            </>
+          )}
+        </form>
+        <div className="section">
+          <div className="section-title">
+            <span className="step-num">2</span> Отвяжите чужие компьютеры
+          </div>
+          <p>В «Устройствах» видно, с каких компьютеров входили в аккаунт. Отвяжите те, что не ваши.</p>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => {
+              onClose();
+              onDevices();
+            }}
+          >
+            Открыть «Устройства»
+          </button>
+        </div>
+        <p className="field-hint" style={{ margin: 0 }}>
+          Если кто-то знает ваш пароль и скопировал файлы Veil, этого мало: заведите новый аккаунт и сообщите собеседникам. Включите Google Authenticator,
+          чтобы без телефона войти было нельзя.
+        </p>
+      </div>
     </Modal>
   );
 }

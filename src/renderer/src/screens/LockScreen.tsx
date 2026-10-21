@@ -10,6 +10,31 @@ import { useQuickUnlockStatus } from '../components/QuickUnlock.tsx';
 import { CodeInput } from '../components/SecurityDialogs.tsx';
 import { Backdrop, ConfirmDialog, Logo } from '../lib/ui.tsx';
 
+// Wrong passwords happen before the vault is open, so they are counted here (just a number)
+// and written to the encrypted security log after the next successful login.
+const FAILED_KEY = 'veil.failed';
+const failedAttempts = () => {
+  try {
+    return Number(localStorage.getItem(FAILED_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+};
+const countFailedAttempt = () => {
+  try {
+    localStorage.setItem(FAILED_KEY, String(failedAttempts() + 1));
+  } catch {
+    // storage unavailable
+  }
+};
+const resetFailedAttempts = () => {
+  try {
+    localStorage.removeItem(FAILED_KEY);
+  } catch {
+    // storage unavailable
+  }
+};
+
 export function LockScreen({
   storage,
   events,
@@ -37,8 +62,10 @@ export function LockScreen({
     if (quick?.pin) setMode('pin');
   }, [quick?.pin]);
 
-  const opened = (messenger: Messenger) => {
+  const opened = (messenger: Messenger, method: 'password' | 'pin' | 'fingerprint') => {
     if (messenger.wipedReal) void bridge?.quickUnlock.disable('all');
+    messenger.recordLogin(method, failedAttempts());
+    resetFailedAttempts();
     if (messenger.needsTotp) {
       setPending(messenger);
       setBusy(false);
@@ -46,7 +73,8 @@ export function LockScreen({
       setPin('');
     } else onUnlock(messenger);
   };
-  const failed = (text: string) => {
+  const failed = (text: string, attempt = true) => {
+    if (attempt) countFailedAttempt();
     setError(text);
     setShake((n) => n + 1);
     setBusy(false);
@@ -61,7 +89,7 @@ export function LockScreen({
     const blob = await bridge!.quickUnlock.loadPin();
     if (!blob) {
       setMode('password');
-      return failed('Вход по PIN недоступен. Введите пароль.');
+      return failed('Вход по PIN недоступен. Введите пароль.', false);
     }
     let key: Uint8Array;
     try {
@@ -75,9 +103,9 @@ export function LockScreen({
     }
     await bridge!.quickUnlock.pinSucceeded();
     try {
-      opened(await unlockWithKey(storage, key, events));
+      opened(await unlockWithKey(storage, key, events), 'pin');
     } catch (err) {
-      failed((err as Error).message);
+      failed((err as Error).message, false);
     } finally {
       key.fill(0);
     }
@@ -90,9 +118,9 @@ export function LockScreen({
     if (!key) return failed('Отпечаток не распознан');
     const bytes = unb64(key);
     try {
-      opened(await unlockWithKey(storage, bytes, events));
+      opened(await unlockWithKey(storage, bytes, events), 'fingerprint');
     } catch (err) {
-      failed((err as Error).message);
+      failed((err as Error).message, false);
     } finally {
       bytes.fill(0);
     }
@@ -104,7 +132,7 @@ export function LockScreen({
     setBusy(true);
     setError('');
     try {
-      opened(await unlock(storage, password, events, setProgress));
+      opened(await unlock(storage, password, events, setProgress), 'password');
     } catch (err) {
       setPassword('');
       failed(err instanceof WrongPasswordError ? 'Неверный пароль' : (err as Error).message);

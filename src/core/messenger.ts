@@ -70,6 +70,8 @@ import {
   type MessengerSnapshot,
   type NoteKind,
   type PresenceKind,
+  type SecurityEvent,
+  type SecurityEventKind,
   sharesWith,
   type OutboxItem,
   type ReplyRef,
@@ -339,7 +341,7 @@ export async function unlockWithKey(storage: StorageBackend, dataKey: Uint8Array
  * password chosen here, then the account opens and goes online from this computer.
  */
 export async function importAccount(
-  options: { storage: StorageBackend; password: string; records: Map<string, Uint8Array>; kdf?: { N: number; r: number; p: number } },
+  options: { storage: StorageBackend; password: string; records: Map<string, Uint8Array>; kdf?: { N: number; r: number; p: number }; from?: string },
   events: MessengerEvents = {},
 ): Promise<Messenger> {
   if (await readVaultMeta(options.storage)) throw new MessengerError('exists', 'На этом компьютере уже есть аккаунт Veil');
@@ -351,7 +353,9 @@ export async function importAccount(
   }
   if (!(await store.getJSON<AccountRecord>('account'))) throw new MessengerError('corrupt', 'Перенос неполный: нет аккаунта');
   await writeVaultMeta(options.storage, meta);
-  return openVault(options.storage, meta, dataKey.slice(), events);
+  const messenger = await openVault(options.storage, meta, dataKey.slice(), events);
+  messenger.logSecurity('transfer_in', options.from);
+  return messenger;
 }
 
 const DECOY_PREFIX = 'd.';
@@ -371,13 +375,14 @@ async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint
   if (!messenger.decoy && account.duress && !(await new SecureStore(storage, new Uint8Array(32), DECOY_PREFIX).names()).includes('account')) {
     delete account.duress;
   }
-  const [settings, contacts, sessions, outbox, seen, stickers] = await Promise.all([
+  const [settings, contacts, sessions, outbox, seen, stickers, seclog] = await Promise.all([
     store.getJSON<Settings>('settings'),
     store.getJSON<Record<string, Contact>>('contacts'),
     store.getJSON<Record<string, SessionRecord[]>>('sessions'),
     store.getJSON<OutboxItem[]>('outbox'),
     store.getJSON<string[]>('seen'),
     store.getJSON<StickerMeta[]>('stickers'),
+    store.getJSON<SecurityEvent[]>('seclog'),
   ]);
   messenger.loadState({
     account,
@@ -387,6 +392,7 @@ async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint
     outbox: outbox ?? [],
     seen: seen ?? [],
     stickers: stickers ?? [],
+    seclog: seclog ?? [],
   });
   for (const id of Object.keys(contacts ?? {})) {
     const messages = await store.getJSON<Message[]>(`conv.${id}`);
@@ -485,6 +491,7 @@ interface LoadedState {
   outbox: OutboxItem[];
   seen: string[];
   stickers: StickerMeta[];
+  seclog?: SecurityEvent[];
 }
 
 export interface SendOptions {
@@ -530,6 +537,7 @@ export class Messenger {
   private seen: string[] = [];
   private seenSet = new Set<string>();
   private stickers: StickerMeta[] = [];
+  private seclog: SecurityEvent[] = [];
 
   private relay: RelayClient | null = null;
   private status: ConnectionStatus = 'offline';
@@ -582,6 +590,7 @@ export class Messenger {
     this.seen = state.seen;
     this.seenSet = new Set(state.seen);
     this.stickers = state.stickers;
+    this.seclog = state.seclog ?? [];
     this.identity = {
       sign: keyPairFromJSON(state.account.sign),
       dh: keyPairFromJSON(state.account.dh),
@@ -777,6 +786,7 @@ export class Messenger {
         typing,
         online,
         stickers: this.stickers,
+        securityLog: this.seclog,
       };
     }
     return this.snapshot;
@@ -817,6 +827,7 @@ export class Messenger {
         else if (name === 'outbox') await this.store.putJSON(name, this.outbox);
         else if (name === 'seen') await this.store.putJSON(name, this.seen);
         else if (name === 'stickers') await this.store.putJSON(name, this.stickers);
+        else if (name === 'seclog') await this.store.putJSON(name, this.seclog);
         else if (name.startsWith('conv.')) {
           const messages = this.conversations.get(name.slice(5));
           if (messages) await this.store.putJSON(name, messages);
@@ -888,6 +899,7 @@ export class Messenger {
         for (const contact of Object.values(this.contacts)) if (!contact.blocked) void this.sendControl(contact, { t: 'hi' });
       }
       this.announcePresence('on', true);
+      void this.checkNewDevices();
       const recovery = this.account.recovery;
       if (recovery && Date.now() - recovery.lastBackupAt > BACKUP_STALE_MS) void this.backupNow().catch(() => {});
     } catch (error) {
@@ -992,6 +1004,7 @@ export class Messenger {
     this.markDirty('contacts', 'sessions', 'outbox', `conv.${previous.id}`, `conv.${contact.id}`);
     this.setStatus(contact.id, stale, 'failed', true);
     this.addSystem(contact.id, { kind: 'keychange' });
+    this.logSecurity('key_change', contact.displayName);
     this.events.onKeyChange?.(contact);
     this.changed();
     return contact;
@@ -2275,7 +2288,9 @@ export class Messenger {
   /** «Отвязать»: the relay stops accepting sign-ins from that computer. */
   async revokeDevice(id: string): Promise<void> {
     if (!this.relay) throw new RelayRequestError('offline', 'Нет соединения с сервером');
+    const name = (await this.listDevices().catch(() => [])).find((d) => d.id === id)?.name;
     await this.relay.request({ type: 'device_revoke', id });
+    this.logSecurity('device_revoked', name);
   }
 
   // ---- «Мост»: moving the account to another computer ------------------------------------
@@ -2320,6 +2335,39 @@ export class Messenger {
       return opened.slot === 'alt';
     } catch {
       return false;
+    }
+  }
+
+  // ---- «Журнал безопасности» -------------------------------------------------------------------
+
+  /** Adds an event to the local, encrypted security log (features.securityLog). */
+  logSecurity(kind: SecurityEventKind, detail?: string): void {
+    if (this.settings?.features?.securityLog === false || this.closed || this.decoy) return;
+    this.seclog = [{ id: randomId(), ts: Date.now(), kind, ...(detail ? { detail: detail.slice(0, 120) } : {}) }, ...this.seclog].slice(0, 500);
+    this.markDirty('seclog');
+    this.changed();
+  }
+
+  /** After unlocking: how, and how many wrong passwords came before (counted outside the vault). */
+  recordLogin(method: 'password' | 'pin' | 'fingerprint', failedBefore = 0): void {
+    if (failedBefore > 0) this.logSecurity('login_failed', String(failedBefore));
+    this.logSecurity('login', method);
+  }
+
+  /** New computers on the account since the last look (from the relay's device list). */
+  private async checkNewDevices(): Promise<void> {
+    if (this.settings.features.securityLog === false || this.settings.features.bridge === false) return;
+    try {
+      const devices = await this.listDevices();
+      const known = new Set(this.account.knownDevices ?? []);
+      const fresh = devices.filter((d) => !known.has(d.id));
+      if (!fresh.length) return;
+      // The very first look only learns the list.
+      if (this.account.knownDevices) for (const d of fresh) if (!d.current) this.logSecurity('device_new', d.name);
+      this.account.knownDevices = devices.map((d) => d.id).slice(0, 20);
+      this.markDirty('account');
+    } catch {
+      // offline or an old relay
     }
   }
 
@@ -2405,6 +2453,7 @@ export class Messenger {
     key.fill(0);
     await writeVaultMeta(this.storage, this.meta);
     this.account.duress = { wipe: options.wipe, at: now };
+    this.logSecurity('duress_on', options.wipe ? 'со стиранием' : undefined);
     this.markDirty('account');
     await this.flushNow();
     this.changed();
@@ -2416,6 +2465,7 @@ export class Messenger {
     this.meta = clearDuressSlot(this.meta);
     await writeVaultMeta(this.storage, this.meta);
     delete this.account.duress;
+    this.logSecurity('duress_off');
     this.markDirty('account');
     await this.flushNow();
     this.changed();
@@ -2441,6 +2491,7 @@ export class Messenger {
     const meta = await changeVaultPassword(this.meta, oldPassword, newPassword);
     await writeVaultMeta(this.storage, meta);
     this.meta = meta;
+    this.logSecurity('password_change');
     // The server backup is encrypted with the password too: re-key and upload it again.
     if (this.account.recovery) {
       const { key, kdf } = await deriveBackupKey(newPassword);
@@ -2476,6 +2527,7 @@ export class Messenger {
     await this.relay.request({ type: 'totp_set', secret, code: code.trim() });
     this.account.totp = secret;
     this.pendingTotpSecret = null;
+    this.logSecurity('totp_on');
     this.markDirty('account');
     await this.flushNow();
     this.scheduleBackup();
@@ -2488,6 +2540,7 @@ export class Messenger {
     if (!this.relay) throw new RelayRequestError('offline', 'Нет соединения с сервером');
     await this.relay.request({ type: 'totp_disable', code: code.trim() });
     delete this.account.totp;
+    this.logSecurity('totp_off');
     this.markDirty('account');
     await this.flushNow();
     this.scheduleBackup();
@@ -2513,6 +2566,7 @@ export class Messenger {
     await this.relay.request({ type: 'email_confirm', code: code.trim() });
     this.account.recovery = { email: pending.email, key: b64(pending.key), kdf: pending.kdf, lastBackupAt: 0 };
     this.pendingRecovery = null;
+    this.logSecurity('email_on', pending.email);
     this.markDirty('account');
     await this.flushNow();
     await this.backupNow();
@@ -2522,6 +2576,7 @@ export class Messenger {
     if (!this.relay) throw new RelayRequestError('offline', 'Нет соединения с сервером');
     await this.relay.request({ type: 'email_remove', ...(totp ? { totp } : {}) });
     delete this.account.recovery;
+    this.logSecurity('email_off');
     this.markDirty('account');
     await this.flushNow();
     this.changed();

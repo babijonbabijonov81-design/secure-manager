@@ -162,6 +162,8 @@ export interface AccountRecord {
   recovery?: RecoverySettings;
   /** The duress password is set; with `wipe` it erases the real vault when typed. */
   duress?: { wipe: boolean; at: number };
+  /** Device ids already seen in «Устройства» (a new one goes into the security log). */
+  knownDevices?: string[];
   /** Hidden chats: scrypt hashes of the secret phrase and the PIN (never the values themselves). */
   hiddenChats?: { salt: string; phrase: string; pin: string };
 }
@@ -366,6 +368,31 @@ export interface StickerMeta {
   addedAt: number;
 }
 
+/** «Журнал безопасности»: kept only on this computer, inside the encrypted vault. */
+export type SecurityEventKind =
+  | 'login'
+  | 'login_failed'
+  | 'device_new'
+  | 'device_revoked'
+  | 'transfer_in'
+  | 'key_change'
+  | 'password_change'
+  | 'totp_on'
+  | 'totp_off'
+  | 'email_on'
+  | 'email_off'
+  | 'duress_on'
+  | 'duress_off'
+  | 'backup_export'
+  | 'backup_import';
+
+export interface SecurityEvent {
+  id: string;
+  ts: number;
+  kind: SecurityEventKind;
+  detail?: string;
+}
+
 export interface MessengerSnapshot {
   status: ConnectionStatus;
   statusError?: string;
@@ -380,6 +407,7 @@ export interface MessengerSnapshot {
   typing: Record<string, boolean>;
   online: Record<string, boolean>;
   stickers: StickerMeta[];
+  securityLog: SecurityEvent[];
 }
 
 export const TIMER_OPTIONS = [0, 30, 300, 3600, 28800, 86400, 604800] as const;

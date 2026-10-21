@@ -38,7 +38,7 @@ import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from 
 import { BridgeHostDialog } from './BridgeFlows.tsx';
 import { HiddenChatsSettings } from './HiddenChats.tsx';
 import { QuickUnlockSection } from './QuickUnlock.tsx';
-import { BridgeCard, DuressSection, ProtectionBar, SafetyCodeCard } from './SecurityCards.tsx';
+import { BridgeCard, DuressSection, ProtectionBar, SafetyCodeCard, SecurityLogSection } from './SecurityCards.tsx';
 import { CodeInput, RecoveryEmailDialog, TotpDisableDialog, TotpSetupDialog } from './SecurityDialogs.tsx';
 
 export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'devices' | 'features' | 'about';
@@ -708,6 +708,8 @@ function SecurityTab({
       </form>
 
       {feature(snapshot.settings, 'duress') && <DuressSection messenger={messenger} snapshot={snapshot} />}
+
+      {feature(snapshot.settings, 'securityLog') && <SecurityLogSection messenger={messenger} snapshot={snapshot} onDevices={onDevices} />}
 
       {feature(snapshot.settings, 'quickUnlock') && <QuickUnlockSection messenger={messenger} />}
 
