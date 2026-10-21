@@ -4667,3 +4667,8 @@ button:disabled {
   color: var(--on-accent);
   background: var(--accent);
 }
+.banner.info {
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-bottom-color: var(--border);
+}

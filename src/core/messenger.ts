@@ -16,6 +16,7 @@ import {
 import { authStatement, registerExtra } from '../../server/src/shared/protocol.ts';
 import { base32Encode, otpauthUrl, verifyTotp } from '../../server/src/shared/totp.ts';
 import { b64, concat, fromUtf8, pack, randomId, unb64, unpack, utf8 } from '../../server/src/shared/wire.ts';
+import { BACKUP_SKIPPED, createBackupFile, openBackupFile } from './backup-file.ts';
 import { compress, decompress } from './compress.ts';
 import { safetyNumber } from './crypto/fingerprint.ts';
 import { newContentKey, openContent, sealContent } from './crypto/media.ts';
@@ -360,7 +361,7 @@ export async function importAccount(
 
 const DECOY_PREFIX = 'd.';
 
-async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint8Array, events: MessengerEvents, prefix = 'r.'): Promise<Messenger> {
+async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint8Array, events: MessengerEvents, prefix = 'r.', hello = false): Promise<Messenger> {
   const store = new SecureStore(storage, dataKey, prefix);
   let account: AccountRecord | null;
   try {
@@ -400,8 +401,36 @@ async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint
     if (messages) messenger.conversations.set(id, messages.filter((m) => !m.deleted));
   }
   messenger.sweepExpired();
+  messenger.helloPending = hello;
   if (account.totp) messenger.needsTotp = true;
   else messenger.connect();
+  return messenger;
+}
+
+/**
+ * Restores a .veil file on this computer, protected by a new Veil password. Sessions start fresh
+ * with every contact, as after a server restore.
+ */
+export async function restoreBackupFile(
+  options: { storage: StorageBackend; file: Uint8Array; backupPassword: string; password: string; kdf?: { N: number; r: number; p: number } },
+  events: MessengerEvents = {},
+): Promise<Messenger> {
+  if (await readVaultMeta(options.storage)) throw new MessengerError('exists', 'На этом компьютере уже есть аккаунт Veil');
+  const records = await openBackupFile(options.file, options.backupPassword);
+  const accountBytes = records.get('account');
+  if (!accountBytes) throw new MessengerError('corrupt', 'В копии нет аккаунта');
+  // The server backup key came from the old password, the empty Veil is not in the file.
+  const { recovery: _recovery, duress: _duress, ...account } = JSON.parse(fromUtf8(accountBytes)) as AccountRecord;
+  records.set('account', utf8(JSON.stringify(account)));
+  const { meta, dataKey } = await createVault(options.password, options.kdf);
+  const store = new SecureStore(options.storage, dataKey);
+  for (const [name, bytes] of records) {
+    if (BACKUP_SKIPPED.has(name) || !/^[\w.:-]{1,200}$/.test(name)) continue;
+    await store.putBytes(name, bytes);
+  }
+  await writeVaultMeta(options.storage, meta);
+  const messenger = await openVault(options.storage, meta, dataKey.slice(), events, 'r.', true);
+  messenger.logSecurity('backup_import');
   return messenger;
 }
 
@@ -771,6 +800,7 @@ export class Messenger {
           username: this.account.username,
           displayName: this.account.displayName,
           serverUrl: this.account.serverUrl,
+          createdAt: this.account.createdAt,
         },
         security: {
           totp: !!this.account.totp,
@@ -2336,6 +2366,24 @@ export class Messenger {
     } catch {
       return false;
     }
+  }
+
+  // ---- «Резервная копия .veil» ----------------------------------------------------------------
+
+  /** The whole account (without ratchet sessions) as one file encrypted with `password`. */
+  async exportBackupFile(password: string, kdf?: { N: number; r: number; p: number }): Promise<Uint8Array> {
+    if (password.length < 8) throw new MessengerError('short', 'Пароль копии — не короче 8 символов');
+    await this.flushNow();
+    const records = new Map<string, Uint8Array>();
+    for (const name of await this.store.names()) {
+      if (BACKUP_SKIPPED.has(name)) continue;
+      const bytes = await this.store.getBytes(name);
+      if (bytes) records.set(name, bytes);
+    }
+    const file = await createBackupFile(records, password, kdf);
+    this.updateSettings({ backupFileAt: Date.now() });
+    this.logSecurity('backup_export');
+    return file;
   }
 
   // ---- «Журнал безопасности» -------------------------------------------------------------------

@@ -397,7 +397,7 @@ export interface MessengerSnapshot {
   status: ConnectionStatus;
   statusError?: string;
   fatal?: string;
-  me: { userId: string; username: string; displayName: string; serverUrl: string };
+  me: { userId: string; username: string; displayName: string; serverUrl: string; createdAt: number };
   security: { totp: boolean; recoveryEmail?: string; lastBackupAt?: number; duress?: { wipe: boolean }; hiddenChats: boolean };
   /** This is the empty Veil opened by the duress password (never shown in the interface). */
   decoy?: boolean;

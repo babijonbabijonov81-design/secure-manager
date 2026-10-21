@@ -1,4 +1,4 @@
-import { Bookmark, DownloadCloud, Eye, EyeOff, Lock, LockKeyhole, Maximize2, MessageCircle, MessageSquarePlus, Minimize2, Phone, Settings, ShieldCheck, Timer, WifiOff, X } from 'lucide-react';
+import { Bookmark, DownloadCloud, Eye, EyeOff, FileArchive, Lock, LockKeyhole, Maximize2, MessageCircle, MessageSquarePlus, Minimize2, Phone, Settings, ShieldCheck, Timer, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
 import { bridge, type NotificationCardData, type UpdateState } from '../../../core/platform.ts';
@@ -206,6 +206,29 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
     return bridge.update.onState(setUpdate);
   }, []);
 
+  // A monthly reminder about the .veil backup, put off for a week by the cross.
+  const [snoozed, setSnoozed] = useState(() => {
+    try {
+      return Number(localStorage.getItem('veil.backup-snooze')) || 0;
+    } catch {
+      return 0;
+    }
+  });
+  const snoozeBackup = () => {
+    const until = Date.now() + 7 * 86_400_000;
+    setSnoozed(until);
+    try {
+      localStorage.setItem('veil.backup-snooze', String(until));
+    } catch {
+      // storage unavailable
+    }
+  };
+  const backupDue =
+    feature(settings, 'backupFile') &&
+    !full.decoy &&
+    Date.now() > snoozed &&
+    Date.now() - (settings.backupFileAt ?? full.me.createdAt) > 30 * 86_400_000;
+
   const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => bridge?.onFullscreen(setFullscreen), []);
 
@@ -339,6 +362,16 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           )}
           {update.status === 'ready' && <button onClick={() => bridge!.update.install()}>Перезапустить</button>}
           <button className="banner-close" onClick={() => setUpdateHidden(true)} aria-label="Скрыть">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+      {backupDue && (
+        <div className="banner info" data-testid="backup-reminder">
+          <FileArchive size={15} />
+          Давно не сохраняли резервную копию .veil — без неё аккаунт не вернуть, если ПК сломается.
+          <button onClick={() => setModal({ kind: 'settings', tab: 'security' })}>Сохранить</button>
+          <button className="banner-close" onClick={snoozeBackup} aria-label="Напомнить позже">
             <X size={14} />
           </button>
         </div>

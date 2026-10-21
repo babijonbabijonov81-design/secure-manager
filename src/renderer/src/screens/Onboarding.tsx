@@ -21,6 +21,7 @@ import { USERNAME_RE } from '../../../../server/src/shared/protocol.ts';
 import { createAccount, MessengerError, type Messenger, type MessengerEvents } from '../../../core/messenger.ts';
 import { bridge, type EmbeddedServerStatus } from '../../../core/platform.ts';
 import { probeServer } from '../../../core/relay-client.ts';
+import { RestoreFileFlow } from '../components/BackupFile.tsx';
 import { BridgeGuestFlow } from '../components/BridgeFlows.tsx';
 import type { StorageBackend } from '../../../core/storage.ts';
 import { passwordStrength } from '../lib/format.ts';
@@ -56,6 +57,7 @@ export function Onboarding({
   const [progress, setProgress] = useState({ text: '', value: 0 });
   const [recovering, setRecovering] = useState(false);
   const [transferring, setTransferring] = useState(false);
+  const [restoringFile, setRestoringFile] = useState(false);
 
   useEffect(() => {
     if (!bridge) {
@@ -155,7 +157,9 @@ export function Onboarding({
       <Backdrop />
       {bridge && <div className="titlebar" style={{ background: 'transparent', borderBottom: 0, position: 'fixed', inset: '0 0 auto 0' }} />}
       <div className="center-stage">
-        {transferring ? (
+        {restoringFile ? (
+          <RestoreFileFlow storage={storage} events={events} onBack={() => setRestoringFile(false)} onDone={onDone} />
+        ) : transferring ? (
           <BridgeGuestFlow storage={storage} events={events} onBack={() => setTransferring(false)} onDone={onDone} />
         ) : recovering ? (
           <RecoveryFlow storage={storage} events={events} initialServer={server} onBack={() => setRecovering(false)} onDone={onDone} />
@@ -210,6 +214,11 @@ export function Onboarding({
               <div style={{ textAlign: 'center', marginTop: 14 }}>
                 <button className="link-btn" onClick={() => setRecovering(true)}>
                   У меня уже есть аккаунт — восстановить по почте
+                </button>
+              </div>
+              <div style={{ textAlign: 'center', marginTop: 8 }}>
+                <button className="link-btn" onClick={() => setRestoringFile(true)}>
+                  Восстановить из файла .veil
                 </button>
               </div>
             </>

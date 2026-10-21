@@ -35,6 +35,7 @@ import { formatDay, formatTime } from '../lib/format.ts';
 import { feature } from '../lib/hooks.ts';
 import { isOwnServer } from '../lib/shield.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
+import { BackupFileSection } from './BackupFile.tsx';
 import { BridgeHostDialog } from './BridgeFlows.tsx';
 import { HiddenChatsSettings } from './HiddenChats.tsx';
 import { QuickUnlockSection } from './QuickUnlock.tsx';
@@ -708,6 +709,8 @@ function SecurityTab({
       </form>
 
       {feature(snapshot.settings, 'duress') && <DuressSection messenger={messenger} snapshot={snapshot} />}
+
+      {feature(snapshot.settings, 'backupFile') && <BackupFileSection messenger={messenger} snapshot={snapshot} />}
 
       {feature(snapshot.settings, 'securityLog') && <SecurityLogSection messenger={messenger} snapshot={snapshot} onDevices={onDevices} />}
 
