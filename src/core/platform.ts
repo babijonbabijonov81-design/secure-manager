@@ -121,6 +121,8 @@ export interface VeilBridge {
     onState(callback: (state: UpdateState) => void): () => void;
   };
   openExternal(url: string): void;
+  /** The sender's side of link previews: fetches a public page's title, description and picture. */
+  linkPreview(url: string): Promise<{ url: string; title: string; desc?: string; site?: string; image?: Uint8Array; imageType?: string } | null>;
   saveFile(name: string, data: Uint8Array): Promise<boolean>;
   server: {
     start(port?: number): Promise<EmbeddedServerStatus>;

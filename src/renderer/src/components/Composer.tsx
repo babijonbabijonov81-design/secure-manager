@@ -1,8 +1,10 @@
-import { Clock, CornerUpLeft, LockKeyhole, Mic, Paperclip, SendHorizontal, Smile, Square, Trash2, X } from 'lucide-react';
+import { Clock, CornerUpLeft, Link2, LockKeyhole, Mic, Paperclip, SendHorizontal, Smile, Square, Trash2, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { snippetOf, type Messenger } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
-import type { Contact, Message, Settings, StickerMeta } from '../../../core/types.ts';
+import { firstLink } from '../../../core/link-preview.ts';
+import type { Contact, LinkPreview, Message, Settings, StickerMeta } from '../../../core/types.ts';
+import { makePreview } from '../lib/preview.ts';
 import { EMOJI_GROUPS } from '../lib/emoji.ts';
 import { MicrophoneError, openMicrophone } from '../lib/audio.ts';
 import { analyseAudio, formatDuration } from '../lib/media.ts';
@@ -16,7 +18,7 @@ import { StickerPanel } from './StickerPanel.tsx';
 interface Props {
   messenger: Messenger;
   contact: Contact;
-  settings: Pick<Settings, 'enterToSend' | 'autocorrect' | 'spellcheck' | 'audio' | 'features'>;
+  settings: Pick<Settings, 'enterToSend' | 'autocorrect' | 'spellcheck' | 'audio' | 'features' | 'linkPreviews'>;
   stickers: StickerMeta[];
   replyTo: Message | null;
   onCancelReply(): void;
@@ -38,6 +40,20 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
   const [text, setText] = useState(contact.draft ?? '');
   const [panel, setPanel] = useState<'closed' | 'emoji' | 'stickers'>('closed');
   const [scheduling, setScheduling] = useState(false);
+  const [preview, setPreview] = useState<LinkPreview | null>(null);
+  const [dismissed, setDismissed] = useState('');
+  const previews = feature(settings as Settings, 'linkPreviews') && (settings as Settings).linkPreviews;
+  const link = previews ? firstLink(text) : undefined;
+  // The sender makes the preview while typing; it goes inside the encrypted message.
+  useEffect(() => {
+    if (!link || link === dismissed) return setPreview(null);
+    let alive = true;
+    const timer = setTimeout(() => void makePreview(link).then((p) => alive && setPreview(p)), 600);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [link, dismissed]);
   const [emojiTab, setEmojiTab] = useState(0);
   const [hint, setHint] = useState<{ from: string; to: string } | null>(null);
   const [recording, setRecording] = useState<Recording | null>(null);
@@ -139,8 +155,10 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
     clearTimeout(draftTimer.current);
     setScheduling(false);
     messenger.sendTyping(contactId, false);
+    const withPreview = preview && value.includes(preview.url) ? preview : undefined;
+    setPreview(null);
     void messenger
-      .sendText(contactId, value, { replyTo: replyTo?.id, ...when })
+      .sendText(contactId, value, { replyTo: replyTo?.id, ...when, ...(withPreview ? { preview: withPreview } : {}) })
       .then(() => {
         if (when && 'at' in when) toast(`Сообщение отправится ${formatWhen(when.at)}`, 'success');
         if (when && 'capsule' in when) toast(`Капсула отправлена · откроется ${formatDate(when.capsule)}`, 'success');
@@ -286,6 +304,18 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
         </>
       )}
 
+      {preview && !recording && (
+        <div className="reply-bar link-preview-bar" data-testid="composer-preview">
+          {preview.img ? <img src={preview.img} alt="" /> : <Link2 size={18} />}
+          <div className="grow">
+            <b>{preview.title}</b>
+            <span>{preview.site ?? preview.url}</span>
+          </div>
+          <button className="icon-btn sm" onClick={() => setDismissed(preview.url)} aria-label="Отправить без превью">
+            <X size={16} />
+          </button>
+        </div>
+      )}
       {replyTo && (
         <div className="reply-bar">
           <CornerUpLeft size={18} />

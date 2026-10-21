@@ -298,6 +298,17 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
             ))}
             {voice && <VoicePlayer messenger={messenger} att={voice} />}
             {message.text && <div className={images.length && !message.once ? 'caption' : 'text'}>{linkify(message.text)}</div>}
+            {message.preview && (
+              <a className="link-card" href={message.preview.url} onClick={(e) => openLink(e, message.preview!.url)} data-testid="link-preview">
+                {message.preview.img && <img src={message.preview.img} alt="" draggable={false} />}
+                <span className="link-card-body">
+                  {message.preview.site && <span className="link-site">{message.preview.site}</span>}
+                  <b>{message.preview.title}</b>
+                  {message.preview.desc && <span className="link-desc">{message.preview.desc}</span>}
+                  <span className="link-by">Превью сделал отправитель — Veil не открывал ссылку</span>
+                </span>
+              </a>
+            )}
             {meta}
           </div>
 

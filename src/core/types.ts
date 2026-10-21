@@ -308,9 +308,21 @@ export interface Message {
   capsule?: { at: number; k?: string; ct?: string; sent?: boolean; opened?: boolean };
   /** «Избранное»: what kind of entry this is; temporary notes burn at `expiresAt`. */
   note?: { kind: NoteKind; title?: string; reminded?: boolean };
+  /** Link preview made by the sender (features.linkPreviews). */
+  preview?: LinkPreview;
 }
 
 export type NoteKind = 'note' | 'password' | 'link';
+
+/** A link preview made by the sender; the recipient's Veil never opens the link. */
+export interface LinkPreview {
+  url: string;
+  title: string;
+  desc?: string;
+  site?: string;
+  /** A small JPEG/PNG/WebP picture as a data: URL. */
+  img?: string;
+}
 /** Temporary notes in «Избранное» burn after one of these numbers of days. */
 export const NOTE_BURN_DAYS = [1, 7, 30] as const;
 
@@ -336,6 +348,8 @@ export type Content =
       once?: { k: string };
       /** Time capsule: the text, sealed until `at`; the key follows then. */
       cap?: { at: number; ct: string };
+      /** Link preview made by the sender. */
+      pv?: LinkPreview;
     }
   | { t: 'rcpt'; k: 'd' | 'r'; ids: string[] }
   | { t: 'typ'; on: boolean }

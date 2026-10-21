@@ -17,6 +17,7 @@ import { authStatement, registerExtra } from '../../server/src/shared/protocol.t
 import { base32Encode, otpauthUrl, verifyTotp } from '../../server/src/shared/totp.ts';
 import { b64, concat, fromUtf8, pack, randomId, unb64, unpack, utf8 } from '../../server/src/shared/wire.ts';
 import { BACKUP_SKIPPED, createBackupFile, openBackupFile } from './backup-file.ts';
+import { cleanPreview } from './link-preview.ts';
 import { compress, decompress } from './compress.ts';
 import { safetyNumber } from './crypto/fingerprint.ts';
 import { newContentKey, openContent, sealContent } from './crypto/media.ts';
@@ -63,6 +64,7 @@ import {
   type CallRecord,
   type CallSignal,
   type Contact,
+  type LinkPreview,
   isSavedChat,
   normalizeSettings,
   SAVED_ID,
@@ -530,6 +532,8 @@ export interface SendOptions {
   at?: number;
   /** Time capsule: deliver now, open at this time (ms). */
   capsule?: number;
+  /** A link preview the sender made for a link in the text. */
+  preview?: LinkPreview;
 }
 
 export interface MediaOptions extends SendOptions {
@@ -1295,7 +1299,8 @@ export class Messenger {
       this.updateContact(contactId, { draft: undefined });
       return;
     }
-    const message = this.newOutgoing(contact, { text: body }, options.replyTo);
+    const preview = this.settings.features.linkPreviews !== false && this.settings.linkPreviews ? cleanPreview(options.preview, body) : undefined;
+    const message = this.newOutgoing(contact, { text: body, ...(preview ? { preview } : {}) }, options.replyTo);
     this.addMessage(contactId, message);
     this.updateContact(contactId, { lastActivity: message.ts, draft: undefined });
     await this.deliverMessage(contact, message);
@@ -1561,6 +1566,7 @@ export class Messenger {
       ts: message.ts,
       ...(message.text && !message.capsule ? { text: message.text } : {}),
       ...(message.capsule?.ct ? { cap: { at: message.capsule.at, ct: message.capsule.ct } } : {}),
+      ...(message.preview ? { pv: message.preview } : {}),
       ...(message.timer ? { timer: message.timer } : {}),
       ...(message.reply ? { r: { id: message.reply.id, s: message.reply.text, a: message.reply.out ? 'me' : 'you' } } : {}),
       ...(message.once?.k ? { once: { k: message.once.k } } : {}),
@@ -2102,6 +2108,7 @@ export class Messenger {
           at: now,
           ...(typeof content.text === 'string' && !cap ? { text: content.text.slice(0, 64_000) } : {}),
           ...(cap ? { capsule: cap } : {}),
+          ...(!cap && cleanPreview(content.pv, content.text) ? { preview: cleanPreview(content.pv, content.text) } : {}),
           ...(atts.length ? { atts } : {}),
           ...(reply ? { reply } : {}),
           ...(timer > 0 ? { timer, expiresAt: now + timer * 1000 } : {}),

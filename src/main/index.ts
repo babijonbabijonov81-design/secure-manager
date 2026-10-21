@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
 import { SecretClipboard } from '../core/secret-clipboard.ts';
 import { discoverBridges, LanBridge } from './bridge.ts';
+import { fetchLinkPreview } from './preview.ts';
 import {
   disableQuickUnlock,
   enableFingerprint,
@@ -348,6 +349,7 @@ function registerIpc(): void {
   });
 
   // «Мост» over the local network: only encrypted frames pass through here.
+  handle('preview:fetch', (url: string) => fetchLinkPreview(String(url)));
   handle('bridge:host', () => lanBridge.host());
   handle('bridge:discover', () => discoverBridges());
   handle('bridge:connect', (host: string, port: number) => lanBridge.connect(String(host), Number(port)));

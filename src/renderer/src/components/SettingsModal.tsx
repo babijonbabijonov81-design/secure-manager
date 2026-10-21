@@ -190,6 +190,14 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
                     </select>
                   </Row>
                 )}
+                {feature(s, 'linkPreviews') && (
+                  <Row
+                    title="Превью ссылок"
+                    text="Превью делает ваш Veil при отправке и передаёт его зашифрованным; собеседник ссылку не открывает. Сайт при этом увидит ваш IP-адрес."
+                  >
+                    <Toggle label="Превью ссылок" on={s.linkPreviews} onChange={(v) => set({ linkPreviews: v })} />
+                  </Row>
+                )}
                 {feature(s, 'keyGuard') && (
                   <Row title="Не отправлять, пока не сверю" text="Если ключ собеседника изменился, сообщения ему не уйдут, пока вы не сверите код безопасности.">
                     <Toggle label="Не отправлять, пока не сверю" on={s.holdUntilVerified} onChange={(v) => set({ holdUntilVerified: v })} />
