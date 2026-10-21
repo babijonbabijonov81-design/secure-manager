@@ -82,7 +82,11 @@ export function App() {
   const [phase, setPhase] = useState<Phase>('loading');
   const [messenger, setMessenger] = useState<Messenger | null>(null);
   const incoming = useRef<(contact: Contact, message: Message) => void>(() => {});
-  const events = useMemo<MessengerEvents>(() => ({ onIncoming: (c, m) => incoming.current(c, m) }), []);
+  const reminder = useRef<(message: Message) => void>(() => {});
+  const events = useMemo<MessengerEvents>(
+    () => ({ onIncoming: (c, m) => incoming.current(c, m), onNoteReminder: (m) => reminder.current(m) }),
+    [],
+  );
 
   // Once unlocked, the account's own setting takes over (in MainScreen).
   useAppearance(phase === 'ready' ? null : rememberedTheme());
@@ -111,6 +115,7 @@ export function App() {
           <MainScreen
             messenger={messenger}
             incomingRef={incoming}
+            reminderRef={reminder}
             onLock={lock}
             onDeleted={() => {
               setMessenger(null);

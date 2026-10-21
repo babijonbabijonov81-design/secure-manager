@@ -51,6 +51,13 @@ export interface VeilBridge {
   setContentProtection(enabled: boolean): void;
   focus(): void;
   copyText(text: string): void;
+  /**
+   * Copies a password: kept out of the Windows clipboard history and cloud sync, erased after
+   * `seconds` (0 = never) if the clipboard still holds it.
+   */
+  copySecret(text: string, seconds: number): Promise<void>;
+  /** Erases a copied password right away (if it is still there). */
+  clearSecret(): Promise<boolean>;
   /** PNG bytes. */
   copyImage(png: Uint8Array): void;
   spell: {

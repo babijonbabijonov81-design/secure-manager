@@ -29,6 +29,8 @@ const bridge: VeilBridge = {
   setContentProtection: (enabled) => ipcRenderer.send('content-protection', enabled),
   focus: () => ipcRenderer.send('focus'),
   copyText: (text) => ipcRenderer.send('clipboard:text', text),
+  copySecret: (text, seconds) => ipcRenderer.invoke('clipboard:secret', text, seconds),
+  clearSecret: () => ipcRenderer.invoke('clipboard:clear-secret'),
   copyImage: (png) => ipcRenderer.send('clipboard:image', png),
   spell: {
     suggestions: (word) => (webFrame.isWordMisspelled(word) ? webFrame.getWordSuggestions(word) : null),

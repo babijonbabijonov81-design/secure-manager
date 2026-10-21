@@ -271,7 +271,13 @@ export interface Message {
    * deleted on both sides once the recipient opens it (`opened`).
    */
   once?: { k?: string; opened?: number };
+  /** «Избранное»: what kind of entry this is; temporary notes burn at `expiresAt`. */
+  note?: { kind: NoteKind; title?: string; reminded?: boolean };
 }
+
+export type NoteKind = 'note' | 'password' | 'link';
+/** Temporary notes in «Избранное» burn after one of these numbers of days. */
+export const NOTE_BURN_DAYS = [1, 7, 30] as const;
 
 export const attachmentsOf = (message: Message): Attachment[] => message.atts ?? (message.att ? [message.att] : []);
 

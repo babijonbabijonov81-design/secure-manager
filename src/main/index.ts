@@ -26,6 +26,7 @@ import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
+import { SecretClipboard } from '../core/secret-clipboard.ts';
 import { closeAllCards, closeCard, setupNotificationCards, showNotificationCard, type NotificationCard } from './notifications.ts';
 import { setupUpdater } from './updater.ts';
 import trayDark2xPath from '../../resources/tray-dark@2x.png?asset';
@@ -406,6 +407,8 @@ function registerIpc(): void {
   ipcMain.on('clipboard:text', (event, text: string) => {
     if (trusted(event) && typeof text === 'string') void clipboard.writeText(text);
   });
+  handle('clipboard:secret', (text: string, seconds: number) => secretClipboard.copy(String(text), Math.max(0, Number(seconds) || 0)));
+  handle('clipboard:clear-secret', () => secretClipboard.clear());
   // The renderer converts images to PNG first.
   ipcMain.on('clipboard:image', (event, data: Uint8Array) => {
     if (!trusted(event) || !(data instanceof Uint8Array)) return;
@@ -456,6 +459,35 @@ function registerIpc(): void {
   );
 }
 
+// ---- passwords on the clipboard ------------------------------------------------------------
+
+/** Windows clipboard formats that keep a copy out of Win+V history and the cloud clipboard. */
+function windowsPrivacyFormats(): Record<string, Blob> {
+  const zero = new Blob([new Uint8Array(4)]);
+  const raw = (format: string) => `electron application/osclipboard;format="${format}"`;
+  return {
+    [raw('ExcludeClipboardContentFromMonitorProcessing')]: new Blob([new Uint8Array(0)]),
+    [raw('CanIncludeInClipboardHistory')]: zero,
+    [raw('CanUploadToCloudClipboard')]: zero,
+  };
+}
+
+const secretClipboard = new SecretClipboard({
+  write: async (text, secret) => {
+    if (isWindows && secret) {
+      try {
+        await clipboard.write([new ClipboardItem({ 'text/plain': text, ...windowsPrivacyFormats() })]);
+        return;
+      } catch {
+        // older Windows builds: a plain copy is still erased on time
+      }
+    }
+    await clipboard.writeText(text);
+  },
+  read: () => clipboard.readText(),
+  clear: () => clipboard.writeText(''),
+});
+
 // ---- embedded relay ----------------------------------------------------------------------
 
 function lanAddresses(port: number): string[] {
@@ -497,6 +529,7 @@ app.on('activate', showWindow);
 app.on('before-quit', () => {
   quitting = true;
   closeAllCards();
+  void secretClipboard.clear();
 });
 app.on('will-quit', (event) => {
   if (!relay) return;

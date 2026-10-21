@@ -128,7 +128,8 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
     setPending([]);
     setReplyTo(null);
     try {
-      const prepared = await Promise.all(files.map((f) => prepareFile(f, compress)));
+      const strip = snapshot.settings.stripMetadata && feature(snapshot.settings, 'stripMeta');
+      const prepared = await Promise.all(files.map((f) => prepareFile(f, compress, strip)));
       await messenger.sendMedia(contact.id, prepared, { caption, replyTo: reply, once });
     } catch (e) {
       toast((e as Error).message, 'error');
@@ -466,6 +467,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
         <AttachmentPreview
           files={pending}
           allowOnce={!saved && feature(snapshot.settings, 'viewOnce')}
+          stripMetadata={snapshot.settings.stripMetadata && feature(snapshot.settings, 'stripMeta')}
           onAdd={queueFiles}
           onRemove={(i) => setPending((list) => list.filter((_, j) => j !== i))}
           onClose={() => setPending([])}
@@ -545,7 +547,7 @@ function OnceViewer({ view, protectionSetting, onClose }: { view: { url: string;
   );
 }
 
-function Lightbox({ messenger, items, start, onClose }: { messenger: Messenger; items: Attachment[]; start: number; onClose(): void }) {
+export function Lightbox({ messenger, items, start, onClose }: { messenger: Messenger; items: Attachment[]; start: number; onClose(): void }) {
   const [index, setIndex] = useState(start);
   const [url, setUrl] = useState<string | null>(null);
   const toast = useToast();

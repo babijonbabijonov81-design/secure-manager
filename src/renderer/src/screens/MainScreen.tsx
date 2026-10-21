@@ -11,6 +11,7 @@ import { ChatView } from '../components/ChatView.tsx';
 import { InfoPanel } from '../components/InfoPanel.tsx';
 import { NewChatModal } from '../components/NewChatModal.tsx';
 import { SettingsModal, type SettingsTab } from '../components/SettingsModal.tsx';
+import { VaultView } from '../components/VaultView.tsx';
 import { revokeAttachmentUrls } from '../lib/attachments.ts';
 import { CallManager } from '../lib/calls.ts';
 import { snippetOf } from '../../../core/messenger.ts';
@@ -22,6 +23,7 @@ import { Avatar, Logo, useToast } from '../lib/ui.tsx';
 interface Props {
   messenger: Messenger;
   incomingRef: MutableRefObject<(contact: Contact, message: Message) => void>;
+  reminderRef: MutableRefObject<(message: Message) => void>;
   onLock(): void;
   onDeleted(): void;
 }
@@ -53,13 +55,14 @@ const readShieldPreference = () => {
   }
 };
 
-export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props) {
+export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDeleted }: Props) {
   const snapshot = useSyncExternalStore(messenger.subscribe, messenger.getSnapshot);
   const settings = snapshot.settings;
   const [view, setView] = useState<View>('chats');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [modal, setModal] = useState<{ kind: 'settings'; tab?: SettingsTab } | { kind: 'new' } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
   const activeRef = useRef(activeId);
   activeRef.current = activeId;
 
@@ -96,6 +99,11 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
 
   // Notifications & sounds for incoming messages.
   useEffect(() => {
+    reminderRef.current = (message) => {
+      const body = message.note?.kind === 'password' ? 'Пароль из «Избранного» сгорит завтра' : 'Временная заметка из «Избранного» сгорит завтра';
+      toast(body, 'info');
+      if (!document.hasFocus()) showNotification('Избранное', body, SAVED_ID, () => setActiveId(SAVED_ID));
+    };
     incomingRef.current = (contact, message) => {
       const focused = document.hasFocus() && !document.hidden;
       if (focused && activeRef.current === contact.id) return;
@@ -110,11 +118,11 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
     };
     return () => {
       incomingRef.current = () => {};
+      reminderRef.current = () => {};
     };
-  }, [messenger, incomingRef]);
+  }, [messenger, incomingRef, reminderRef, toast]);
 
   // Audio calls: one manager per unlocked account; locking hangs up.
-  const toast = useToast();
   const [calls, setCalls] = useState<CallManager | null>(null);
   useEffect(() => {
     const manager = new CallManager(messenger, {
@@ -271,7 +279,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
   const savedActive = activeId === SAVED_ID;
 
   return (
-    <div className={`shell${narrow ? ' narrow' : ''}${wide ? ' wide' : ''}`} data-pane={active ? 'chat' : 'list'}>
+    <div className={`shell${narrow ? ' narrow' : ''}${wide ? ' wide' : ''}`} data-pane={active ? 'chat' : 'list'} data-view={savedActive ? 'saved' : view}>
       {bridge && (
         <div className="titlebar">
           <span className={`status-pill ${snapshot.status}`}>
@@ -385,7 +393,9 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
           />
         )}
 
-        {active ? (
+        {active && savedActive ? (
+          <VaultView messenger={messenger} snapshot={snapshot} />
+        ) : active ? (
           <ChatView
             key={active.id}
             messenger={messenger}
@@ -427,7 +437,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
           </section>
         )}
 
-        {active && infoOpen && (
+        {active && infoOpen && !savedActive && (
           <InfoPanel
             key={`info-${active.id}`}
             messenger={messenger}

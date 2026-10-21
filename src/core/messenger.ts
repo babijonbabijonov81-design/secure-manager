@@ -61,6 +61,7 @@ import {
   type Content,
   type Message,
   type MessengerSnapshot,
+  type NoteKind,
   type OutboxItem,
   type ReplyRef,
   type Settings,
@@ -79,12 +80,15 @@ const HEARTBEAT_MS = 60_000;
 const BACKUP_MIN_INTERVAL_MS = 10 * 60 * 1000;
 const BACKUP_STALE_MS = 6 * 60 * 60 * 1000;
 const BACKUP_MESSAGES_PER_CHAT = 3000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface MessengerEvents {
   /** A new incoming message the UI may want to notify about. */
   onIncoming?(contact: Contact, message: Message): void;
   /** A contact's identity key changed (the chat was kept, the verified mark removed). */
   onKeyChange?(contact: Contact): void;
+  /** A temporary note in «Избранное» burns within a day. */
+  onNoteReminder?(message: Message): void;
 }
 
 /** Receives call signals; returns false if it knows nothing about that call. */
@@ -166,6 +170,8 @@ export function callTitle(message: Message): string {
 export function snippetOf(message: Message): string {
   if (message.call) return callTitle(message);
   if (message.once) return isVideo(attachmentsOf(message)[0]?.mime) ? 'Видео · один просмотр' : 'Фото · один просмотр';
+  // A password never shows up in previews, quotes or search.
+  if (message.note?.kind === 'password') return message.note.title ? `Пароль · ${message.note.title}` : 'Пароль';
   if (message.text) return message.text.slice(0, 200);
   const atts = attachmentsOf(message);
   const first = atts[0];
@@ -704,6 +710,7 @@ export class Messenger {
   private tick(): void {
     this.sweepExpired();
     const now = Date.now();
+    this.remindNotes(now);
     for (const [id, state] of Object.entries(this.online)) {
       if (state.until > now) continue;
       delete this.online[id];
@@ -1216,6 +1223,38 @@ export class Messenger {
       ...(isSavedChat(contactId) ? {} : { fwd: { name: author, ts: source.ts } }),
     });
     this.updateContact(SAVED_ID, { lastActivity: now, archived: false });
+  }
+
+  /**
+   * A note, password or link in «Избранное». With `burnDays` it is a temporary note: deleted for
+   * good after that many days, with a reminder a day before.
+   */
+  addNote(input: { text: string; kind?: NoteKind; title?: string; burnDays?: number }): Message {
+    const text = input.kind === 'password' ? input.text : input.text.trim();
+    if (!text) throw new MessengerError('empty', 'Пустая заметка');
+    const kind: NoteKind = input.kind ?? (/^https?:\/\/\S+$/i.test(text) ? 'link' : 'note');
+    const now = Date.now();
+    const days = Number(input.burnDays) || 0;
+    const message: Message = {
+      id: randomId(),
+      dir: 'out',
+      ts: now,
+      at: now,
+      text: text.slice(0, 64_000),
+      note: { kind, ...(input.title?.trim() ? { title: input.title.trim().slice(0, 120) } : {}) },
+      ...(days > 0 ? { expiresAt: now + days * DAY_MS } : {}),
+    };
+    this.addMessage(SAVED_ID, message);
+    this.updateContact(SAVED_ID, { lastActivity: now, archived: false });
+    return message;
+  }
+
+  /** Temporary notes that burn within a day get one reminder. */
+  private remindNotes(now: number): void {
+    const due = (this.conversations.get(SAVED_ID) ?? []).filter((m) => m.note && m.expiresAt && !m.note.reminded && m.expiresAt - now < DAY_MS);
+    if (!due.length) return;
+    this.patchMessages(SAVED_ID, new Set(due.map((m) => m.id)), (m) => ({ ...m, note: { ...m.note!, reminded: true } }));
+    for (const message of due) this.events.onNoteReminder?.(message);
   }
 
   /** Kept for callers sending one file. */
