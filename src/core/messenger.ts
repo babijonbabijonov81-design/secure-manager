@@ -33,12 +33,16 @@ import {
 } from './crypto/session.ts';
 import {
   changeVaultPassword,
+  clearDuressSlot,
   createVault,
   deriveBackupKey,
+  destroyMainSlot,
   openBackup,
+  openVaultSlot,
   sealBackup,
-  unlockVault,
+  setDuressSlot,
   verifyVaultPassword,
+  withDuressSlot,
   WrongPasswordError,
   type VaultMeta,
 } from './crypto/vault.ts';
@@ -281,17 +285,50 @@ export async function unlock(
   events: MessengerEvents = {},
   onProgress?: (p: number) => void,
 ): Promise<Messenger> {
-  const meta = await readVaultMeta(storage);
+  let meta = await readVaultMeta(storage);
   if (!meta) throw new MessengerError('no_account', 'Аккаунт не найден');
-  const dataKey = await unlockVault(meta, password, onProgress);
-  return openVault(storage, meta, dataKey, events);
+  const started = Date.now();
+  const { slot, dataKey } = await openVaultSlot(meta, password, onProgress);
+  // Both ways in take as long as the slower one usually does, so timing says nothing.
+  const kdfMs = Date.now() - started;
+  const pad = async () => {
+    const left = started + kdfMs * 1.3 - Date.now();
+    if (left > 0) await new Promise((r) => setTimeout(r, left));
+  };
+  if (slot === 'main') {
+    if (!meta.alt) {
+      meta = withDuressSlot(meta);
+      await writeVaultMeta(storage, meta);
+    }
+    const messenger = await openVault(storage, meta, dataKey, events);
+    await pad();
+    return messenger;
+  }
+  // The duress password: the empty Veil, after erasing the real one if that was chosen.
+  const decoy = new SecureStore(storage, dataKey, DECOY_PREFIX);
+  const wipe = !!(await decoy.getJSON<{ wipe?: boolean }>('duress'))?.wipe;
+  if (wipe) {
+    await new SecureStore(storage, new Uint8Array(32)).destroy();
+    meta = destroyMainSlot(meta);
+    await writeVaultMeta(storage, meta);
+  }
+  const messenger = await openVault(storage, meta, dataKey, events, DECOY_PREFIX);
+  messenger.wipedReal = wipe;
+  await pad();
+  return messenger;
 }
 
 /** Quick unlock: the vault key came from the system keychain (behind a PIN or a fingerprint). */
 export async function unlockWithKey(storage: StorageBackend, dataKey: Uint8Array, events: MessengerEvents = {}): Promise<Messenger> {
   const meta = await readVaultMeta(storage);
   if (!meta) throw new MessengerError('no_account', 'Аккаунт не найден');
-  return openVault(storage, meta, dataKey.slice(), events);
+  try {
+    return await openVault(storage, meta, dataKey.slice(), events);
+  } catch (error) {
+    // A PIN set up inside the empty Veil opens the empty Veil.
+    if (error instanceof WrongPasswordError) return openVault(storage, meta, dataKey.slice(), events, DECOY_PREFIX);
+    throw error;
+  }
 }
 
 /**
@@ -314,8 +351,10 @@ export async function importAccount(
   return openVault(options.storage, meta, dataKey.slice(), events);
 }
 
-async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint8Array, events: MessengerEvents): Promise<Messenger> {
-  const store = new SecureStore(storage, dataKey);
+const DECOY_PREFIX = 'd.';
+
+async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint8Array, events: MessengerEvents, prefix = 'r.'): Promise<Messenger> {
+  const store = new SecureStore(storage, dataKey, prefix);
   let account: AccountRecord | null;
   try {
     account = await store.getJSON<AccountRecord>('account');
@@ -324,6 +363,11 @@ async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint
   }
   if (!account) throw new MessengerError('corrupt', 'Данные повреждены');
   const messenger = new Messenger(storage, store, meta, events);
+  messenger.decoy = prefix === DECOY_PREFIX;
+  // The duress flag came with a backup or «Мост», but the empty Veil it points to did not.
+  if (!messenger.decoy && account.duress && !(await new SecureStore(storage, new Uint8Array(32), DECOY_PREFIX).names()).includes('account')) {
+    delete account.duress;
+  }
   const [settings, contacts, sessions, outbox, seen, stickers] = await Promise.all([
     store.getJSON<Settings>('settings'),
     store.getJSON<Record<string, Contact>>('contacts'),
@@ -460,6 +504,10 @@ export class Messenger {
   helloPending = false;
   /** Set by the UI that runs WebRTC. */
   callHandler: CallHandler | null = null;
+  /** The empty Veil behind the duress password: never connects, finds nobody. */
+  decoy = false;
+  /** The duress password just erased the real vault (the app drops quick unlock too). */
+  wipedReal = false;
   private relayIce: IceServer[] | undefined;
   private endedCalls = new Set<string>();
   private readonly store: SecureStore;
@@ -601,6 +649,12 @@ export class Messenger {
 
   connect(register = false, hooks?: { ready(): void; fatal(code: string, message: string): void }): void {
     if (this.locked || this.bridgePaused) return;
+    if (this.decoy) {
+      // Looks online, talks to nobody: the real account's messages wait on the relay.
+      this.status = 'online';
+      this.changed();
+      return;
+    }
     this.relay?.close();
     this.fatal = undefined;
     let pendingHooks = hooks;
@@ -706,7 +760,9 @@ export class Messenger {
           totp: !!this.account.totp,
           recoveryEmail: this.account.recovery?.email,
           lastBackupAt: this.account.recovery?.lastBackupAt || undefined,
+          ...(this.account.duress ? { duress: { wipe: this.account.duress.wipe } } : {}),
         },
+        ...(this.decoy ? { decoy: true } : {}),
         settings: this.settings,
         contacts,
         conversations: Object.fromEntries(this.conversations),
@@ -874,6 +930,10 @@ export class Messenger {
     if (!USERNAME_RE.test(username)) throw new MessengerError('bad_username', 'Неверное имя пользователя');
     // Your own name opens «Избранное», like in Telegram.
     if (username === this.account.username) return this.contacts[SAVED_ID];
+    if (this.decoy) {
+      await new Promise((r) => setTimeout(r, 300 + Math.random() * 400));
+      throw new MessengerError('not_found', `Пользователь @${username} не найден`);
+    }
     if (!this.relay) throw new MessengerError('offline', 'Нет соединения с сервером');
     let info: UserInfo;
     try {
@@ -1319,9 +1379,11 @@ export class Messenger {
     return message;
   }
 
-  /** Temporary notes that burn within a day get one reminder. */
+  /** Temporary notes get one reminder a day before they burn (a one-day note: halfway). */
   private remindNotes(now: number): void {
-    const due = (this.conversations.get(SAVED_ID) ?? []).filter((m) => m.note && m.expiresAt && !m.note.reminded && m.expiresAt - now < DAY_MS);
+    const due = (this.conversations.get(SAVED_ID) ?? []).filter(
+      (m) => m.note && m.expiresAt && !m.note.reminded && m.expiresAt - now < Math.min(DAY_MS, (m.expiresAt - m.ts) / 2),
+    );
     if (!due.length) return;
     this.patchMessages(SAVED_ID, new Set(due.map((m) => m.id)), (m) => ({ ...m, note: { ...m.note!, reminded: true } }));
     for (const message of due) this.events.onNoteReminder?.(message);
@@ -2074,6 +2136,7 @@ export class Messenger {
   }
 
   async listDevices(): Promise<DeviceInfo[]> {
+    if (this.decoy) return [{ id: thisDevice?.id ?? 'this', name: thisDevice?.name ?? 'Этот компьютер', first: this.account.createdAt, last: Date.now(), online: true, current: true }];
     if (!this.relay) throw new RelayRequestError('offline', 'Нет соединения с сервером');
     const { devices, current } = await this.relay.request<{ devices: DeviceRecord[]; current: string | null }>({ type: 'devices' });
     const key = this.deviceKey();
@@ -2129,8 +2192,69 @@ export class Messenger {
   }
 
   /** Checks the vault password without changing anything (e.g. before turning on quick unlock). */
-  checkPassword(password: string): Promise<boolean> {
-    return verifyVaultPassword(this.meta, password);
+  async checkPassword(password: string): Promise<boolean> {
+    if (!this.decoy) return verifyVaultPassword(this.meta, password);
+    try {
+      const opened = await openVaultSlot(this.meta, password);
+      opened.dataKey.fill(0);
+      return opened.slot === 'alt';
+    } catch {
+      return false;
+    }
+  }
+
+  // ---- duress password ----------------------------------------------------------------------
+
+  /**
+   * Sets the duress password: it opens an empty Veil with this name and fresh keys that never
+   * connects to the relay. With `wipe`, typing it also erases this real vault for good.
+   */
+  async enableDuress(password: string, options: { wipe: boolean }): Promise<void> {
+    if (this.decoy) throw new MessengerError('decoy', 'Недоступно');
+    if (password.length < 8) throw new MessengerError('short', 'Аварийный пароль — не короче 8 символов');
+    if (await verifyVaultPassword(this.meta, password)) throw new MessengerError('same', 'Аварийный пароль должен отличаться от настоящего');
+    const key = random(32);
+    const store = new SecureStore(this.storage, key, DECOY_PREFIX);
+    await store.destroy();
+    const identity = generateIdentity();
+    const spk = generateDH();
+    const now = Date.now();
+    const account: AccountRecord = {
+      userId: b64(identity.sign.pub),
+      username: this.account.username,
+      displayName: this.account.displayName,
+      sign: keyPairToJSON(identity.sign),
+      dh: keyPairToJSON(identity.dh),
+      dhSig: b64(identity.dhSig),
+      spks: [{ id: 1, pub: b64(spk.pub), priv: b64(spk.priv), sig: b64(signPreKey(identity.sign.priv, 1, spk.pub)), createdAt: now }],
+      opks: {},
+      nextOpkId: 1,
+      nextSpkId: 2,
+      serverUrl: this.account.serverUrl,
+      createdAt: this.account.createdAt,
+    };
+    await store.putJSON('account', account);
+    await store.putJSON('settings', normalizeSettings({ theme: this.settings.theme }));
+    await store.putJSON('contacts', {});
+    await store.putJSON('duress', { wipe: options.wipe });
+    this.meta = await setDuressSlot(this.meta, password, key);
+    key.fill(0);
+    await writeVaultMeta(this.storage, this.meta);
+    this.account.duress = { wipe: options.wipe, at: now };
+    this.markDirty('account');
+    await this.flushNow();
+    this.changed();
+  }
+
+  async disableDuress(): Promise<void> {
+    if (this.decoy) return;
+    await new SecureStore(this.storage, new Uint8Array(32), DECOY_PREFIX).destroy();
+    this.meta = clearDuressSlot(this.meta);
+    await writeVaultMeta(this.storage, this.meta);
+    delete this.account.duress;
+    this.markDirty('account');
+    await this.flushNow();
+    this.changed();
   }
 
   /** A copy of the vault key, to be kept in the system keychain for quick unlock. */
@@ -2139,6 +2263,17 @@ export class Messenger {
   }
 
   async changePassword(oldPassword: string, newPassword: string): Promise<void> {
+    if (this.decoy) {
+      // The empty Veil changes "its" password: the duress slot, not the real one.
+      const opened = await openVaultSlot(this.meta, oldPassword);
+      opened.dataKey.fill(0);
+      if (opened.slot !== 'alt') throw new WrongPasswordError();
+      const key = this.store.exportKey();
+      this.meta = await setDuressSlot(this.meta, newPassword, key);
+      key.fill(0);
+      await writeVaultMeta(this.storage, this.meta);
+      return;
+    }
     const meta = await changeVaultPassword(this.meta, oldPassword, newPassword);
     await writeVaultMeta(this.storage, meta);
     this.meta = meta;
@@ -2155,6 +2290,7 @@ export class Messenger {
   // ---- two-factor authentication -------------------------------------------------------------
 
   async accountStatus(): Promise<AccountStatus> {
+    if (this.decoy) return { email: false, totp: false, backup: null, mail: true };
     if (!this.relay) throw new RelayRequestError('offline', 'Нет соединения с сервером');
     return this.relay.request<AccountStatus>({ type: 'account_status' });
   }
@@ -2269,6 +2405,7 @@ export class Messenger {
 
   /** Removes the account from the relay (if reachable) and wipes all local data. */
   async deleteAccount(totp?: string): Promise<void> {
+    if (this.decoy) throw new MessengerError('offline', 'Сервер не отвечает. Попробуйте позже');
     if (this.account.totp && (!totp || verifyTotp(this.account.totp, totp) === null))
       throw new MessengerError('bad_totp', 'Введите верный код из приложения-аутентификатора');
     if (this.relay?.status === 'online') {

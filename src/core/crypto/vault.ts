@@ -13,7 +13,15 @@ export interface VaultMeta {
   v: 1;
   kdf: { alg: 'scrypt'; N: number; r: number; p: number; salt: string };
   wrapped: { nonce: string; ct: string };
+  /**
+   * Second slot: the key of the empty Veil opened by the duress password. Always present — filled
+   * with random bytes of the same size when no duress password is set — so the file does not tell.
+   */
+  alt?: { nonce: string; ct: string };
 }
+
+/** Random bytes shaped like a wrapped 32-byte key (24-byte nonce, 48-byte ciphertext). */
+const randomSlot = () => ({ nonce: b64(random(24)), ct: b64(random(48)) });
 
 export const DEFAULT_KDF = { N: 2 ** 17, r: 8, p: 1 };
 
@@ -43,15 +51,61 @@ export async function createVault(
 async function wrapDataKey(
   dataKey: Uint8Array,
   password: string,
-  kdfParams: { N: number; r: number; p: number },
+  kdfParams: { N: number; r: number; p: number; salt?: string },
   onProgress?: (p: number) => void,
 ): Promise<VaultMeta> {
-  const kdf = { alg: 'scrypt' as const, ...kdfParams, salt: b64(random(16)) };
+  const kdf = { alg: 'scrypt' as const, N: kdfParams.N, r: kdfParams.r, p: kdfParams.p, salt: kdfParams.salt ?? b64(random(16)) };
   const key = await passwordKey(password, kdf, onProgress);
   const { nonce, ct } = aeadSeal(key, dataKey, WRAP_AD);
   wipe(key);
-  return { v: 1, kdf, wrapped: { nonce: b64(nonce), ct: b64(ct) } };
+  return { v: 1, kdf, wrapped: { nonce: b64(nonce), ct: b64(ct) }, alt: randomSlot() };
 }
+
+/**
+ * Logging in: one scrypt for whatever password was typed, then both slots are tried. The real
+ * password opens 'main', the duress password 'alt'; the time is the same either way.
+ */
+export async function openVaultSlot(
+  meta: VaultMeta,
+  password: string,
+  onProgress?: (p: number) => void,
+): Promise<{ slot: 'main' | 'alt'; dataKey: Uint8Array }> {
+  const key = await passwordKey(password, meta.kdf, onProgress);
+  const attempt = (slot: { nonce: string; ct: string } | undefined) => {
+    if (!slot) return null;
+    try {
+      return aeadOpen(key, unb64(slot.nonce), unb64(slot.ct), WRAP_AD);
+    } catch {
+      return null;
+    }
+  };
+  try {
+    const main = attempt(meta.wrapped);
+    const alt = attempt(meta.alt);
+    if (main) return { slot: 'main', dataKey: main };
+    if (alt) return { slot: 'alt', dataKey: alt };
+    throw new WrongPasswordError();
+  } finally {
+    wipe(key);
+  }
+}
+
+/** Puts the duress key into the second slot, under the same salt as the real password. */
+export async function setDuressSlot(meta: VaultMeta, duressPassword: string, altKey: Uint8Array): Promise<VaultMeta> {
+  const key = await passwordKey(duressPassword, meta.kdf);
+  const { nonce, ct } = aeadSeal(key, altKey, WRAP_AD);
+  wipe(key);
+  return { ...meta, alt: { nonce: b64(nonce), ct: b64(ct) } };
+}
+
+/** No duress password: the second slot holds random bytes again. */
+export const clearDuressSlot = (meta: VaultMeta): VaultMeta => ({ ...meta, alt: randomSlot() });
+
+/** Vaults from before 2.0 get the random second slot on their next unlock. */
+export const withDuressSlot = (meta: VaultMeta): VaultMeta => (meta.alt ? meta : { ...meta, alt: randomSlot() });
+
+/** "Стереть всё": the real slot becomes random too, so the real password stops opening anything. */
+export const destroyMainSlot = (meta: VaultMeta): VaultMeta => ({ ...meta, wrapped: randomSlot() });
 
 /** Throws `WrongPasswordError` if the password is incorrect. */
 export async function unlockVault(meta: VaultMeta, password: string, onProgress?: (p: number) => void): Promise<Uint8Array> {
@@ -65,10 +119,12 @@ export async function unlockVault(meta: VaultMeta, password: string, onProgress?
   }
 }
 
+/** Re-wraps the real key only. The salt stays, so the duress slot keeps working. */
 export async function changeVaultPassword(meta: VaultMeta, oldPassword: string, newPassword: string): Promise<VaultMeta> {
   const dataKey = await unlockVault(meta, oldPassword);
-  const { N, r, p } = meta.kdf;
-  return wrapDataKey(dataKey, newPassword, { N, r, p });
+  const { N, r, p, salt } = meta.kdf;
+  const next = await wrapDataKey(dataKey, newPassword, { N, r, p, salt });
+  return { ...next, alt: meta.alt ?? next.alt };
 }
 
 export class WrongPasswordError extends Error {

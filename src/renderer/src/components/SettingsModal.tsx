@@ -37,6 +37,7 @@ import { isOwnServer } from '../lib/shield.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
 import { BridgeHostDialog } from './BridgeFlows.tsx';
 import { QuickUnlockSection } from './QuickUnlock.tsx';
+import { BridgeCard, DuressSection, ProtectionBar, SafetyCodeCard } from './SecurityCards.tsx';
 import { CodeInput, RecoveryEmailDialog, TotpDisableDialog, TotpSetupDialog } from './SecurityDialogs.tsx';
 
 export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'devices' | 'features' | 'about';
@@ -264,7 +265,7 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
             )}
             {tab === 'audio' && <AudioTab messenger={messenger} snapshot={snapshot} />}
             {tab === 'server' && <ServerTab messenger={messenger} snapshot={snapshot} />}
-            {tab === 'security' && <SecurityTab messenger={messenger} snapshot={snapshot} onDeleted={onDeleted} />}
+            {tab === 'security' && <SecurityTab messenger={messenger} snapshot={snapshot} onDeleted={onDeleted} onDevices={() => setTab('devices')} />}
             {tab === 'devices' && <DevicesTab messenger={messenger} snapshot={snapshot} onMoved={onDeleted} />}
             {tab === 'features' && <FeaturesTab snapshot={snapshot} set={set} />}
             {tab === 'about' && <AboutTab />}
@@ -564,7 +565,17 @@ function ServerTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Me
   );
 }
 
-function SecurityTab({ messenger, snapshot, onDeleted }: { messenger: Messenger; snapshot: MessengerSnapshot; onDeleted(): void }) {
+function SecurityTab({
+  messenger,
+  snapshot,
+  onDeleted,
+  onDevices,
+}: {
+  messenger: Messenger;
+  snapshot: MessengerSnapshot;
+  onDeleted(): void;
+  onDevices(): void;
+}) {
   const [oldPassword, setOld] = useState('');
   const [newPassword, setNew] = useState('');
   const [repeat, setRepeat] = useState('');
@@ -606,6 +617,9 @@ function SecurityTab({ messenger, snapshot, onDeleted }: { messenger: Messenger;
 
   return (
     <>
+      <ProtectionBar snapshot={snapshot} />
+      <SafetyCodeCard messenger={messenger} snapshot={snapshot} />
+      {feature(snapshot.settings, 'bridge') && <BridgeCard onOpen={onDevices} />}
       <div className="section">
         <div className="section-title">
           <Smartphone size={16} /> Двухфакторная аутентификация
@@ -693,6 +707,8 @@ function SecurityTab({ messenger, snapshot, onDeleted }: { messenger: Messenger;
           {busy ? <span className="spinner" /> : 'Изменить пароль'}
         </button>
       </form>
+
+      {feature(snapshot.settings, 'duress') && <DuressSection messenger={messenger} snapshot={snapshot} />}
 
       {feature(snapshot.settings, 'quickUnlock') && <QuickUnlockSection messenger={messenger} />}
 

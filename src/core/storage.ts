@@ -92,10 +92,13 @@ export async function writeVaultMeta(backend: StorageBackend, meta: VaultMeta): 
 export class SecureStore {
   readonly backend: StorageBackend;
   private dataKey: Uint8Array;
+  /** "r." for the real vault, "d." for the empty Veil behind the duress password. */
+  readonly prefix: string;
 
-  constructor(backend: StorageBackend, dataKey: Uint8Array) {
+  constructor(backend: StorageBackend, dataKey: Uint8Array, prefix = 'r.') {
     this.backend = backend;
     this.dataKey = dataKey;
+    this.prefix = prefix;
   }
 
   private closed = false;
@@ -106,13 +109,13 @@ export class SecureStore {
 
   async getBytes(name: string): Promise<Uint8Array | null> {
     this.assertOpen();
-    const raw = await this.backend.get(`r.${name}`);
+    const raw = await this.backend.get(`${this.prefix}${name}`);
     return raw ? decryptRecord(this.dataKey, name, raw) : null;
   }
 
   async putBytes(name: string, value: Uint8Array): Promise<void> {
     this.assertOpen();
-    await this.backend.set(`r.${name}`, encryptRecord(this.dataKey, name, value));
+    await this.backend.set(`${this.prefix}${name}`, encryptRecord(this.dataKey, name, value));
   }
 
   async getJSON<T>(name: string): Promise<T | null> {
@@ -125,19 +128,24 @@ export class SecureStore {
   }
 
   async delete(name: string): Promise<void> {
-    await this.backend.delete(`r.${name}`);
+    await this.backend.delete(`${this.prefix}${name}`);
   }
 
   async names(prefix = ''): Promise<string[]> {
     return (await this.backend.list())
-      .filter((key) => key.startsWith(`r.${prefix}`))
-      .map((key) => key.slice(2));
+      .filter((key) => key.startsWith(`${this.prefix}${prefix}`))
+      .map((key) => key.slice(this.prefix.length));
   }
 
   /** A copy of the data key (quick unlock keeps it in the system keychain). */
   exportKey(): Uint8Array {
     this.assertOpen();
     return this.dataKey.slice();
+  }
+
+  /** Deletes every record of this store (the other vault on the same disk stays). */
+  async destroy(): Promise<void> {
+    for (const name of await this.names()) await this.delete(name);
   }
 
   /** Forget the key; the store is unusable afterwards. */

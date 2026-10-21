@@ -85,6 +85,8 @@ export interface Settings {
   ownServer?: boolean;
   /** Make link previews when sending (the recipient never opens the link). */
   linkPreviews: boolean;
+  /** When a .veil backup file was last saved (monthly reminder). */
+  backupFileAt?: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -158,6 +160,8 @@ export interface AccountRecord {
   /** Base32 secret of the authenticator app (two-factor authentication). */
   totp?: string;
   recovery?: RecoverySettings;
+  /** The duress password is set; with `wipe` it erases the real vault when typed. */
+  duress?: { wipe: boolean; at: number };
 }
 
 /** «Избранное»: a chat with yourself that never leaves this device. */
@@ -338,7 +342,9 @@ export interface MessengerSnapshot {
   statusError?: string;
   fatal?: string;
   me: { userId: string; username: string; displayName: string; serverUrl: string };
-  security: { totp: boolean; recoveryEmail?: string; lastBackupAt?: number };
+  security: { totp: boolean; recoveryEmail?: string; lastBackupAt?: number; duress?: { wipe: boolean } };
+  /** This is the empty Veil opened by the duress password (never shown in the interface). */
+  decoy?: boolean;
   settings: Settings;
   contacts: Contact[];
   conversations: Record<string, Message[]>;

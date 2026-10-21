@@ -38,6 +38,7 @@ export function LockScreen({
   }, [quick?.pin]);
 
   const opened = (messenger: Messenger) => {
+    if (messenger.wipedReal) void bridge?.quickUnlock.disable('all');
     if (messenger.needsTotp) {
       setPending(messenger);
       setBusy(false);
