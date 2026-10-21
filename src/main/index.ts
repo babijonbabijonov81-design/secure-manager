@@ -30,6 +30,7 @@ import { SecretClipboard } from '../core/secret-clipboard.ts';
 import { discoverBridges, LanBridge } from './bridge.ts';
 import { findInvite, registerInviteProtocol } from './invite.ts';
 import { fetchLinkPreview } from './preview.ts';
+import { chooseScreenSource, listScreenSources, setupScreenShare, usesPortal } from './screen-share.ts';
 import {
   disableQuickUnlock,
   enableFingerprint,
@@ -351,6 +352,8 @@ function registerIpc(): void {
 
   // «Мост» over the local network: only encrypted frames pass through here.
   handle('preview:fetch', (url: string) => fetchLinkPreview(String(url)));
+  handle('screen:sources', async () => ({ portal: usesPortal, sources: await listScreenSources() }));
+  handle('screen:choose', (id: string | null) => chooseScreenSource(id));
   handle('invite:take', () => {
     const invite = pendingInvite;
     pendingInvite = null;
@@ -624,6 +627,7 @@ app.whenReady().then(async () => {
   }
 
   registerIpc();
+  setupScreenShare();
   void registerInviteProtocol();
   createMenu();
   systemLock = watchSystemLock(() => mainWindow?.webContents.send('system-lock'));

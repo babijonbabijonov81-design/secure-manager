@@ -1934,9 +1934,12 @@ export class Messenger {
         if (typeof content.sdp !== 'string' || content.sdp.length > 20_000) return;
         // An offer that sat in the queue (the peer was offline) is not a ringing call any more.
         if (content.k === 'offer' && queued && Math.abs(Date.now() - (Number(content.ts) || 0)) > CALL_OFFER_TTL_MS) return;
-        signal = { k: content.k, id, sdp: content.sdp };
+        signal = content.k === 'offer' && content.v === 1 ? { k: 'offer', id, sdp: content.sdp, v: 1 } : { k: content.k, id, sdp: content.sdp };
         break;
       }
+      case 'media':
+        signal = { k: 'media', id, cam: content.cam === true, scr: content.scr === true };
+        break;
       case 'ring':
         signal = { k: 'ring', id };
         break;

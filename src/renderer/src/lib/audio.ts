@@ -66,6 +66,7 @@ export async function routeOutput(target: HTMLMediaElement | AudioContext, outpu
 export interface AudioDevices {
   inputs: MediaDeviceInfo[];
   outputs: MediaDeviceInfo[];
+  cameras: MediaDeviceInfo[];
   /** Device names are only visible once microphone access was granted. */
   labeled: boolean;
   refresh(): Promise<void>;
@@ -89,7 +90,8 @@ export function useAudioDevices(): AudioDevices {
   const real = (d: MediaDeviceInfo) => d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications';
   const inputs = devices.filter((d) => d.kind === 'audioinput' && real(d));
   const outputs = devices.filter((d) => d.kind === 'audiooutput' && real(d));
-  return { inputs, outputs, labeled: inputs.some((d) => d.label), refresh };
+  const cameras = devices.filter((d) => d.kind === 'videoinput' && real(d));
+  return { inputs, outputs, cameras, labeled: inputs.some((d) => d.label), refresh };
 }
 
 /** 0…1 loudness of a stream, read on every animation frame. */

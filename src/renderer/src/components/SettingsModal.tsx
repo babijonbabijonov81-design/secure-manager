@@ -308,7 +308,7 @@ function Row({ title, text, children }: { title: string; text?: string; children
 function AudioTab({ messenger, snapshot }: { messenger: Messenger; snapshot: MessengerSnapshot }) {
   const audio = snapshot.settings.audio;
   const setAudio = (patch: Partial<AudioSettings>) => messenger.updateSettings({ audio: { ...audio, ...patch } });
-  const { inputs, outputs, refresh } = useAudioDevices();
+  const { inputs, outputs, cameras, refresh } = useAudioDevices();
   const meter = useRef<HTMLDivElement>(null);
   const [micError, setMicError] = useState('');
   const tones = useMemo(() => new Tones(), []);
@@ -321,7 +321,7 @@ function AudioTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Mes
     let cancelled = false;
     let stopMeter = () => {};
     let stream: MediaStream | null = null;
-    openMicrophone({ input, output: '', echoCancellation, noiseSuppression, autoGainControl })
+    openMicrophone({ input, output: '', echoCancellation, noiseSuppression, autoGainControl, camera: '' })
       .then((opened) => {
         stream = opened;
         if (cancelled) return opened.getTracks().forEach((t) => t.stop());
@@ -386,6 +386,24 @@ function AudioTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Mes
               <Volume2 size={15} /> Проверить
             </button>
           </div>
+        </div>
+      )}
+
+      {feature(snapshot.settings, 'video') && (
+        <div className="field" style={{ marginBottom: 12 }}>
+          <label className="field-label" htmlFor="video-camera">
+            Камера для видеозвонков
+          </label>
+          <select id="video-camera" className="input" value={audio.camera} onChange={(e) => setAudio({ camera: e.target.value })}>
+            <option value="">Как в системе</option>
+            {cameras.map((d, i) => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `Камера ${i + 1}`}
+              </option>
+            ))}
+            {missing(cameras, audio.camera) && <option value={audio.camera}>Отключённая камера</option>}
+          </select>
+          <span className="field-hint">Камера включается только в видеозвонке, когда вы нажимаете «Камера» или «С видео».</span>
         </div>
       )}
 

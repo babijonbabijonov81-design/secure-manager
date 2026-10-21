@@ -4903,3 +4903,236 @@ button:disabled {
     height: 17px;
   }
 }
+
+/* ---- Видеозвонки и показ экрана ---- */
+.call-btn:not(.mute):not(.accept):not(.decline) svg {
+  color: var(--text);
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.call-btn.active:not(.mute):not(.accept):not(.decline) svg {
+  color: var(--on-accent);
+  background: var(--accent);
+  box-shadow: none;
+}
+.call-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.call-btn:disabled svg {
+  transform: none;
+}
+.call-card .call-controls {
+  gap: 22px;
+  flex-wrap: wrap;
+}
+.call-overlay.video {
+  padding: 0;
+  background: #000;
+  backdrop-filter: none;
+}
+.call-stage {
+  /* Always dark over video, whatever the theme. */
+  --text: #f4efe9;
+  --text-2: #c9c0b6;
+  --text-3: #a39a90;
+  --surface: #151210;
+  --surface-2: #1d1916;
+  --surface-3: rgba(37, 32, 28, 0.82);
+  --border: #2e2723;
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --bg: #0c0a09;
+  color: var(--text);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0908;
+}
+.call-main {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #0b0908;
+}
+.call-main.screen {
+  object-fit: contain;
+}
+.call-main.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+}
+.mirror {
+  transform: scaleX(-1);
+}
+.call-stage-top {
+  position: absolute;
+  inset: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: calc(14px + var(--titlebar-h)) 18px 40px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent);
+  color: #fff;
+}
+.call-stage-top .icon-btn {
+  justify-self: end;
+  color: #fff;
+  min-width: 44px;
+  min-height: 44px;
+}
+.call-stage-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+.call-stage-title b {
+  font-size: 16px;
+}
+.call-stage-title span {
+  font-family: var(--mono);
+  font-size: 13px;
+  opacity: 0.85;
+}
+.call-sharing {
+  position: absolute;
+  top: calc(84px + var(--titlebar-h));
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+}
+.call-sharing.inline {
+  position: static;
+  transform: none;
+  margin-top: 12px;
+  white-space: normal;
+  text-align: center;
+}
+.call-tiles {
+  position: absolute;
+  right: 18px;
+  bottom: 130px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.call-tile {
+  width: clamp(140px, 18vw, 240px);
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border-radius: 16px;
+  background: #1d1916;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.14),
+    var(--shadow);
+}
+.call-stage-words {
+  position: absolute;
+  left: 18px;
+  bottom: 130px;
+  width: min(320px, calc(100% - 36px));
+}
+.call-stage-words .call-words {
+  margin: 0;
+  background: rgba(21, 18, 16, 0.86);
+  color: #f4efe9;
+  backdrop-filter: blur(12px);
+}
+.call-stage-controls {
+  position: absolute;
+  inset: auto 0 0;
+  display: flex;
+  justify-content: center;
+  padding: 40px 18px 22px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.6), transparent);
+}
+.call-stage-controls .call-controls {
+  margin: 0;
+  gap: 22px;
+  min-height: 0;
+}
+.call-stage-controls .call-btn {
+  color: rgba(255, 255, 255, 0.85);
+}
+.screen-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  padding: 2px;
+}
+.screen-source {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  min-height: 44px;
+  border-radius: var(--r);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s var(--spring);
+}
+.screen-source:hover,
+.screen-source:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  transform: translateY(-1px);
+}
+.screen-source img {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #000;
+}
+.screen-source span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* While the screen is shown: «Избранное» is blurred too, until hovered. */
+.shell.sharing .vault-card {
+  filter: blur(9px);
+  transition: filter 0.2s;
+}
+.shell.sharing .vault-card:hover,
+.shell.sharing .vault-card:focus-within {
+  filter: none;
+}
+@media (max-width: 640px) {
+  .call-tiles {
+    bottom: 150px;
+  }
+  .call-stage-controls .call-controls,
+  .call-card .call-controls {
+    gap: 14px;
+  }
+  .call-btn svg {
+    padding: 15px;
+  }
+}

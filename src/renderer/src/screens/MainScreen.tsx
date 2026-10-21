@@ -57,8 +57,12 @@ const readShieldPreference = () => {
   }
 };
 
+const noSubscribe = () => () => {};
+const noCall = () => null;
+
 export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDeleted }: Props) {
   const full = useSyncExternalStore(messenger.subscribe, messenger.getSnapshot);
+  const sharingRef = useRef(false);
   const settings = full.settings;
   // Hidden chats stay out of every list until the secret phrase and the PIN open them.
   const [hiddenOpen, setHiddenOpen] = useState(false);
@@ -115,6 +119,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
       if (!document.hasFocus()) showNotification('Избранное', body, SAVED_ID, () => setActiveId(SAVED_ID));
     };
     incomingRef.current = (contact, message) => {
+      if (sharingRef.current) return;
       const focused = document.hasFocus() && !document.hidden;
       if (focused && activeRef.current === contact.id) return;
       const current = messenger.getSnapshot().settings;
@@ -139,14 +144,14 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
     };
   }, [messenger, incomingRef, reminderRef, toast]);
 
-  // Audio calls: one manager per unlocked account; locking hangs up.
+  // Calls: one manager per unlocked account; locking hangs up.
   const [calls, setCalls] = useState<CallManager | null>(null);
   useEffect(() => {
     const manager = new CallManager(messenger, {
       onIncoming: (contact, callId) => {
         if (document.hasFocus() && !document.hidden) return;
         const current = messenger.getSnapshot().settings;
-        const body = 'Входящий аудиозвонок';
+        const body = manager.getState()?.videoCall ? 'Входящий видеозвонок' : 'Входящий аудиозвонок';
         if (bridge && current.notificationStyle === 'veil') bridge.notify({ title: contact.displayName, body, tag: `call:${callId}`, card: cardData(contact, body, true) });
         else showNotification(contact.displayName, body, `call:${callId}`, () => manager.setMinimized(false));
       },
@@ -176,12 +181,24 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
   const audio = settings.audio;
   useEffect(() => calls?.applySettings(), [calls, audio]);
   const startCall = useCallback(
-    (contactId: string) => {
+    (contactId: string, video?: boolean) => {
       if (!calls) return;
       setActiveId(contactId);
-      calls.start(contactId).catch((error: Error) => toast(error.message, 'error'));
+      calls.start(contactId, { video }).catch((error: Error) => toast(error.message, 'error'));
     },
     [calls, toast],
+  );
+
+  // «Показ экрана»: while my screen is shown, Veil blurs every chat and keeps notifications away.
+  const callState = useSyncExternalStore(calls?.subscribe ?? noSubscribe, calls?.getState ?? noCall);
+  const sharing = !!callState?.screen;
+  sharingRef.current = sharing;
+  useEffect(() => {
+    if (sharing) bridge?.closeAllNotifications();
+  }, [sharing]);
+  const viewSnapshot = useMemo(
+    () => (sharing ? { ...snapshot, settings: { ...snapshot.settings, veil: true, veilScope: 'all' as const, features: { ...snapshot.settings.features, veil: true } } } : snapshot),
+    [snapshot, sharing],
   );
 
   useEffect(
@@ -348,7 +365,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
   const savedActive = activeId === SAVED_ID;
 
   return (
-    <div className={`shell${narrow ? ' narrow' : ''}${wide ? ' wide' : ''}`} data-pane={active ? 'chat' : 'list'} data-view={savedActive ? 'saved' : view}>
+    <div className={`shell${narrow ? ' narrow' : ''}${wide ? ' wide' : ''}${sharing ? ' sharing' : ''}`} data-pane={active ? 'chat' : 'list'} data-view={savedActive ? 'saved' : view}>
       {bridge && (
         <div className="titlebar">
           <span className={`status-pill ${snapshot.status}`}>
@@ -368,7 +385,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           </button>
         </div>
       )}
-      {calls && <CallOverlay calls={calls} contacts={snapshot.contacts} showWords={feature(settings, 'callWords')} />}
+      {calls && <CallOverlay calls={calls} contacts={snapshot.contacts} showWords={feature(settings, 'callWords')} video={feature(settings, 'video')} />}
       {update && !updateHidden && ['available', 'downloading', 'ready'].includes(update.status) && (
         <div className="banner update">
           <DownloadCloud size={15} />
@@ -462,7 +479,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           <ChatList
             ref={searchRef}
             messenger={messenger}
-            snapshot={snapshot}
+            snapshot={viewSnapshot}
             activeId={activeId}
             onSelect={select}
             onNewChat={() => setModal({ kind: 'new' })}
@@ -496,10 +513,10 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           <ChatView
             key={active.id}
             messenger={messenger}
-            snapshot={snapshot}
+            snapshot={viewSnapshot}
             contact={active}
             infoOpen={infoOpen}
-            veiled={veiledFor(settings, active)}
+            veiled={veiledFor(viewSnapshot.settings, active)}
             onToggleInfo={toggleInfo}
             onShowSafety={showInfo}
             onCall={startCall}

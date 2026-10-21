@@ -123,6 +123,12 @@ export interface VeilBridge {
   openExternal(url: string): void;
   /** The sender's side of link previews: fetches a public page's title, description and picture. */
   linkPreview(url: string): Promise<{ url: string; title: string; desc?: string; site?: string; image?: Uint8Array; imageType?: string } | null>;
+  /** «Показ экрана»: screens and windows to pick from, or `portal` when the system asks itself (Wayland). */
+  screen: {
+    sources(): Promise<{ portal: boolean; sources: { id: string; name: string; kind: 'screen' | 'window'; thumbnail: string }[] }>;
+    /** The next getDisplayMedia() shares this source (null: cancel). */
+    choose(id: string | null): Promise<void>;
+  };
   /** A veil:// link the system opened Veil with, once (then null). */
   takeInvite(): Promise<string | null>;
   /** A veil:// link arrived while Veil was running: call takeInvite(). */

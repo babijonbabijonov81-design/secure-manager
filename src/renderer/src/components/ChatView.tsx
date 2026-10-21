@@ -19,6 +19,7 @@ import {
   Sticker,
   Trash2,
   TriangleAlert,
+  Video,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
@@ -45,7 +46,7 @@ interface Props {
   veiled: boolean;
   onToggleInfo(): void;
   onShowSafety(): void;
-  onCall(contactId: string): void;
+  onCall(contactId: string, video?: boolean): void;
   /** Narrow windows show the list and the chat one at a time. */
   onBack(): void;
   /** A search result: scroll to this message and highlight it. */
@@ -380,6 +381,11 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
           {!saved && (
             <button className="icon-btn" onClick={() => onCall(contact.id)} aria-label="Позвонить" title="Аудиозвонок" disabled={contact.blocked}>
               <Phone size={19} />
+            </button>
+          )}
+          {!saved && feature(snapshot.settings, 'video') && (
+            <button className="icon-btn" onClick={() => onCall(contact.id, true)} aria-label="Видеозвонок" title="Видеозвонок" disabled={contact.blocked}>
+              <Video size={20} />
             </button>
           )}
           {shield ? (

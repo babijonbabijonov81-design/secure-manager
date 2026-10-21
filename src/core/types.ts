@@ -43,6 +43,8 @@ export interface AudioSettings {
   echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
+  /** Camera deviceId for video calls; '' is the system default. */
+  camera: string;
 }
 
 export interface Settings {
@@ -104,7 +106,7 @@ export const DEFAULT_SETTINGS: Settings = {
   spellcheck: true,
   autocorrect: true,
   lastSeen: 'everyone',
-  audio: { input: '', output: '', echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  audio: { input: '', output: '', echoCancellation: true, noiseSuppression: true, autoGainControl: true, camera: '' },
   callsRelayOnly: false,
   veil: false,
   veilScope: 'all',
@@ -262,7 +264,10 @@ export type CallEndReason = 'hangup' | 'decline' | 'busy' | 'cancel' | 'timeout'
 
 /** WebRTC signalling, carried end-to-end encrypted; `sdp` includes all ICE candidates. */
 export type CallSignal =
-  | { k: 'offer'; id: string; sdp: string }
+  /** `v`: a video call (the caller's camera is on from the start). */
+  | { k: 'offer'; id: string; sdp: string; v?: 1 }
+  /** Camera and screen sharing switched on or off during the call (features.video). */
+  | { k: 'media'; id: string; cam: boolean; scr: boolean }
   | { k: 'ring'; id: string }
   | { k: 'answer'; id: string; sdp: string }
   | { k: 'end'; id: string; r: CallEndReason };

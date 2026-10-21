@@ -137,6 +137,19 @@ try {
   await page.getByText('Добро пожаловать').waitFor({ timeout: 30_000 });
   console.log('quick unlock with PIN ok');
 
+  // «Показ экрана»: Veil's picker lists the screens (X11 here; Wayland would use the portal).
+  const screens = await page.evaluate(() => window.veil.screen.sources());
+  if (!screens.portal && !screens.sources.some((s) => s.kind === 'screen' && s.thumbnail.startsWith('data:image/'))) throw new Error('no screens to share');
+  await page.evaluate((id) => window.veil.screen.choose(id), screens.sources[0]?.id ?? null);
+  const shared = await page.evaluate(async () => {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    const ok = stream.getVideoTracks().length === 1;
+    stream.getTracks().forEach((t) => t.stop());
+    return ok;
+  });
+  if (!shared) throw new Error('getDisplayMedia did not get the chosen screen');
+  console.log('screen sharing source ok:', screens.portal ? 'portal' : `${screens.sources.length} sources`);
+
   // A veil:// link opened by the system while Veil runs (a second copy is started with it).
   const link = `veil://add/smoke_friend?k=${'A'.repeat(43)}`;
   await app.evaluate(({ app: a }, url) => a.emit('second-instance', {}, ['veil', url], {}), link);
