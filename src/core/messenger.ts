@@ -16,6 +16,7 @@ import { base32Encode, otpauthUrl, verifyTotp } from '../../server/src/shared/to
 import { b64, concat, fromUtf8, pack, randomId, unb64, unpack, utf8 } from '../../server/src/shared/wire.ts';
 import { compress, decompress } from './compress.ts';
 import { safetyNumber } from './crypto/fingerprint.ts';
+import { newContentKey, openContent, sealContent } from './crypto/media.ts';
 import { generateDH, keyPairFromJSON, keyPairToJSON, random, sign } from './crypto/primitives.ts';
 import { openEnvelope, sealEnvelope, type SenderInfo } from './crypto/sealed.ts';
 import {
@@ -164,6 +165,7 @@ export function callTitle(message: Message): string {
 
 export function snippetOf(message: Message): string {
   if (message.call) return callTitle(message);
+  if (message.once) return isVideo(attachmentsOf(message)[0]?.mime) ? 'Видео · один просмотр' : 'Фото · один просмотр';
   if (message.text) return message.text.slice(0, 200);
   const atts = attachmentsOf(message);
   const first = atts[0];
@@ -174,11 +176,22 @@ export function snippetOf(message: Message): string {
   return `Файл · ${first.name}`;
 }
 
+const isVideo = (mime: string | undefined) => !!mime?.startsWith('video/');
+/** Photos and videos can be sent "view once". */
+export const canSendOnce = (mime: string) => IMAGE_MIME.test(mime) || /^video\/(mp4|webm|ogg|quicktime)$/.test(mime);
+
 const formatSeconds = (seconds: number) => {
   const s = Math.max(0, Math.round(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
+const unb64Safe = (value: string): Uint8Array | null => {
+  try {
+    return unb64(value);
+  } catch {
+    return null;
+  }
+};
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 const cleanEmoji = (value: unknown) => (typeof value === 'string' ? [...value].slice(0, 8).join('') : '');
 const cleanUsername = (username: string) => username.trim().toLowerCase().replace(/^@/, '');
@@ -367,6 +380,12 @@ interface LoadedState {
 export interface SendOptions {
   /** Id of the message being replied to. */
   replyTo?: string;
+}
+
+export interface MediaOptions extends SendOptions {
+  caption?: string;
+  /** One photo or video that opens once, then disappears on both sides. */
+  once?: boolean;
 }
 
 export class Messenger {
@@ -1061,11 +1080,12 @@ export class Messenger {
    * Sends photos/files with an optional caption. Pictures form an album; anything over
    * the size or count limit is split into several messages.
    */
-  async sendMedia(contactId: string, files: OutgoingFile[], options: SendOptions & { caption?: string } = {}): Promise<void> {
+  async sendMedia(contactId: string, files: OutgoingFile[], options: MediaOptions = {}): Promise<void> {
     const contact = this.requireSendable(contactId);
     for (const file of files) {
       if (file.data.length > MAX_ATTACHMENT_BYTES) throw new MessengerError('too_large', `«${file.name}» больше 20 МБ`);
     }
+    if (options.once) return this.sendOnce(contact, files, options);
     const groups: OutgoingFile[][] = [];
     let current: OutgoingFile[] = [];
     let size = 0;
@@ -1117,12 +1137,64 @@ export class Messenger {
   }
 
   /**
+   * View-once: the photo or video is sealed with a fresh key that travels inside the end-to-end
+   * message. Neither side can open it again after the recipient has seen it.
+   */
+  private async sendOnce(contact: Contact, files: OutgoingFile[], options: MediaOptions): Promise<void> {
+    const file = files[0];
+    if (files.length !== 1 || !canSendOnce(file.mime)) throw new MessengerError('once_kind', 'Один раз можно открыть только одно фото или видео');
+    if (isSavedChat(contact.id)) throw new MessengerError('once_saved', 'В «Избранное» нельзя отправить фото на один просмотр');
+    const key = newContentKey();
+    const sealed = sealContent(key, file.data, 'once');
+    const att: Attachment = {
+      id: randomId(),
+      name: isVideo(file.mime) ? 'video' : 'photo',
+      mime: file.mime,
+      size: sealed.length,
+      kind: IMAGE_MIME.test(file.mime) ? 'image' : 'file',
+      ...(file.w && file.h ? { w: file.w, h: file.h } : {}),
+    };
+    await this.store.putBytes(`att.${att.id}`, sealed);
+    const caption = options.caption?.trim();
+    const message = this.newOutgoing(contact, { atts: [att], once: { k: b64(key) }, ...(caption ? { text: caption } : {}) }, options.replyTo);
+    key.fill(0);
+    this.addMessage(contact.id, message);
+    this.updateContact(contact.id, { lastActivity: message.ts });
+    await this.deliverMessage(contact, message);
+  }
+
+  /**
+   * Opens a received view-once photo or video. It is decrypted into memory only; the key and the
+   * stored file are deleted right away, and the sender is told to delete theirs.
+   */
+  async openOnce(contactId: string, messageId: string): Promise<{ data: Uint8Array; mime: string }> {
+    const message = this.conversations.get(contactId)?.find((m) => m.id === messageId);
+    const att = message ? attachmentsOf(message)[0] : undefined;
+    if (!message || message.dir !== 'in' || !message.once?.k || !att) throw new MessengerError('once_gone', 'Это фото уже открывали');
+    const sealed = await this.store.getBytes(`att.${att.id}`);
+    if (!sealed) throw new MessengerError('once_gone', 'Это фото уже открывали');
+    const key = unb64(message.once.k);
+    let data: Uint8Array;
+    try {
+      data = openContent(key, sealed, 'once');
+    } finally {
+      key.fill(0);
+    }
+    await this.store.delete(`att.${att.id}`);
+    this.patchMessages(contactId, new Set([messageId]), (m) => ({ ...m, once: { opened: Date.now() } }));
+    const contact = this.contacts[contactId];
+    if (contact && !contact.blocked) void this.sendControl(contact, { t: 'viewed', id: messageId });
+    return { data, mime: att.mime };
+  }
+
+  /**
    * Copies a message (text and files) into «Избранное». The files are copied too, so the note
    * survives even if the original message is deleted or disappears.
    */
   async saveToFavorites(contactId: string, messageId: string): Promise<void> {
     const source = this.conversations.get(contactId)?.find((m) => m.id === messageId);
     if (!source || source.dir === 'system' || source.call) return;
+    if (source.once) throw new MessengerError('once_save', 'Фото на один просмотр нельзя сохранить');
     const atts: Attachment[] = [];
     for (const att of attachmentsOf(source)) {
       const bytes = await this.store.getBytes(`att.${att.id}`);
@@ -1176,6 +1248,7 @@ export class Messenger {
       ...(message.text ? { text: message.text } : {}),
       ...(message.timer ? { timer: message.timer } : {}),
       ...(message.reply ? { r: { id: message.reply.id, s: message.reply.text, a: message.reply.out ? 'me' : 'you' } } : {}),
+      ...(message.once?.k ? { once: { k: message.once.k } } : {}),
       p: { n: this.account.displayName },
     };
     let data: Uint8Array | undefined;
@@ -1698,6 +1771,11 @@ export class Messenger {
           content.r && typeof content.r.id === 'string'
             ? { id: content.r.id, text: String(content.r.s ?? '').slice(0, 300), out: content.r.a === 'you' }
             : undefined;
+        const onceKey = typeof content.once?.k === 'string' && unb64Safe(content.once.k)?.length === 32 ? content.once.k : undefined;
+        if (content.once && (!onceKey || atts.length !== 1)) {
+          for (const att of atts) await this.store.delete(`att.${att.id}`);
+          return;
+        }
         const message: Message = {
           id: content.id,
           dir: 'in',
@@ -1707,6 +1785,7 @@ export class Messenger {
           ...(atts.length ? { atts } : {}),
           ...(reply ? { reply } : {}),
           ...(timer > 0 ? { timer, expiresAt: now + timer * 1000 } : {}),
+          ...(onceKey ? { once: { k: onceKey } } : {}),
         };
         this.addMessage(contact.id, message);
         this.clearTyping(contact.id);
@@ -1739,6 +1818,14 @@ export class Messenger {
           (this.conversations.get(contact.id) ?? []).filter((m) => m.dir === 'in' && content.ids.includes(m.id)).map((m) => m.id),
         );
         if (theirs.size) await this.eraseMessages(contact.id, theirs);
+        return;
+      }
+      case 'viewed': {
+        if (typeof content.id !== 'string') return;
+        const mine = this.conversations.get(contact.id)?.find((m) => m.id === content.id && m.dir === 'out' && m.once);
+        if (!mine || mine.once?.opened) return;
+        await this.deleteAttachments(mine);
+        this.patchMessages(contact.id, new Set([mine.id]), (m) => ({ ...m, once: { opened: Date.now() } }));
         return;
       }
       case 'react': {
@@ -1971,7 +2058,7 @@ export class Messenger {
     try {
       const conversations: Record<string, Message[]> = {};
       for (const [id, messages] of this.conversations) {
-        conversations[id] = messages.filter((m) => !m.expiresAt).slice(-BACKUP_MESSAGES_PER_CHAT);
+        conversations[id] = messages.filter((m) => !m.expiresAt && !m.once).slice(-BACKUP_MESSAGES_PER_CHAT);
       }
       const payload: BackupPayload = {
         v: 1,

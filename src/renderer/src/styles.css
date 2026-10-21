@@ -3723,3 +3723,80 @@ button:disabled {
 .key-banner.held {
   margin-bottom: 18px;
 }
+
+/* ---- view-once photos and videos (P0-4) ---- */
+.once-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 230px;
+  min-height: 52px;
+  padding: 6px 6px 6px 2px;
+  text-align: left;
+  border-radius: 14px;
+  color: inherit;
+}
+.once-card:not(:disabled):hover .once-icon {
+  transform: scale(1.06);
+}
+.once-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--amber-text);
+  background: rgba(var(--amber-rgb), 0.16);
+  transition: transform 0.15s var(--ease);
+}
+.msg-row.out .once-icon {
+  color: var(--on-accent);
+  background: rgba(var(--on-accent-rgb), 0.16);
+}
+.once-card.opened .once-icon {
+  color: var(--text-3);
+  background: var(--surface-hover);
+}
+.msg-row.out .once-card.opened .once-icon {
+  color: rgba(var(--on-accent-rgb), 0.7);
+}
+.once-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.once-text b {
+  font-size: 14px;
+  font-weight: 650;
+}
+.once-text span {
+  font-size: 12px;
+  opacity: 0.75;
+}
+.once-card:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.once-viewer video,
+.once-viewer img {
+  max-width: min(92vw, 1400px);
+  max-height: 84vh;
+  border-radius: 12px;
+  user-select: none;
+}
+.once-note {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #f4efe9;
+  font-size: 13px;
+  white-space: nowrap;
+}

@@ -266,6 +266,11 @@ export interface Message {
   call?: CallRecord;
   /** Saved to «Избранное» from another chat: who wrote it and when. */
   fwd?: { name: string; ts: number };
+  /**
+   * View-once photo or video: the attachment is sealed with key `k`. The key and the file are
+   * deleted on both sides once the recipient opens it (`opened`).
+   */
+  once?: { k?: string; opened?: number };
 }
 
 export const attachmentsOf = (message: Message): Attachment[] => message.atts ?? (message.att ? [message.att] : []);
@@ -286,11 +291,15 @@ export type Content =
       r?: { id: string; s: string; a: 'me' | 'you' };
       timer?: number;
       p?: { n: string };
+      /** View-once: the key that opens the sealed attachment. */
+      once?: { k: string };
     }
   | { t: 'rcpt'; k: 'd' | 'r'; ids: string[] }
   | { t: 'typ'; on: boolean }
   | { t: 'timer'; seconds: number; ts: number }
   | { t: 'del'; ids: string[] }
+  /** A view-once message was opened: the sender deletes its copy too. */
+  | { t: 'viewed'; id: string }
   | { t: 'react'; id: string; e: string }
   /** Presence: online, going offline, or hidden ("recently"); `ask` requests a reply. */
   | { t: 'pres'; s: 'on' | 'off' | 'hidden'; ask?: 1 }

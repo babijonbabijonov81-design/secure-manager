@@ -7,6 +7,8 @@ import {
   CornerUpLeft,
   Download,
   FileText,
+  Film,
+  Flame,
   Forward,
   ImageIcon,
   MoreHorizontal,
@@ -139,6 +141,7 @@ interface BubbleProps {
   onCopy(message: Message): void;
   onJump(id: string): void;
   onCallBack(): void;
+  onOpenOnce(message: Message): void;
 }
 
 /** A call in the chat history: direction, outcome, length and a call-back button. */
@@ -170,6 +173,24 @@ function CallRow({ message, onContext, onCallBack }: { message: Message; onConte
   );
 }
 
+/** A view-once photo or video: a card that opens it full screen, then says it was opened. */
+function OnceCard({ message, onOpen }: { message: Message; onOpen(): void }) {
+  const video = attachmentsOf(message)[0]?.mime.startsWith('video/');
+  const what = video ? 'Видео' : 'Фото';
+  const opened = !!message.once?.opened;
+  const canOpen = message.dir === 'in' && !opened && !!message.once?.k;
+  const label = opened ? (message.dir === 'in' ? `${what} открыто` : 'Открыто') : `${what} · откроется один раз`;
+  return (
+    <button className={`once-card${opened ? ' opened' : ''}`} onClick={onOpen} disabled={!canOpen} data-testid="once-card">
+      <span className="once-icon">{video ? <Film size={18} /> : <Flame size={18} />}</span>
+      <span className="once-text">
+        <b>{label}</b>
+        <span>{canOpen ? 'Нажмите, чтобы открыть' : message.dir === 'out' && !opened ? 'Собеседник ещё не открывал' : 'Ключ удалён у обоих'}</span>
+      </span>
+    </button>
+  );
+}
+
 export const Bubble = memo(function Bubble(props: BubbleProps) {
   const { message, messenger, contactName, groupStart, groupEnd, highlighted } = props;
   const [pickerAnchor, setPickerAnchor] = useState<HTMLElement | null>(null);
@@ -190,8 +211,9 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
   );
 
   let bubbleClass = 'bubble';
-  const mediaOnly = images.length > 0 && !message.text && !files.length && !message.reply && !message.fwd;
-  if (sticker) bubbleClass += ' sticker-bubble';
+  const mediaOnly = images.length > 0 && !message.text && !files.length && !message.reply && !message.fwd && !message.once;
+  if (message.once) bubbleClass += ' once-bubble';
+  else if (sticker) bubbleClass += ' sticker-bubble';
   else if (mediaOnly) bubbleClass += ' media';
   else if (images.length) bubbleClass += ' with-media';
   else if (!atts.length && isEmojiOnly(message.text)) bubbleClass += ' emoji-only';
@@ -238,9 +260,10 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
                 <span>{message.reply.text || 'Сообщение'}</span>
               </button>
             )}
-            {sticker && <StickerImage messenger={messenger} att={sticker} />}
-            {images.length > 0 && <Album messenger={messenger} images={images} onOpen={(i) => props.onOpenMedia(message, i)} />}
-            {files.map((att) => (
+            {message.once && <OnceCard message={message} onOpen={() => props.onOpenOnce(message)} />}
+            {!message.once && sticker && <StickerImage messenger={messenger} att={sticker} />}
+            {!message.once && images.length > 0 && <Album messenger={messenger} images={images} onOpen={(i) => props.onOpenMedia(message, i)} />}
+            {!message.once && files.map((att) => (
               <div className="file-card" key={att.id}>
                 <button className="file-icon" onClick={() => void saveAttachment(messenger, att)} aria-label="Сохранить файл">
                   <Download size={20} />
@@ -255,7 +278,7 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
               </div>
             ))}
             {voice && <VoicePlayer messenger={messenger} att={voice} />}
-            {message.text && <div className={images.length ? 'caption' : 'text'}>{linkify(message.text)}</div>}
+            {message.text && <div className={images.length && !message.once ? 'caption' : 'text'}>{linkify(message.text)}</div>}
             {meta}
           </div>
 
@@ -273,7 +296,7 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
             <button className="icon-btn sm" title="Ответить" aria-label="Ответить" onClick={() => props.onReply(message)}>
               <CornerUpLeft size={17} />
             </button>
-            {(message.text || images.length === 1) && (
+            {(message.text || images.length === 1) && !message.once && (
               <button className="icon-btn sm" title="Копировать" aria-label="Копировать" onClick={() => props.onCopy(message)}>
                 <Copy size={16} />
               </button>

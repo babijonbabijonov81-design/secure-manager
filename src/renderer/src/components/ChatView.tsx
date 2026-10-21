@@ -6,6 +6,7 @@ import {
   Copy,
   CornerUpLeft,
   Download,
+  Flame,
   Hourglass,
   Info,
   LockKeyhole,
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
+import { bridge, platform } from '../../../core/platform.ts';
 import { attachmentsOf, isSavedChat, MAX_ATTACHMENT_BYTES, QUICK_REACTIONS, type Attachment, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
 import { attachmentUrl, saveAttachment } from '../lib/attachments.ts';
 import { formatDay, sameDay, systemText, timerChip } from '../lib/format.ts';
@@ -120,14 +122,14 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
     [toast],
   );
 
-  const sendPending = async (caption: string, compress: boolean) => {
+  const sendPending = async (caption: string, compress: boolean, once: boolean) => {
     const files = pending;
     const reply = replyTo?.id;
     setPending([]);
     setReplyTo(null);
     try {
       const prepared = await Promise.all(files.map((f) => prepareFile(f, compress)));
-      await messenger.sendMedia(contact.id, prepared, { caption, replyTo: reply });
+      await messenger.sendMedia(contact.id, prepared, { caption, replyTo: reply, once });
     } catch (e) {
       toast((e as Error).message, 'error');
     }
@@ -167,6 +169,21 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
   );
   const onCopy = useCallback((message: Message) => void copy(message), [copy]);
   const onCallBack = useCallback(() => onCall(contact.id), [onCall, contact.id]);
+  const [onceView, setOnceView] = useState<{ url: string; video: boolean } | null>(null);
+  const onOpenOnce = useCallback(
+    (message: Message) => {
+      messenger
+        .openOnce(contact.id, message.id)
+        .then(({ data, mime }) => {
+          // Decrypted into memory only; the blob is revoked and the bytes wiped on close.
+          const url = URL.createObjectURL(new Blob([data as BlobPart], { type: mime }));
+          data.fill(0);
+          setOnceView({ url, video: mime.startsWith('video/') });
+        })
+        .catch((e: Error) => toast(e.message, 'error'));
+    },
+    [messenger, contact.id, toast],
+  );
   const onJump = useCallback((id: string) => {
     const el = document.getElementById(`msg-${id}`);
     if (!el) return;
@@ -185,6 +202,14 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
       ];
     const atts = attachmentsOf(m);
     const items: MenuItem[] = [{ label: 'Ответить', icon: <CornerUpLeft size={16} />, onClick: () => setReplyTo(m) }];
+    if (m.once) {
+      // View-once: no copying, saving or forwarding.
+      if (m.status === 'failed') items.push({ label: 'Отправить снова', icon: <RotateCcw size={16} />, onClick: () => onRetry(m) });
+      items.push({ label: 'Удалить у меня', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, false) });
+      if (m.dir === 'out' && m.status !== 'failed' && m.status !== 'pending')
+        items.push({ label: 'Удалить у всех', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, true) });
+      return items;
+    }
     if (!saved && (m.text || atts.length))
       items.push({
         label: 'В избранное',
@@ -277,6 +302,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
         onCopy={onCopy}
         onJump={onJump}
         onCallBack={onCallBack}
+        onOpenOnce={onOpenOnce}
       />,
     );
     previous = message;
@@ -439,10 +465,11 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
       {pending.length > 0 && (
         <AttachmentPreview
           files={pending}
+          allowOnce={!saved && feature(snapshot.settings, 'viewOnce')}
           onAdd={queueFiles}
           onRemove={(i) => setPending((list) => list.filter((_, j) => j !== i))}
           onClose={() => setPending([])}
-          onSend={(caption, compress) => void sendPending(caption, compress)}
+          onSend={(caption, compress, once) => void sendPending(caption, compress, once)}
         />
       )}
       {menu && (
@@ -473,7 +500,48 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
         />
       )}
       {lightbox && <Lightbox messenger={messenger} items={lightbox.items} start={lightbox.index} onClose={() => setLightbox(null)} />}
+      {onceView && (
+        <OnceViewer
+          view={onceView}
+          protectionSetting={snapshot.settings.screenProtection}
+          onClose={() => {
+            URL.revokeObjectURL(onceView.url);
+            setOnceView(null);
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+/**
+ * Full-screen view of a view-once photo or video. Screen capture is blocked while it is open
+ * where the system allows it; there is no saving, copying or right-click menu.
+ */
+function OnceViewer({ view, protectionSetting, onClose }: { view: { url: string; video: boolean }; protectionSetting: boolean; onClose(): void }) {
+  useEscape(onClose);
+  const protectable = platform === 'win32' || platform === 'darwin';
+  useEffect(() => {
+    bridge?.setContentProtection(true);
+    return () => bridge?.setContentProtection(protectionSetting);
+  }, [protectionSetting]);
+  return (
+    <div className="lightbox once-viewer" role="dialog" aria-modal="true" aria-label="Просмотр один раз" onContextMenu={(e) => e.preventDefault()}>
+      {view.video ? (
+        <video src={view.url} autoPlay controls controlsList="nodownload noplaybackrate" disablePictureInPicture onClick={(e) => e.stopPropagation()} />
+      ) : (
+        <img src={view.url} alt="" draggable={false} />
+      )}
+      <div className="once-note">
+        <Flame size={15} />
+        {protectable ? 'Открывается один раз. Снимок экрана заблокирован.' : 'Открывается один раз. На Linux запретить снимок экрана нельзя.'}
+      </div>
+      <div className="lightbox-actions">
+        <button className="icon-btn" onClick={onClose} aria-label="Закрыть">
+          <X size={20} />
+        </button>
+      </div>
+    </div>
   );
 }
 

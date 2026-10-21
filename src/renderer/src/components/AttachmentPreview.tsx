@@ -1,21 +1,27 @@
 import { FileText, ImagePlus, SendHorizontal, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { canSendOnce } from '../../../core/messenger.ts';
 import { MAX_ALBUM_ITEMS } from '../../../core/types.ts';
 import { formatSize } from '../lib/format.ts';
 import { Modal, Toggle } from '../lib/ui.tsx';
 
 interface Props {
   files: File[];
+  /** View-once sending is available (feature on, not «Избранное»). */
+  allowOnce?: boolean;
   onAdd(files: File[]): void;
   onRemove(index: number): void;
   onClose(): void;
-  onSend(caption: string, compress: boolean): void;
+  onSend(caption: string, compress: boolean, once: boolean): void;
 }
 
 /** Telegram-style "send files" dialog: thumbnails, caption and photo compression. */
-export function AttachmentPreview({ files, onAdd, onRemove, onClose, onSend }: Props) {
+export function AttachmentPreview({ files, allowOnce, onAdd, onRemove, onClose, onSend }: Props) {
   const [caption, setCaption] = useState('');
   const [compress, setCompress] = useState(true);
+  const [onceChosen, setOnce] = useState(false);
+  const onceAvailable = !!allowOnce && files.length === 1 && canSendOnce(files[0].type);
+  const once = onceAvailable && onceChosen;
   const input = useRef<HTMLInputElement>(null);
   const [urls, setUrls] = useState<(string | null)[]>([]);
   useEffect(() => {
@@ -75,10 +81,19 @@ export function AttachmentPreview({ files, onAdd, onRemove, onClose, onSend }: P
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              onSend(caption, compress);
+              onSend(caption, compress, once);
             }
           }}
         />
+        {onceAvailable && (
+          <div className="setting-row" style={{ padding: 0, border: 0 }}>
+            <div className="grow">
+              <b>Открыть один раз</b>
+              <span>Собеседник откроет {files[0].type.startsWith('video/') ? 'видео' : 'фото'} один раз, потом оно исчезнет у вас обоих. Переслать и сохранить его нельзя.</span>
+            </div>
+            <Toggle label="Открыть один раз" on={onceChosen} onChange={setOnce} />
+          </div>
+        )}
         {images > 0 && (
           <div className="setting-row" style={{ padding: 0, border: 0 }}>
             <div className="grow">
@@ -95,7 +110,7 @@ export function AttachmentPreview({ files, onAdd, onRemove, onClose, onSend }: P
           <button className="btn btn-secondary" onClick={onClose}>
             Отмена
           </button>
-          <button className="btn btn-primary" onClick={() => onSend(caption, compress)} disabled={!files.length}>
+          <button className="btn btn-primary" onClick={() => onSend(caption, compress, once)} disabled={!files.length}>
             <SendHorizontal size={17} /> Отправить
           </button>
         </div>
