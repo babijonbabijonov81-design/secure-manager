@@ -72,12 +72,24 @@ function matches(message: Message, filter: Filter): boolean {
 }
 
 /** «Избранное» as a vault: notes, passwords, links and files kept only on this computer. */
-export function VaultView({ messenger, snapshot }: { messenger: Messenger; snapshot: MessengerSnapshot }) {
+export function VaultView({ messenger, snapshot, focusId }: { messenger: Messenger; snapshot: MessengerSnapshot; focusId?: string }) {
   const entries = useMemo(
     () => (snapshot.conversations[SAVED_ID] ?? []).filter((m) => m.dir !== 'system' && !m.call).slice().reverse(),
     [snapshot.conversations],
   );
   const [filter, setFilter] = useState<Filter>('all');
+  // A search result in «Избранное»: show everything and scroll to the entry.
+  useEffect(() => {
+    if (!focusId) return;
+    setFilter('all');
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`msg-${focusId}`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el?.classList.add('found');
+      setTimeout(() => el?.classList.remove('found'), 1600);
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [focusId]);
   const [pending, setPending] = useState<File[]>([]);
   const [lightbox, setLightbox] = useState<Attachment | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -292,7 +304,7 @@ function VaultCard({
   const title = { password: message.note?.title || 'Пароль', file: atts.length > 1 ? `Файлы · ${atts.length}` : 'Файл', link: 'Ссылка', note: 'Заметка' }[type];
 
   return (
-    <article className={`vault-card ${type}${temp ? ' temp' : ''}`} data-testid="vault-card" data-kind={type}>
+    <article className={`vault-card ${type}${temp ? ' temp' : ''}`} data-testid="vault-card" data-kind={type} id={`msg-${message.id}`}>
       <div className="vault-card-head">
         <Icon size={16} />
         <b>{title}</b>

@@ -50,6 +50,7 @@ import {
 import { generateIdentity, signPreKey, verifyDhKey, type IdentityKeys } from './crypto/x3dh.ts';
 import { INVITE_DAYS, inviteLink, MAX_INVITES, newInviteToken, parseInvite, serverKey } from './invite.ts';
 import { cleanPreview } from './link-preview.ts';
+import { searchMessages, type SearchFilter, type SearchHit } from './search.ts';
 import { anonymousRequest, RelayClient, RelayRequestError, type ConnectionStatus } from './relay-client.ts';
 import { readVaultMeta, SecureStore, writeVaultMeta, type StorageBackend } from './storage.ts';
 import type { RecordSource } from './bridge.ts';
@@ -1120,6 +1121,18 @@ export class Messenger {
     if (match) this.updateContact(contactId, { verified: true, keyWarning: false, verifiedAt: Date.now(), verifiedBy: 'call' });
     else this.updateContact(contactId, { verified: false, verifiedAt: undefined, verifiedBy: undefined });
     this.addSystem(contactId, { kind: 'callwords', match });
+  }
+
+  /**
+   * «Поиск по всей переписке»: only in this device's decrypted memory. Hidden chats are left out
+   * unless they are open right now.
+   */
+  search(query: string, filter: SearchFilter = 'all', options: { hidden?: boolean } = {}): SearchHit[] {
+    if (this.settings.features.search === false) return [];
+    return searchMessages(this.conversations, query, filter, (id) => {
+      const contact = this.contacts[id];
+      return !contact || (!!contact.hidden && !options.hidden);
+    });
   }
 
   // ---- veil:// invites (features.invites) -------------------------------------------------

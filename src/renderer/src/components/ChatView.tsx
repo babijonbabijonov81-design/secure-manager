@@ -48,11 +48,13 @@ interface Props {
   onCall(contactId: string): void;
   /** Narrow windows show the list and the chat one at a time. */
   onBack(): void;
+  /** A search result: scroll to this message and highlight it. */
+  focus?: { id: string; n: number };
 }
 
 const GROUP_GAP_MS = 3 * 60 * 1000;
 
-export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onToggleInfo, onShowSafety, onCall, onBack }: Props) {
+export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onToggleInfo, onShowSafety, onCall, onBack, focus }: Props) {
   const saved = isSavedChat(contact.id);
   const messages = snapshot.conversations[contact.id] ?? [];
   const typing = !!snapshot.typing[contact.id];
@@ -199,6 +201,12 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
     setHighlight(id);
     setTimeout(() => setHighlight((h) => (h === id ? null : h)), 1600);
   }, []);
+  useEffect(() => {
+    if (!focus) return;
+    // After the first scroll to the bottom of a freshly opened chat.
+    const timer = setTimeout(() => onJump(focus.id), 120);
+    return () => clearTimeout(timer);
+  }, [focus, onJump]);
 
   const menuItems = useMemo<MenuItem[]>(() => {
     if (!menu) return [];

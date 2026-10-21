@@ -9,8 +9,12 @@ import {
   Clock,
   Eraser,
   EyeOff,
+  FileText,
+  Image as ImageIcon,
+  Link2,
   MailOpen,
   MessageSquarePlus,
+  Mic,
   MoreVertical,
   Pin,
   PinOff,
@@ -19,11 +23,12 @@ import {
   Trash2,
   TriangleAlert,
 } from 'lucide-react';
-import { forwardRef, useMemo, useState, type MouseEvent } from 'react';
+import { forwardRef, useDeferredValue, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { snippetOf, type Messenger } from '../../../core/messenger.ts';
+import type { SearchFilter, SearchHit } from '../../../core/search.ts';
 import { isSavedChat, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
 import { formatListTime, systemText } from '../lib/format.ts';
-import { veiledFor } from '../lib/hooks.ts';
+import { feature, veiledFor } from '../lib/hooks.ts';
 import { Avatar, ConfirmDialog, ContextMenu, type MenuItem } from '../lib/ui.tsx';
 
 interface Props {
@@ -38,10 +43,19 @@ interface Props {
   /** Hidden chats are shown right now. */
   hiddenOpen?: boolean;
   onCloseHidden?(): void;
+  /** A message found by «Поиск по всей переписке». */
+  onOpenMessage?(contactId: string, messageId: string): void;
 }
 
+const FILTERS: { id: SearchFilter; label: string; icon: ReactNode }[] = [
+  { id: 'photo', label: 'Фото', icon: <ImageIcon size={14} /> },
+  { id: 'file', label: 'Файлы', icon: <FileText size={14} /> },
+  { id: 'link', label: 'Ссылки', icon: <Link2 size={14} /> },
+  { id: 'voice', label: 'Голосовые', icon: <Mic size={14} /> },
+];
+
 export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
-  { messenger, snapshot, activeId, onSelect, onNewChat, onDeleted, onSecret, hiddenOpen, onCloseHidden },
+  { messenger, snapshot, activeId, onSelect, onNewChat, onDeleted, onSecret, hiddenOpen, onCloseHidden, onOpenMessage },
   searchRef,
 ) {
   const [query, setQuery] = useState('');
@@ -56,6 +70,19 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
     return snapshot.contacts.filter((c) => !!c.archived === showArchive);
   }, [snapshot.contacts, query, showArchive]);
   const archivedUnread = archived.reduce((n, c) => n + c.unread, 0);
+
+  // «Поиск по всей переписке»: messages too, from 2 letters or with a filter.
+  const searchOn = feature(snapshot.settings, 'search');
+  const [filter, setFilter] = useState<SearchFilter>('all');
+  const deferred = useDeferredValue(query);
+  const searching = searchOn && (deferred.trim().length >= 2 || filter !== 'all');
+  const hits = useMemo(
+    () => (searching ? messenger.search(deferred, filter, { hidden: hiddenOpen }) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [searching, deferred, filter, hiddenOpen, snapshot.conversations, messenger],
+  );
+  const byId = useMemo(() => new Map(snapshot.contacts.map((c) => [c.id, c])), [snapshot.contacts]);
+  const shownContacts = filter === 'all' ? contacts : [];
 
   const openMenu = (e: MouseEvent, contact: Contact) => {
     e.preventDefault();
@@ -114,12 +141,15 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
           <input
             ref={searchRef}
             className="input"
-            placeholder="Поиск"
+            placeholder={searchOn ? 'Поиск — только по этому устройству' : 'Поиск'}
             aria-label="Поиск чатов"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') setQuery('');
+              if (e.key === 'Escape') {
+                setQuery('');
+                setFilter('all');
+              }
               if (e.key !== 'Enter') return;
               const typed = query;
               if (onSecret && typed.trim().length >= 4)
@@ -132,6 +162,21 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
           />
         </div>
       </div>
+      {searchOn && (query || filter !== 'all') && (
+        <div className="search-filters" role="group" aria-label="Что искать">
+          {FILTERS.map((f) => (
+            <button
+              key={f.id}
+              className={filter === f.id ? 'active' : ''}
+              aria-pressed={filter === f.id}
+              aria-label={f.label}
+              onClick={() => setFilter(filter === f.id ? 'all' : f.id)}
+            >
+              {f.icon} {f.label}
+            </button>
+          ))}
+        </div>
+      )}
       {hiddenOpen && (
         <div className="hidden-banner" role="status">
           <EyeOff size={15} /> Скрытые чаты открыты
@@ -155,7 +200,8 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
             </div>
           </button>
         )}
-        {contacts.map((contact) => (
+        {searching && shownContacts.length > 0 && <div className="list-section">Чаты</div>}
+        {(searching ? shownContacts : contacts).map((contact) => (
           <ChatItem
             key={contact.id}
             contact={contact}
@@ -168,6 +214,23 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
             onMenu={(e) => openMenu(e, contact)}
           />
         ))}
+        {searching && (
+          <>
+            <div className="list-section" data-testid="search-results">
+              {hits.length ? `Сообщения · ${hits.length >= 200 ? '200+' : hits.length}` : 'Сообщения'}
+            </div>
+            {hits.map((hit) => (
+              <SearchItem
+                key={`${hit.contactId}:${hit.id}`}
+                hit={hit}
+                contact={byId.get(hit.contactId)}
+                veiled={veiledFor(snapshot.settings, byId.get(hit.contactId))}
+                onClick={() => onOpenMessage?.(hit.contactId, hit.id)}
+              />
+            ))}
+            {!hits.length && <div className="empty-list compact">Ничего не найдено на этом устройстве</div>}
+          </>
+        )}
         {snapshot.contacts.length === 0 && (
           <div className="empty-list">
             <div className="art">
@@ -180,7 +243,7 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
             </button>
           </div>
         )}
-        {snapshot.contacts.length > 0 && contacts.length === 0 && (
+        {!searching && snapshot.contacts.length > 0 && contacts.length === 0 && (
           <div className="empty-list">
             <span>{query ? 'Ничего не найдено' : showArchive ? 'Архив пуст' : 'Все чаты в архиве'}</span>
           </div>
@@ -220,6 +283,43 @@ function StatusTicks({ message }: { message: Message }) {
   if (message.status === 'failed') return <TriangleAlert size={14} className="ticks" style={{ color: 'var(--danger)' }} />;
   if (message.status === 'sent') return <Check size={15} className="ticks" style={{ color: 'var(--text-3)' }} />;
   return <CheckCheck size={15} className="ticks" style={message.status === 'delivered' ? { color: 'var(--text-3)' } : undefined} />;
+}
+
+const HIT_ICON: Record<SearchHit['kind'], ReactNode> = {
+  text: null,
+  photo: <ImageIcon size={13} />,
+  file: <FileText size={13} />,
+  link: <Link2 size={13} />,
+  voice: <Mic size={13} />,
+};
+
+function SearchItem({ hit, contact, veiled, onClick }: { hit: SearchHit; contact: Contact | undefined; veiled: boolean; onClick(): void }) {
+  const name = contact ? (isSavedChat(contact.id) ? 'Избранное' : contact.displayName) : 'Чат';
+  const text: ReactNode[] = [];
+  let at = 0;
+  for (const [a, b] of hit.marks) {
+    text.push(hit.snippet.slice(at, a), <mark key={a}>{hit.snippet.slice(a, b)}</mark>);
+    at = b;
+  }
+  text.push(hit.snippet.slice(at));
+  return (
+    <button className={`chat-item search-hit${veiled ? ' veiled' : ''}`} role="listitem" data-testid="search-hit" onClick={onClick}>
+      <Avatar name={name} seed={contact?.id ?? hit.contactId} size={42} />
+      <div className="body">
+        <div className="row">
+          <span className="name">{name}</span>
+          <span className="time">{formatListTime(hit.ts)}</span>
+        </div>
+        <div className="row">
+          <span className="preview">
+            {HIT_ICON[hit.kind]}
+            {hit.dir === 'out' && <span className="you">Вы: </span>}
+            {text}
+          </span>
+        </div>
+      </div>
+    </button>
+  );
 }
 
 function ChatItem({

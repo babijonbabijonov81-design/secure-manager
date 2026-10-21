@@ -249,6 +249,9 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
     };
   }, [messenger, calls, onLock]);
 
+  // A search result to scroll to (in ChatView or «Избранное»).
+  const [focus, setFocus] = useState<{ contactId: string; id: string; n: number } | null>(null);
+
   // A veil:// link the system opened Veil with (kept by the main process while Veil was locked).
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   useEffect(() => {
@@ -480,11 +483,15 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
               setHiddenOpen(false);
               setActiveId(null);
             }}
+            onOpenMessage={(contactId, id) => {
+              select(contactId);
+              setFocus((f) => ({ contactId, id, n: (f?.n ?? 0) + 1 }));
+            }}
           />
         )}
 
         {active && savedActive ? (
-          <VaultView messenger={messenger} snapshot={snapshot} />
+          <VaultView messenger={messenger} snapshot={snapshot} focusId={focus?.contactId === SAVED_ID ? focus.id : undefined} />
         ) : active ? (
           <ChatView
             key={active.id}
@@ -497,6 +504,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
             onShowSafety={showInfo}
             onCall={startCall}
             onBack={() => setActiveId(null)}
+            focus={focus?.contactId === active.id ? focus : undefined}
           />
         ) : (
           <section className="chat">
