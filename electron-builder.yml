@@ -52,6 +52,11 @@ nsis:
   createDesktopShortcut: always
   createStartMenuShortcut: true
   shortcutName: Veil
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeader: build/installerHeader.bmp
+  installerSidebar: build/installerSidebar.bmp
+  uninstallerSidebar: build/uninstallerSidebar.bmp
   installerLanguages: [ru_RU, en_US]
   multiLanguageInstaller: true
   artifactName: Veil-${version}-win-${arch}-setup.${ext}
@@ -59,7 +64,7 @@ portable:
   artifactName: Veil-${version}-win-portable.${ext}
 
 linux:
-  icon: build/icon.png
+  icon: build/icons
   category: Network
   target:
     - target: AppImage

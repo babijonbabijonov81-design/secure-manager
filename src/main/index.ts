@@ -11,6 +11,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  nativeTheme,
   Notification,
   screen,
   session,
@@ -27,6 +28,9 @@ import { join } from 'node:path';
 import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
 import { closeAllCards, closeCard, setupNotificationCards, showNotificationCard, type NotificationCard } from './notifications.ts';
 import { setupUpdater } from './updater.ts';
+import trayDark2xPath from '../../resources/tray-dark@2x.png?asset';
+import trayDarkPath from '../../resources/tray-dark.png?asset';
+import tray2xPath from '../../resources/tray@2x.png?asset';
 import trayIconPath from '../../resources/tray.png?asset';
 import windowIconPath from '../../resources/icon.png?asset';
 
@@ -80,8 +84,8 @@ async function writeConfig(patch: Partial<AppConfig>): Promise<void> {
 // ---- window ----------------------------------------------------------------------------
 
 const TITLEBAR = {
-  dark: { color: '#0d0f15', symbolColor: '#a4aabb' },
-  light: { color: '#f6f7fb', symbolColor: '#5a6075' },
+  dark: { color: '#100d0b', symbolColor: '#c9c0b6' },
+  light: { color: '#f6f1eb', symbolColor: '#4a413a' },
 };
 
 /** Saved size and position, if they still fit on a connected display. */
@@ -99,11 +103,11 @@ function createWindow(state: AppConfig['window'] = undefined): void {
     width: 1280,
     height: 820,
     ...restoredBounds(state?.bounds),
-    minWidth: 920,
-    minHeight: 620,
+    minWidth: 480,
+    minHeight: 560,
     show: false,
     title: 'Veil',
-    backgroundColor: '#08090d',
+    backgroundColor: '#0c0a09',
     icon: isMac ? undefined : windowIconPath,
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     ...(isMac ? { trafficLightPosition: { x: 14, y: 12 } } : { titleBarOverlay: { ...TITLEBAR.dark, height: 38 } }),
@@ -221,9 +225,18 @@ async function showTrayHint(): Promise<void> {
   await writeConfig({ trayHintShown: true });
 }
 
+/** One-colour tray mark: light on dark panels, dark on the light Windows taskbar. */
+function trayImage(): Electron.NativeImage {
+  const light = isWindows && !nativeTheme.shouldUseDarkColorsForSystemIntegratedUI;
+  const image = nativeImage.createFromPath(light ? trayDarkPath : trayIconPath);
+  image.addRepresentation({ scaleFactor: 2, dataURL: nativeImage.createFromPath(light ? trayDark2xPath : tray2xPath).toDataURL() });
+  return image;
+}
+
 function createTray(): void {
   if (isMac) return;
-  tray = new Tray(nativeImage.createFromPath(trayIconPath));
+  tray = new Tray(trayImage());
+  nativeTheme.on('updated', () => tray?.setImage(trayImage()));
   tray.setToolTip('Veil');
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -383,7 +396,7 @@ function registerIpc(): void {
   ipcMain.on('theme', (event, theme: 'dark' | 'light') => {
     if (!trusted(event) || isMac || !mainWindow) return;
     mainWindow.setTitleBarOverlay({ ...(theme === 'light' ? TITLEBAR.light : TITLEBAR.dark), height: 38 });
-    mainWindow.setBackgroundColor(theme === 'light' ? '#eef0f6' : '#08090d');
+    mainWindow.setBackgroundColor(theme === 'light' ? '#faf7f3' : '#0c0a09');
   });
 
   ipcMain.on('content-protection', (event, enabled: boolean) => {

@@ -107,7 +107,7 @@ describe('call signalling', () => {
     alice.messenger.logCall(bob.id, 'out', { status: 'done', dur: 42 }, 'call-1');
     const record = alice.messenger.getSnapshot().conversations[bob.id].at(-1)!;
     expect(record.call).toEqual({ status: 'done', dur: 42 });
-    expect(snippetOf(record)).toBe('📞 Исходящий звонок');
+    expect(snippetOf(record)).toBe('Исходящий звонок');
     alice.messenger.dispose();
     bob.messenger.dispose();
   });
@@ -124,7 +124,7 @@ describe('call signalling', () => {
     const bob2 = await unlock(bob.storage, bob.password);
     const missed = await waitFor(() => bob2.getSnapshot().conversations[alice.id]?.find((m) => m.call));
     expect(missed).toMatchObject({ dir: 'in', call: { status: 'missed' } });
-    expect(snippetOf(missed)).toBe('📞 Пропущенный звонок');
+    expect(snippetOf(missed)).toBe('Пропущенный звонок');
     expect(bob2.getSnapshot().contacts.find((c) => c.id === alice.id)?.unread).toBeGreaterThan(0);
     // Exactly one record: the dropped offer never rang.
     await new Promise((r) => setTimeout(r, 300));

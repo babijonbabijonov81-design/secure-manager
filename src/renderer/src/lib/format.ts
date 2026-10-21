@@ -53,6 +53,34 @@ export function timerLabel(seconds: number, short = false): string {
   return `${Math.round(seconds / 604800)} нед`;
 }
 
+/** The disappearing-messages chip in the chat header: «1 ДЕНЬ», «5 МИН». */
+export function timerChip(seconds: number): string {
+  const units: [number, [string, string, string]][] = [
+    [604800, ['НЕДЕЛЯ', 'НЕДЕЛИ', 'НЕДЕЛЬ']],
+    [86400, ['ДЕНЬ', 'ДНЯ', 'ДНЕЙ']],
+    [3600, ['ЧАС', 'ЧАСА', 'ЧАСОВ']],
+    [60, ['МИН', 'МИН', 'МИН']],
+    [1, ['СЕК', 'СЕК', 'СЕК']],
+  ];
+  for (const [size, forms] of units) {
+    if (seconds >= size && seconds % size === 0) {
+      const n = seconds / size;
+      return `${n} ${plural(n, forms)}`;
+    }
+  }
+  return timerLabel(seconds, true).toUpperCase();
+}
+
+/** Russian plural: 1 день, 2 дня, 5 дней. */
+export function plural(n: number, [one, few, many]: [string, string, string]): string {
+  const a = Math.abs(n) % 100;
+  const b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b === 1) return one;
+  if (b >= 2 && b <= 4) return few;
+  return many;
+}
+
 export function remaining(expiresAt: number): string {
   const s = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
   if (s < 60) return `${s}с`;
@@ -69,32 +97,13 @@ export function initials(name: string): string {
   return (first + second).toUpperCase();
 }
 
-const GRADIENTS = [
-  ['#ff6b8b', '#ff9a5a'],
-  ['#7c5cff', '#4f8cff'],
-  ['#00c6a7', '#1e9bff'],
-  ['#ffb347', '#ff5e62'],
-  ['#a855f7', '#ec4899'],
-  ['#22c55e', '#14b8a6'],
-  ['#3b82f6', '#8b5cf6'],
-  ['#f97316', '#eab308'],
-  ['#06b6d4', '#6366f1'],
-  ['#e11d48', '#9333ea'],
-];
+// Flat warm colours (no blue or violet); initials on them are dark, contrast ≥ 4.5:1.
+const AVATAR_COLORS = ['#e2582a', '#3ddc97', '#f5b700', '#ff8a6b', '#d9b48f', '#8fc9a8', '#ffb547', '#e8a598'];
 
-export function avatarGradient(seed: string): string {
+export function avatarColor(seed: string): string {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-  const [a, b] = GRADIENTS[hash % GRADIENTS.length];
-  return `linear-gradient(135deg, ${a}, ${b})`;
-}
-
-export function previewOf(message: Message | undefined): string {
-  if (!message) return 'Нет сообщений';
-  if (message.dir === 'system') return systemText(message, undefined);
-  if (message.deleted) return 'Сообщение удалено';
-  if (message.att) return message.att.kind === 'image' ? '📷 Фото' : `📎 ${message.att.name}`;
-  return message.text ?? '';
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
 }
 
 export function systemText(message: Message, contact: Contact | undefined): string {
@@ -110,7 +119,7 @@ export function systemText(message: Message, contact: Contact | undefined): stri
     case 'verified':
       return sys.value ? `Вы сверили код безопасности с «${name}» — контакт проверен` : 'Отметка «проверен» снята';
     case 'keychange':
-      return 'Внимание: у этого имени пользователя новый ключ безопасности. Сверьте код безопасности.';
+      return `Ключ контакта «${name}» изменился. Сверьте код безопасности заново`;
     case 'reset':
       return 'Сеанс шифрования сброшен';
   }

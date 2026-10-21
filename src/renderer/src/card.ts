@@ -1,5 +1,6 @@
 // Notification card window: shows one message preview, closes itself after a while.
-import '@fontsource-variable/inter';
+import '@fontsource-variable/onest';
+import '@fontsource-variable/jetbrains-mono';
 import './card.css';
 
 interface CardData {

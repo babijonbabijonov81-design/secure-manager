@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   Bookmark,
   ChevronLeft,
   ChevronRight,
@@ -11,6 +12,8 @@ import {
   Paperclip,
   Phone,
   RotateCcw,
+  Shield,
+  ShieldAlert,
   ShieldCheck,
   Sticker,
   Trash2,
@@ -21,7 +24,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { Messenger } from '../../../core/messenger.ts';
 import { attachmentsOf, isSavedChat, MAX_ATTACHMENT_BYTES, QUICK_REACTIONS, type Attachment, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
 import { attachmentUrl, saveAttachment } from '../lib/attachments.ts';
-import { formatDay, sameDay, systemText, timerLabel } from '../lib/format.ts';
+import { formatDay, sameDay, systemText, timerChip } from '../lib/format.ts';
+import { feature } from '../lib/hooks.ts';
+import { chatShield } from '../lib/shield.ts';
 import { copyImage, copyText, prepareFile } from '../lib/media.ts';
 import { presenceText } from '../lib/text.ts';
 import { Avatar, ContextMenu, useEscape, useToast, type MenuItem } from '../lib/ui.tsx';
@@ -34,14 +39,18 @@ interface Props {
   snapshot: MessengerSnapshot;
   contact: Contact;
   infoOpen: boolean;
+  /** «Вуаль»: incoming messages stay blurred until hovered or focused. */
+  veiled: boolean;
   onToggleInfo(): void;
   onShowSafety(): void;
   onCall(contactId: string): void;
+  /** Narrow windows show the list and the chat one at a time. */
+  onBack(): void;
 }
 
 const GROUP_GAP_MS = 3 * 60 * 1000;
 
-export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo, onShowSafety, onCall }: Props) {
+export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onToggleInfo, onShowSafety, onCall, onBack }: Props) {
   const saved = isSavedChat(contact.id);
   const messages = snapshot.conversations[contact.id] ?? [];
   const typing = !!snapshot.typing[contact.id];
@@ -259,6 +268,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
         groupStart={!continues(previous, message)}
         groupEnd={!continues(message, next)}
         highlighted={highlight === message.id}
+        veiled={veiled}
         onContext={onContext}
         onOpenMedia={onOpenMedia}
         onRetry={onRetry}
@@ -273,11 +283,16 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
   });
 
   const status = typing ? null : presenceText(contact, online);
+  const shield = !saved && feature(snapshot.settings, 'shield') ? chatShield(contact, snapshot, messenger.iceServers.hasTurn) : null;
+  const ShieldIcon = shield?.level === 'alert' ? ShieldAlert : shield?.level === 'ok' ? ShieldCheck : Shield;
 
   return (
     <section className="chat" onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <div className="chat-bg" />
       <header className="chat-header">
+        <button className="icon-btn back-btn" onClick={onBack} aria-label="Назад к списку чатов">
+          <ArrowLeft size={20} />
+        </button>
         <button className="who" onClick={onToggleInfo}>
           <span className="avatar-wrap">
             <Avatar name={contact.displayName} seed={contact.id} size={42} />
@@ -315,7 +330,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
         <div className="actions">
           {contact.timer > 0 && (
             <span className="timer-chip" title="Исчезающие сообщения">
-              <Hourglass size={14} /> {timerLabel(contact.timer, true)}
+              <Hourglass size={14} /> {timerChip(contact.timer)}
             </span>
           )}
           {!saved && (
@@ -323,15 +338,31 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, onToggleInfo,
               <Phone size={19} />
             </button>
           )}
-          <button className={`icon-btn${infoOpen ? ' active' : ''}`} onClick={onToggleInfo} aria-label="Информация о чате">
-            <Info size={20} />
-          </button>
+          {shield ? (
+            <button
+              className={`shield-badge ${shield.level}${infoOpen ? ' active' : ''}`}
+              onClick={onToggleInfo}
+              aria-label={`Щит чата: ${shield.score} из ${shield.total}`}
+              aria-expanded={infoOpen}
+              title="Щит чата"
+              data-testid="shield-badge"
+            >
+              <ShieldIcon size={18} />
+              <span>
+                {shield.score}/{shield.total}
+              </span>
+            </button>
+          ) : (
+            <button className={`icon-btn${infoOpen ? ' active' : ''}`} onClick={onToggleInfo} aria-label="Информация о чате" aria-expanded={infoOpen}>
+              <Info size={20} />
+            </button>
+          )}
         </div>
       </header>
 
       {contact.blocked && <div className="banner warn">Вы заблокировали этого пользователя. Сообщения от него не принимаются.</div>}
 
-      <div className="messages" ref={scroller} onScroll={onScroll}>
+      <div className={`messages${veiled ? ' veiled' : ''}`} ref={scroller} onScroll={onScroll}>
         <div className="messages-inner" ref={inner}>
           <div className="messages-spacer" />
           {saved ? (

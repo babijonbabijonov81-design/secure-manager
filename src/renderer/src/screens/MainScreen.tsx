@@ -1,10 +1,11 @@
-import { Bookmark, DownloadCloud, Lock, LockKeyhole, Maximize2, MessageCircle, MessageSquarePlus, Minimize2, Moon, Settings, ShieldCheck, Sun, Timer, WifiOff, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react';
+import { Bookmark, DownloadCloud, Eye, EyeOff, Lock, LockKeyhole, Maximize2, MessageCircle, MessageSquarePlus, Minimize2, Phone, Settings, ShieldCheck, Timer, WifiOff, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
 import { bridge, type NotificationCardData, type UpdateState } from '../../../core/platform.ts';
 import { SAVED_ID, type Contact, type Message } from '../../../core/types.ts';
-import { applyAppearance } from '../App.tsx';
+import { useAppearance } from '../App.tsx';
 import { CallOverlay } from '../components/CallOverlay.tsx';
+import { CallsList } from '../components/CallsList.tsx';
 import { ChatList } from '../components/ChatList.tsx';
 import { ChatView } from '../components/ChatView.tsx';
 import { InfoPanel } from '../components/InfoPanel.tsx';
@@ -13,7 +14,8 @@ import { SettingsModal, type SettingsTab } from '../components/SettingsModal.tsx
 import { revokeAttachmentUrls } from '../lib/attachments.ts';
 import { CallManager } from '../lib/calls.ts';
 import { snippetOf } from '../../../core/messenger.ts';
-import { avatarGradient, initials } from '../lib/format.ts';
+import { avatarColor, initials } from '../lib/format.ts';
+import { feature, useMediaQuery, veiledFor } from '../lib/hooks.ts';
 import { playChime, setBadge, showNotification } from '../lib/notify.ts';
 import { Avatar, Logo, useToast } from '../lib/ui.tsx';
 
@@ -24,7 +26,10 @@ interface Props {
   onDeleted(): void;
 }
 
+type View = 'chats' | 'calls';
+
 const STATUS_TEXT = { online: 'В сети', connecting: 'Подключение…', offline: 'Нет связи' } as const;
+const SHIELD_KEY = 'veil.shield';
 
 /** Data for Veil's own notification card, styled like the app right now. */
 function cardData(contact: Contact, body: string, call = false): NotificationCardData {
@@ -33,35 +38,57 @@ function cardData(contact: Contact, body: string, call = false): NotificationCar
     title: contact.displayName,
     body,
     initials: initials(contact.displayName),
-    gradient: avatarGradient(contact.id),
+    gradient: avatarColor(contact.id),
     theme: root.dataset.theme === 'light' ? 'light' : 'dark',
-    accent: getComputedStyle(root).getPropertyValue('--accent').trim() || '#7c5cff',
+    accent: getComputedStyle(root).getPropertyValue('--accent').trim() || '#ff7a45',
     ...(call ? { call } : {}),
   };
 }
 
+const readShieldPreference = () => {
+  try {
+    return localStorage.getItem(SHIELD_KEY) !== '0';
+  } catch {
+    return true;
+  }
+};
+
 export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props) {
   const snapshot = useSyncExternalStore(messenger.subscribe, messenger.getSnapshot);
+  const settings = snapshot.settings;
+  const [view, setView] = useState<View>('chats');
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [infoOpen, setInfoOpen] = useState(false);
   const [modal, setModal] = useState<{ kind: 'settings'; tab?: SettingsTab } | { kind: 'new' } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const activeRef = useRef(activeId);
   activeRef.current = activeId;
 
-  const { theme, accent } = snapshot.settings;
-  useEffect(() => {
-    applyAppearance(theme, accent);
-    if (theme !== 'system') return;
-    const media = matchMedia('(prefers-color-scheme: light)');
-    const onChange = () => applyAppearance(theme, accent);
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
-  }, [theme, accent]);
+  // Window layout: the chat shield sits on the right from 1100 px, below that it opens over the
+  // chat from a header button; below 760 px the list and the chat are shown one at a time.
+  const wide = useMediaQuery('(min-width: 1100px)');
+  const narrow = useMediaQuery('(max-width: 759px)');
+  const [shieldPinned, setShieldPinned] = useState(readShieldPreference);
+  const [shieldOverlay, setShieldOverlay] = useState(false);
+  const infoOpen = wide ? shieldPinned : shieldOverlay;
+  const toggleInfo = useCallback(() => {
+    if (wide) {
+      setShieldPinned((open) => {
+        try {
+          localStorage.setItem(SHIELD_KEY, open ? '0' : '1');
+        } catch {
+          // storage unavailable
+        }
+        return !open;
+      });
+    } else setShieldOverlay((open) => !open);
+  }, [wide]);
+  const showInfo = useCallback(() => (wide ? setShieldPinned(true) : setShieldOverlay(true)), [wide]);
+  useEffect(() => setShieldOverlay(false), [activeId, wide]);
 
+  useAppearance(settings.theme);
   useEffect(() => () => revokeAttachmentUrls(), []);
 
-  const screenProtection = snapshot.settings.screenProtection;
+  const screenProtection = settings.screenProtection;
   useEffect(() => {
     bridge?.setContentProtection(screenProtection);
     return () => bridge?.setContentProtection(false);
@@ -72,11 +99,12 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
     incomingRef.current = (contact, message) => {
       const focused = document.hasFocus() && !document.hidden;
       if (focused && activeRef.current === contact.id) return;
-      const settings = messenger.getSnapshot().settings;
-      if (settings.sounds) playChime();
-      if (settings.notifications && !focused) {
-        const body = settings.notificationPreview ? snippetOf(message) || 'Сообщение' : 'Новое зашифрованное сообщение';
-        if (bridge && settings.notificationStyle === 'veil') bridge.notify({ title: contact.displayName, body, tag: contact.id, card: cardData(contact, body) });
+      const current = messenger.getSnapshot().settings;
+      if (current.sounds) playChime();
+      if (current.notifications && !focused) {
+        const preview = current.notificationPreview && !veiledFor(current, contact);
+        const body = preview ? snippetOf(message) || 'Сообщение' : 'Новое зашифрованное сообщение';
+        if (bridge && current.notificationStyle === 'veil') bridge.notify({ title: contact.displayName, body, tag: contact.id, card: cardData(contact, body) });
         else showNotification(contact.displayName, body, contact.id, () => setActiveId(contact.id));
       }
     };
@@ -92,9 +120,9 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
     const manager = new CallManager(messenger, {
       onIncoming: (contact, callId) => {
         if (document.hasFocus() && !document.hidden) return;
-        const settings = messenger.getSnapshot().settings;
+        const current = messenger.getSnapshot().settings;
         const body = 'Входящий аудиозвонок';
-        if (bridge && settings.notificationStyle === 'veil') bridge.notify({ title: contact.displayName, body, tag: `call:${callId}`, card: cardData(contact, body, true) });
+        if (bridge && current.notificationStyle === 'veil') bridge.notify({ title: contact.displayName, body, tag: `call:${callId}`, card: cardData(contact, body, true) });
         else showNotification(contact.displayName, body, `call:${callId}`, () => manager.setMinimized(false));
       },
       onSettled: (callId) => bridge?.closeNotification(`call:${callId}`),
@@ -120,7 +148,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
     calls?.hangup();
     onLock();
   }, [calls, onLock]);
-  const audio = snapshot.settings.audio;
+  const audio = settings.audio;
   useEffect(() => calls?.applySettings(), [calls, audio]);
   const startCall = useCallback(
     (contactId: string) => {
@@ -162,7 +190,7 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
   useEffect(() => () => setBadge(0), []);
 
   // Auto-lock after inactivity.
-  const lockAfter = snapshot.settings.autoLockMinutes;
+  const lockAfter = settings.autoLockMinutes;
   useEffect(() => {
     if (!lockAfter) return;
     let last = Date.now();
@@ -177,36 +205,73 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
     };
   }, [lockAfter, onLock, calls]);
 
-  // Keyboard shortcuts.
+  const veilAvailable = feature(settings, 'veil');
+  const toggleVeil = useCallback(() => {
+    const next = !messenger.getSnapshot().settings.veil;
+    messenger.updateSettings({ veil: next });
+    toast(next ? 'Вуаль включена: входящие размыты, пока не наведёшь курсор' : 'Вуаль выключена', 'info');
+  }, [messenger, toast]);
+
+  // Chats in the order of the list, for Alt+↑/↓.
+  const visibleChats = snapshot.contacts.filter((c) => !c.archived);
+  const step = useCallback(
+    (delta: number) => {
+      if (!visibleChats.length) return;
+      const index = visibleChats.findIndex((c) => c.id === activeRef.current);
+      const next = index < 0 ? (delta > 0 ? 0 : visibleChats.length - 1) : Math.max(0, Math.min(visibleChats.length - 1, index + delta));
+      setView('chats');
+      setActiveId(visibleChats[next].id);
+    },
+    [visibleChats],
+  );
+
+  // Keyboard shortcuts inside the window (no global ones: they are unreliable on Wayland).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        step(e.key === 'ArrowDown' ? 1 : -1);
+        return;
+      }
+      if (e.key === 'Escape' && !modal && !document.querySelector('.modal-backdrop, .lightbox, .context-menu')) {
+        if (!wide && shieldOverlay) setShieldOverlay(false);
+        return;
+      }
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
       const key = e.key.toLowerCase();
-      if (key === 'k' || key === 'f') {
+      if (e.shiftKey && (key === 'v' || e.code === 'KeyV')) {
+        if (!veilAvailable) return;
         e.preventDefault();
-        searchRef.current?.focus();
-      } else if (key === 'n') {
+        toggleVeil();
+      } else if (e.shiftKey) {
+        return;
+      } else if (key === 'k' || key === 'f' || e.code === 'KeyK') {
+        e.preventDefault();
+        setView('chats');
+        requestAnimationFrame(() => searchRef.current?.focus());
+      } else if (key === 'n' || e.code === 'KeyN') {
         e.preventDefault();
         setModal({ kind: 'new' });
-      } else if (key === 'l') {
+      } else if (key === 'l' || e.code === 'KeyL') {
         e.preventDefault();
         lock();
-      } else if (key === ',') {
+      } else if (key === ',' || e.code === 'Comma') {
         e.preventDefault();
         setModal({ kind: 'settings' });
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [lock]);
+  }, [lock, step, modal, wide, shieldOverlay, veilAvailable, toggleVeil]);
 
   const active = snapshot.contacts.find((c) => c.id === activeId) ?? null;
   const select = useCallback((id: string) => setActiveId(id), []);
-  const dark = theme === 'dark' || (theme === 'system' && !matchMedia('(prefers-color-scheme: light)').matches);
+  const veilOn = veilAvailable && settings.veil;
+  const savedActive = activeId === SAVED_ID;
 
   return (
-    <div className="shell">
+    <div className={`shell${narrow ? ' narrow' : ''}${wide ? ' wide' : ''}`} data-pane={active ? 'chat' : 'list'}>
       {bridge && (
         <div className="titlebar">
           <span className={`status-pill ${snapshot.status}`}>
@@ -216,7 +281,12 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
           <div className="titlebar-title">
             <Logo size={16} /> Veil
           </div>
-          <button className="titlebar-btn" onClick={() => bridge!.toggleFullscreen()} title={fullscreen ? 'Выйти из полноэкранного режима (F11)' : 'На весь экран (F11)'}>
+          <button
+            className="titlebar-btn"
+            onClick={() => bridge!.toggleFullscreen()}
+            aria-label={fullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
+            title={fullscreen ? 'Выйти из полноэкранного режима (F11)' : 'На весь экран (F11)'}
+          >
             {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </button>
         </div>
@@ -251,45 +321,47 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
         </div>
       )}
       <div className="shell-body">
-        <nav className="rail">
-          <div className="logo-btn">
+        <nav className="rail" aria-label="Разделы">
+          <div className="rail-logo" aria-hidden="true">
             <Logo size={40} />
           </div>
-          <div className="tooltip-wrap" data-tip="Чаты">
-            <button className={`icon-btn${activeId === SAVED_ID ? '' : ' active'}`} aria-label="Чаты" onClick={() => setActiveId(null)}>
-              <MessageCircle size={21} />
-            </button>
-          </div>
-          <div className="tooltip-wrap" data-tip="Новый чат">
-            <button className="icon-btn" aria-label="Новый чат" onClick={() => setModal({ kind: 'new' })}>
-              <MessageSquarePlus size={21} />
-            </button>
-          </div>
-          <div className="tooltip-wrap" data-tip="Избранное">
-            <button className={`icon-btn${activeId === SAVED_ID ? ' active' : ''}`} aria-label="Избранное" onClick={() => setActiveId(SAVED_ID)}>
-              <Bookmark size={20} />
-            </button>
-          </div>
-          <div className="tooltip-wrap" data-tip="Настройки">
-            <button className="icon-btn" aria-label="Настройки" onClick={() => setModal({ kind: 'settings' })}>
-              <Settings size={21} />
-            </button>
-          </div>
+          <RailButton
+            label="Чаты"
+            hint="Чаты · Ctrl+K — поиск"
+            active={view === 'chats' && !savedActive}
+            badge={unread}
+            onClick={() => {
+              setView('chats');
+              if (savedActive) setActiveId(null);
+            }}
+          >
+            <MessageCircle size={21} />
+          </RailButton>
+          <RailButton
+            label="Избранное"
+            active={view === 'chats' && savedActive}
+            onClick={() => {
+              setView('chats');
+              setActiveId(SAVED_ID);
+            }}
+          >
+            <Bookmark size={20} />
+          </RailButton>
+          <RailButton label="Звонки" active={view === 'calls'} onClick={() => setView('calls')}>
+            <Phone size={20} />
+          </RailButton>
+          <RailButton label="Настройки" hint="Настройки · Ctrl+," onClick={() => setModal({ kind: 'settings' })}>
+            <Settings size={21} />
+          </RailButton>
           <div className="spacer" />
-          <div className="tooltip-wrap" data-tip={dark ? 'Светлая тема' : 'Тёмная тема'}>
-            <button
-              className="icon-btn"
-              aria-label="Сменить тему"
-              onClick={() => messenger.updateSettings({ theme: dark ? 'light' : 'dark' })}
-            >
-              {dark ? <Sun size={20} /> : <Moon size={20} />}
-            </button>
-          </div>
-          <div className="tooltip-wrap" data-tip="Заблокировать">
-            <button className="icon-btn" aria-label="Заблокировать" onClick={lock}>
-              <Lock size={20} />
-            </button>
-          </div>
+          {veilAvailable && (
+            <RailButton label="Вуаль" hint={veilOn ? 'Вуаль включена · Ctrl+Shift+V' : 'Вуаль · Ctrl+Shift+V'} pressed={veilOn} onClick={toggleVeil}>
+              {veilOn ? <EyeOff size={20} /> : <Eye size={20} />}
+            </RailButton>
+          )}
+          <RailButton label="Заблокировать" hint="Заблокировать · Ctrl+L" onClick={lock}>
+            <Lock size={20} />
+          </RailButton>
           <div className="tooltip-wrap" data-tip={`@${snapshot.me.username}`}>
             <button className="me" aria-label="Профиль" onClick={() => setModal({ kind: 'settings', tab: 'profile' })}>
               <Avatar name={snapshot.me.displayName} seed={snapshot.me.userId} size={40} />
@@ -297,20 +369,21 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
           </div>
         </nav>
 
-        <ChatList
-          ref={searchRef}
-          messenger={messenger}
-          snapshot={snapshot}
-          activeId={activeId}
-          onSelect={select}
-          onNewChat={() => setModal({ kind: 'new' })}
-          onDeleted={(id) => {
-            if (id === activeId) {
-              setActiveId(null);
-              setInfoOpen(false);
-            }
-          }}
-        />
+        {view === 'calls' ? (
+          <CallsList snapshot={snapshot} activeId={activeId} onSelect={select} onCall={startCall} />
+        ) : (
+          <ChatList
+            ref={searchRef}
+            messenger={messenger}
+            snapshot={snapshot}
+            activeId={activeId}
+            onSelect={select}
+            onNewChat={() => setModal({ kind: 'new' })}
+            onDeleted={(id) => {
+              if (id === activeId) setActiveId(null);
+            }}
+          />
+        )}
 
         {active ? (
           <ChatView
@@ -319,9 +392,11 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
             snapshot={snapshot}
             contact={active}
             infoOpen={infoOpen}
-            onToggleInfo={() => setInfoOpen((v) => !v)}
-            onShowSafety={() => setInfoOpen(true)}
+            veiled={veiledFor(settings, active)}
+            onToggleInfo={toggleInfo}
+            onShowSafety={showInfo}
             onCall={startCall}
+            onBack={() => setActiveId(null)}
           />
         ) : (
           <section className="chat">
@@ -356,14 +431,14 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
           <InfoPanel
             key={`info-${active.id}`}
             messenger={messenger}
+            snapshot={snapshot}
             contact={active}
             online={!!snapshot.online[active.id]}
+            overlay={!wide}
             onCall={() => startCall(active.id)}
-            onClose={() => setInfoOpen(false)}
-            onDeleted={() => {
-              setInfoOpen(false);
-              setActiveId(null);
-            }}
+            onClose={toggleInfo}
+            onOpenSettings={(tab) => setModal({ kind: 'settings', tab })}
+            onDeleted={() => setActiveId(null)}
           />
         )}
       </div>
@@ -372,6 +447,39 @@ export function MainScreen({ messenger, incomingRef, onLock, onDeleted }: Props)
       {modal?.kind === 'settings' && (
         <SettingsModal messenger={messenger} snapshot={snapshot} initialTab={modal.tab} onClose={() => setModal(null)} onDeleted={onDeleted} />
       )}
+    </div>
+  );
+}
+
+function RailButton({
+  label,
+  hint,
+  active,
+  pressed,
+  badge,
+  onClick,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  active?: boolean;
+  pressed?: boolean;
+  badge?: number;
+  onClick(): void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="tooltip-wrap" data-tip={hint ?? label}>
+      <button
+        className={`icon-btn rail-btn${active || pressed ? ' active' : ''}`}
+        aria-label={label}
+        aria-current={active ? 'page' : undefined}
+        aria-pressed={pressed}
+        onClick={onClick}
+      >
+        {children}
+        {!!badge && <span className="rail-badge">{badge > 99 ? '99+' : badge}</span>}
+      </button>
     </div>
   );
 }

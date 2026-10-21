@@ -1,43 +1,144 @@
-import { Archive, ArchiveRestore, Ban, Bell, BellOff, Eraser, Hourglass, Phone, Pin, PinOff, RotateCcw, ShieldCheck, ShieldQuestion, Trash2, TriangleAlert, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import {
+  Archive,
+  ArchiveRestore,
+  Ban,
+  Bell,
+  BellOff,
+  ChevronRight,
+  Eraser,
+  EyeOff,
+  Hourglass,
+  Phone,
+  Pin,
+  PinOff,
+  RotateCcw,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
+  Trash2,
+  TriangleAlert,
+  X,
+} from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
 import { formatSafetyNumber } from '../../../core/crypto/fingerprint.ts';
 import type { Messenger } from '../../../core/messenger.ts';
-import { isSavedChat, TIMER_OPTIONS, type Contact } from '../../../core/types.ts';
+import { isSavedChat, TIMER_OPTIONS, type Contact, type MessengerSnapshot } from '../../../core/types.ts';
 import { timerLabel } from '../lib/format.ts';
+import { feature } from '../lib/hooks.ts';
+import { chatShield, SHIELD_SUMMARY, type ShieldItem } from '../lib/shield.ts';
 import { presenceText } from '../lib/text.ts';
-import { Avatar, ConfirmDialog, useToast } from '../lib/ui.tsx';
+import { Avatar, ConfirmDialog, Toggle, useToast } from '../lib/ui.tsx';
+import type { SettingsTab } from './SettingsModal.tsx';
 
 type Confirm = 'clear' | 'delete' | 'block' | 'reset' | null;
 
+const STATE_ICON = { ok: ShieldCheck, weak: Shield, alert: ShieldAlert, na: ShieldQuestion } as const;
+
+/** «Щит чата» on the right: the protection score, then the contact, safety code, timer and actions. */
 export function InfoPanel({
   messenger,
+  snapshot,
   contact,
   online,
+  overlay,
   onCall,
   onClose,
+  onOpenSettings,
   onDeleted,
 }: {
   messenger: Messenger;
+  snapshot: MessengerSnapshot;
   contact: Contact;
   online: boolean;
+  /** Narrow window: the panel floats over the chat. */
+  overlay: boolean;
   onCall(): void;
   onClose(): void;
+  onOpenSettings(tab: SettingsTab): void;
   onDeleted(): void;
 }) {
   const toast = useToast();
   const [confirm, setConfirm] = useState<Confirm>(null);
-  const safety = useMemo(() => formatSafetyNumber(messenger.safetyNumber(contact.id)), [messenger, contact.id]);
-  if (isSavedChat(contact.id)) return <SavedInfo messenger={messenger} contact={contact} onClose={onClose} />;
+  const body = useRef<HTMLDivElement>(null);
+  const safety = useMemo(() => (isSavedChat(contact.id) ? [] : formatSafetyNumber(messenger.safetyNumber(contact.id))), [messenger, contact.id]);
+  if (isSavedChat(contact.id)) return <SavedInfo messenger={messenger} contact={contact} overlay={overlay} onClose={onClose} />;
+
+  const { settings } = snapshot;
+  const shield = feature(settings, 'shield') ? chatShield(contact, snapshot, messenger.iceServers.hasTurn) : null;
+  const ShieldIcon = shield ? STATE_ICON[shield.level] : Shield;
+  const open = (item: ShieldItem) => {
+    if ('settings' in item.target) return onOpenSettings(item.target.settings);
+    if (item.target.panel === 'about') return onOpenSettings('about');
+    const section = body.current?.querySelector<HTMLElement>(`#shield-${item.target.panel}`);
+    section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    section?.classList.add('flash');
+    setTimeout(() => section?.classList.remove('flash'), 1200);
+  };
+  const veilScoped = settings.veilScope === 'selected';
+  const veilOn = settings.veil && (!veilScoped || !!contact.veil);
 
   return (
-    <aside className="info-panel">
+    <aside className={`info-panel${overlay ? ' overlay' : ''}`} aria-label={shield ? 'Щит чата' : 'Информация о чате'}>
       <div className="panel-head">
-        <h3>Информация</h3>
+        <h3>{shield ? 'Щит чата' : 'Информация'}</h3>
         <button className="icon-btn sm" onClick={onClose} aria-label="Закрыть панель">
           <X size={18} />
         </button>
       </div>
-      <div className="panel-body">
+      <div className="panel-body" ref={body}>
+        {shield && (
+          <div className={`shield-card ${shield.level}`} data-testid="chat-shield">
+            <div className="shield-score">
+              <span className="shield-mark">
+                <ShieldIcon size={30} />
+              </span>
+              <div>
+                <b>
+                  {shield.score} из {shield.total}
+                </b>
+                <span>{SHIELD_SUMMARY[shield.level]}</span>
+              </div>
+            </div>
+            <ul className="shield-items">
+              {shield.items.map((item) => {
+                const Icon = STATE_ICON[item.state];
+                return (
+                  <li key={item.id}>
+                    <button className={`shield-item ${item.state}`} onClick={() => open(item)} data-testid={`shield-${item.id}`}>
+                      <Icon size={17} />
+                      <span className="grow">
+                        <b>{item.title}</b>
+                        <span>{item.value}</span>
+                      </span>
+                      <ChevronRight size={16} className="chev" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {feature(settings, 'veil') && (
+              <div className="shield-veil">
+                <EyeOff size={17} />
+                <span className="grow">
+                  <b>Вуаль</b>
+                  <span>Вуаль размывает входящие, пока не наведёшь курсор</span>
+                </span>
+                <Toggle
+                  label="Вуаль для этого чата"
+                  on={veilOn}
+                  onChange={(on) => {
+                    if (veilScoped) {
+                      messenger.setVeil(contact.id, on);
+                      if (on && !settings.veil) messenger.updateSettings({ veil: true });
+                    } else messenger.updateSettings({ veil: on });
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="profile-hero">
           <Avatar name={contact.displayName} seed={contact.id} size={96} />
           <h4>
@@ -68,7 +169,7 @@ export function InfoPanel({
           )}
         </div>
 
-        <div className="section" id="safety">
+        <div className="section" id="shield-safety">
           <div className="section-title">
             <ShieldCheck size={16} /> Код безопасности
           </div>
@@ -92,7 +193,7 @@ export function InfoPanel({
           </button>
         </div>
 
-        <div className="section">
+        <div className="section" id="shield-timer">
           <div className="section-title">
             <Hourglass size={16} /> Исчезающие сообщения
           </div>
@@ -192,11 +293,11 @@ export function InfoPanel({
 }
 
 /** «Избранное» has no keys, presence or calls: only pin, archive and clear. */
-function SavedInfo({ messenger, contact, onClose }: { messenger: Messenger; contact: Contact; onClose(): void }) {
+function SavedInfo({ messenger, contact, overlay, onClose }: { messenger: Messenger; contact: Contact; overlay: boolean; onClose(): void }) {
   const [confirm, setConfirm] = useState(false);
   const count = (messenger.getSnapshot().conversations[contact.id] ?? []).filter((m) => m.dir !== 'system').length;
   return (
-    <aside className="info-panel">
+    <aside className={`info-panel${overlay ? ' overlay' : ''}`} aria-label="Информация об «Избранном»">
       <div className="panel-head">
         <h3>Информация</h3>
         <button className="icon-btn sm" onClick={onClose} aria-label="Закрыть панель">

@@ -157,10 +157,10 @@ test('replies, reactions, copy, albums, stickers, voice, archive and 2FA', async
   // Chat list actions: pin, then archive.
   const item = alice.page.getByTestId(`chat-${bob.username}`);
   await item.click({ button: 'right' });
-  await alice.page.getByRole('button', { name: 'Закрепить' }).click();
+  await alice.page.locator('.context-menu').getByRole('button', { name: 'Закрепить' }).click();
   await item.click({ button: 'right' });
   await shot(alice.page, '12-chat-menu');
-  await alice.page.getByRole('button', { name: 'В архив' }).click();
+  await alice.page.locator('.context-menu').getByRole('button', { name: 'В архив' }).click();
   await expect(alice.page.locator('.archive-row')).toBeVisible();
   await alice.page.locator('.archive-row').click();
   await expect(alice.page.getByTestId(`chat-${bob.username}`)).toBeVisible();

@@ -2,7 +2,38 @@ import type { KeyPairJSON } from './crypto/primitives.ts';
 import type { ConnectionStatus } from './relay-client.ts';
 
 export type Theme = 'dark' | 'light' | 'system';
-export type Accent = 'violet' | 'blue' | 'teal' | 'rose' | 'amber';
+
+/**
+ * Every v2 feature can be switched off in Settings → «Функции». A switched-off feature leaves
+ * no trace in the interface and sends nothing.
+ */
+export const FEATURE_NAMES = [
+  'veil',
+  'shield',
+  'keyGuard',
+  'viewOnce',
+  'clipboard',
+  'stripMeta',
+  'quickUnlock',
+  'bridge',
+  'callWords',
+  'tempNotes',
+  'duress',
+  'scheduled',
+  'presence',
+  'hiddenChats',
+  'securityLog',
+  'backupFile',
+  'linkPreviews',
+  'invites',
+  'groups',
+  'video',
+  'transcribe',
+  'search',
+] as const;
+export type FeatureName = (typeof FEATURE_NAMES)[number];
+export type Features = Record<FeatureName, boolean>;
+export const DEFAULT_FEATURES = Object.fromEntries(FEATURE_NAMES.map((name) => [name, true])) as Features;
 
 export interface AudioSettings {
   /** Microphone deviceId; '' is the system default. */
@@ -16,7 +47,7 @@ export interface AudioSettings {
 
 export interface Settings {
   theme: Theme;
-  accent: Accent;
+  features: Features;
   readReceipts: boolean;
   typingIndicators: boolean;
   notifications: boolean;
@@ -36,11 +67,29 @@ export interface Settings {
   audio: AudioSettings;
   /** Calls only through the relay's TURN server, so the other side never learns your IP. */
   callsRelayOnly: boolean;
+  /** «Вуаль»: incoming messages and previews stay blurred until hovered or focused. */
+  veil: boolean;
+  /** For every chat, or only for chats where it was switched on (Contact.veil). */
+  veilScope: 'all' | 'selected';
+  /** «Не отправлять, пока не сверю»: nothing goes to a contact whose key changed until it is checked. */
+  holdUntilVerified: boolean;
+  /** Clear a password copied from «Избранное» after this many seconds; 0 keeps it. */
+  clipboardSeconds: number;
+  /** Remove EXIF/GPS from photos and author/program from PDF and Office files before sending. */
+  stripMetadata: boolean;
+  /** Lock together with the operating system's lock screen. */
+  lockOnSystemLock: boolean;
+  /** Lock when the window is hidden to the tray. */
+  lockOnHide: boolean;
+  /** The user says the relay is their own (otherwise private addresses count as own). */
+  ownServer?: boolean;
+  /** Make link previews when sending (the recipient never opens the link). */
+  linkPreviews: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  theme: 'dark',
-  accent: 'violet',
+  theme: 'system',
+  features: DEFAULT_FEATURES,
   readReceipts: true,
   typingIndicators: true,
   notifications: true,
@@ -55,7 +104,26 @@ export const DEFAULT_SETTINGS: Settings = {
   lastSeen: 'everyone',
   audio: { input: '', output: '', echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   callsRelayOnly: false,
+  veil: false,
+  veilScope: 'all',
+  holdUntilVerified: false,
+  clipboardSeconds: 30,
+  stripMetadata: true,
+  lockOnSystemLock: true,
+  lockOnHide: false,
+  linkPreviews: true,
 };
+
+/** Stored settings from any version, completed with defaults (new feature flags start on). */
+export function normalizeSettings(stored: Partial<Settings> | null | undefined): Settings {
+  const { accent: _accent, ...rest } = (stored ?? {}) as Partial<Settings> & { accent?: unknown };
+  return {
+    ...DEFAULT_SETTINGS,
+    ...rest,
+    features: { ...DEFAULT_FEATURES, ...rest.features },
+    audio: { ...DEFAULT_SETTINGS.audio, ...rest.audio },
+  };
+}
 
 export interface SignedPreKeyRecord {
   id: number;
@@ -119,6 +187,10 @@ export interface Contact {
   lastSeen?: number;
   /** The contact hides their last-seen time ("был(а) недавно"). */
   presenceHidden?: boolean;
+  /** When the safety number was last confirmed. */
+  verifiedAt?: number;
+  /** «Вуаль» for this chat when it is enabled only for selected chats. */
+  veil?: boolean;
 }
 
 export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';

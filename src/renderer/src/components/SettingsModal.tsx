@@ -1,5 +1,4 @@
 import {
-  Check,
   DownloadCloud,
   Info,
   KeyRound,
@@ -15,6 +14,7 @@ import {
   ShieldCheck,
   Smartphone,
   Sun,
+  ToggleRight,
   Trash2,
   TriangleAlert,
   UserRound,
@@ -27,13 +27,15 @@ import type { Messenger } from '../../../core/messenger.ts';
 import type { AccountStatus } from '../../../../server/src/shared/protocol.ts';
 import { bridge, type EmbeddedServerStatus, type UpdateState } from '../../../core/platform.ts';
 import { probeServer } from '../../../core/relay-client.ts';
-import type { Accent, AudioSettings, MessengerSnapshot, Settings, Theme } from '../../../core/types.ts';
+import { FEATURE_NAMES, type AudioSettings, type FeatureName, type MessengerSnapshot, type Settings, type Theme } from '../../../core/types.ts';
 import { canChooseOutput, meterStream, openMicrophone, Tones, useAudioDevices } from '../lib/audio.ts';
 import { formatDay, formatTime } from '../lib/format.ts';
+import { feature } from '../lib/hooks.ts';
+import { isOwnServer } from '../lib/shield.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
 import { CodeInput, RecoveryEmailDialog, TotpDisableDialog, TotpSetupDialog } from './SecurityDialogs.tsx';
 
-export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'about';
+export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'features' | 'about';
 
 const TABS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: 'profile', label: 'Профиль', icon: <UserRound size={18} /> },
@@ -42,15 +44,8 @@ const TABS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: 'audio', label: 'Аудио', icon: <Mic size={18} /> },
   { id: 'server', label: 'Сервер', icon: <Server size={18} /> },
   { id: 'security', label: 'Безопасность', icon: <KeyRound size={18} /> },
+  { id: 'features', label: 'Функции', icon: <ToggleRight size={18} /> },
   { id: 'about', label: 'О Veil', icon: <Info size={18} /> },
-];
-
-const ACCENTS: { id: Accent; colors: [string, string] }[] = [
-  { id: 'violet', colors: ['#7c5cff', '#4f8cff'] },
-  { id: 'blue', colors: ['#2f7bff', '#00b3d6'] },
-  { id: 'teal', colors: ['#0fb59d', '#3fbf5a'] },
-  { id: 'rose', colors: ['#f0437a', '#ff7a59'] },
-  { id: 'amber', colors: ['#f59e0b', '#f2555a'] },
 ];
 
 interface Props {
@@ -130,25 +125,93 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
                 <Row title="Звуки" text="Короткий сигнал при новом сообщении.">
                   <Toggle label="Звуки" on={s.sounds} onChange={(v) => set({ sounds: v })} />
                 </Row>
-                {bridge && bridge.platform !== 'linux' && (
+                {bridge && bridge.platform !== 'linux' ? (
                   <Row title="Защита от снимков экрана" text="Окно Veil будет чёрным на скриншотах, записях и при демонстрации экрана.">
                     <Toggle label="Защита от снимков экрана" on={s.screenProtection} onChange={(v) => set({ screenProtection: v })} />
+                  </Row>
+                ) : (
+                  <Row
+                    title="Защита от снимков экрана"
+                    text={
+                      bridge
+                        ? 'На Linux недоступно: ни X11, ни Wayland не дают приложению надёжно спрятать окно от записи. Включите Вуаль — она размывает входящие.'
+                        : 'Работает только в приложении для Windows.'
+                    }
+                  >
+                    <span className="chip">Недоступно</span>
+                  </Row>
+                )}
+                {feature(s, 'veil') && (
+                  <div className="field" style={{ margin: '14px 0 6px' }}>
+                    <span className="field-label">Вуаль</span>
+                    <div className="setting-row" style={{ paddingTop: 0 }}>
+                      <div className="grow">
+                        <span>Вуаль размывает входящие, пока не наведёшь курсор. Кнопка на панели слева или Ctrl+Shift+V.</span>
+                      </div>
+                      <Toggle label="Вуаль" on={s.veil} onChange={(v) => set({ veil: v })} />
+                    </div>
+                    <div className="segmented">
+                      <button className={s.veilScope === 'all' ? 'active' : ''} onClick={() => set({ veilScope: 'all' })}>
+                        Во всех чатах
+                      </button>
+                      <button className={s.veilScope === 'selected' ? 'active' : ''} onClick={() => set({ veilScope: 'selected' })}>
+                        В выбранных
+                      </button>
+                    </div>
+                    {s.veilScope === 'selected' && <span className="field-hint">Включите Вуаль для нужного чата в его Щите.</span>}
+                  </div>
+                )}
+                {feature(s, 'stripMeta') && (
+                  <Row title="Удалять метаданные" text="Перед шифрованием из фото убираются геометка и данные камеры, из PDF и Office — автор и программа.">
+                    <Toggle label="Удалять метаданные" on={s.stripMetadata} onChange={(v) => set({ stripMetadata: v })} />
+                  </Row>
+                )}
+                {feature(s, 'clipboard') && (
+                  <Row title="Очищать буфер обмена" text="Скопированный из «Избранного» пароль стирается, если в буфере всё ещё он.">
+                    <select
+                      className="input"
+                      style={{ width: 150, height: 44 }}
+                      aria-label="Очищать буфер обмена"
+                      value={s.clipboardSeconds}
+                      onChange={(e) => set({ clipboardSeconds: Number(e.target.value) })}
+                    >
+                      <option value={15}>Через 15 с</option>
+                      <option value={30}>Через 30 с</option>
+                      <option value={60}>Через 60 с</option>
+                      <option value={0}>Не очищать</option>
+                    </select>
+                  </Row>
+                )}
+                {feature(s, 'keyGuard') && (
+                  <Row title="Не отправлять, пока не сверю" text="Если ключ собеседника изменился, сообщения ему не уйдут, пока вы не сверите код безопасности.">
+                    <Toggle label="Не отправлять, пока не сверю" on={s.holdUntilVerified} onChange={(v) => set({ holdUntilVerified: v })} />
                   </Row>
                 )}
                 <Row title="Автоблокировка" text="Заблокировать Veil после бездействия. Ключи удаляются из памяти.">
                   <select
                     className="input"
-                    style={{ width: 150, height: 38 }}
+                    style={{ width: 150, height: 44 }}
+                    aria-label="Автоблокировка"
                     value={s.autoLockMinutes}
                     onChange={(e) => set({ autoLockMinutes: Number(e.target.value) })}
                   >
+                    <option value={1}>Через 1 минуту</option>
+                    <option value={5}>Через 5 минут</option>
+                    <option value={15}>Через 15 минут</option>
+                    {![0, 1, 5, 15].includes(s.autoLockMinutes) && <option value={s.autoLockMinutes}>Через {s.autoLockMinutes} мин</option>}
                     <option value={0}>Никогда</option>
-                    <option value={1}>1 минута</option>
-                    <option value={5}>5 минут</option>
-                    <option value={15}>15 минут</option>
-                    <option value={60}>1 час</option>
                   </select>
                 </Row>
+                {bridge && (
+                  <Row title="Вместе с экраном компьютера" text={lockOnSystemHint}>
+                    <Toggle label="Блокировать вместе с экраном компьютера" on={s.lockOnSystemLock} onChange={(v) => set({ lockOnSystemLock: v })} />
+                  </Row>
+                )}
+                {bridge && (
+                  <Row title="При сворачивании в трей" text="Закрыли окно — Veil заблокируется и продолжит принимать сообщения в фоне.">
+                    <Toggle label="Блокировать при сворачивании в трей" on={s.lockOnHide} onChange={(v) => set({ lockOnHide: v })} />
+                  </Row>
+                )}
               </div>
             )}
             {tab === 'appearance' && (
@@ -166,22 +229,6 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
                       <button key={id} className={s.theme === id ? 'active' : ''} onClick={() => set({ theme: id })}>
                         {icon}
                         {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="field" style={{ marginBottom: 10 }}>
-                  <span className="field-label">Акцентный цвет</span>
-                  <div className="accent-swatches">
-                    {ACCENTS.map((a) => (
-                      <button
-                        key={a.id}
-                        className={s.accent === a.id ? 'active' : ''}
-                        style={{ background: `linear-gradient(135deg, ${a.colors[0]}, ${a.colors[1]})` }}
-                        onClick={() => set({ accent: a.id })}
-                        aria-label={a.id}
-                      >
-                        {s.accent === a.id && <Check size={16} />}
                       </button>
                     ))}
                   </div>
@@ -207,6 +254,7 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
             {tab === 'audio' && <AudioTab messenger={messenger} snapshot={snapshot} />}
             {tab === 'server' && <ServerTab messenger={messenger} snapshot={snapshot} />}
             {tab === 'security' && <SecurityTab messenger={messenger} snapshot={snapshot} onDeleted={onDeleted} />}
+            {tab === 'features' && <FeaturesTab snapshot={snapshot} set={set} />}
             {tab === 'about' && <AboutTab />}
           </div>
         </div>
@@ -214,6 +262,11 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
     </div>
   );
 }
+
+const lockOnSystemHint =
+  bridge?.platform === 'linux'
+    ? 'Когда вы блокируете экран (GNOME, KDE и другие окружения с logind или ScreenSaver).'
+    : 'Когда вы блокируете компьютер (Win+L) или он уходит в сон.';
 
 function Row({ title, text, children }: { title: string; text?: string; children: ReactNode }) {
   return (
@@ -417,6 +470,9 @@ function ServerTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Me
           <RefreshCw size={15} /> Переподключить
         </button>
       </div>
+      <Row title="Это мой сервер" text="Сервер развернули вы или люди, которым вы доверяете. Щит чата учитывает это в оценке.">
+        <Toggle label="Это мой сервер" on={isOwnServer(snapshot)} onChange={(v) => messenger.updateSettings({ ownServer: v })} />
+      </Row>
       <div className="field">
         <label className="field-label" htmlFor="server-url">
           Сменить сервер
@@ -773,6 +829,48 @@ function UpdatesSection() {
   );
 }
 
+const FEATURE_TEXT: Record<FeatureName, [string, string]> = {
+  veil: ['Вуаль', 'Размывает входящие, пока не наведёшь курсор. Ctrl+Shift+V.'],
+  shield: ['Щит чата', 'Панель справа с оценкой защиты чата.'],
+  keyGuard: ['Предупреждение о смене ключа', 'Красная строка в чате и запрет отправки до сверки (по желанию).'],
+  viewOnce: ['Фото на один просмотр', 'Фото и видео, которые открываются один раз.'],
+  clipboard: ['Очистка буфера обмена', 'Скопированный из «Избранного» пароль стирается из буфера.'],
+  stripMeta: ['Удаление метаданных', 'Геометка, данные камеры, автор документа — до шифрования.'],
+  quickUnlock: ['Быстрый вход', 'PIN вместо пароля; ключ — в защищённом хранилище системы.'],
+  bridge: ['Мост', 'Перенос аккаунта на другой ПК по локальной сети.'],
+  callWords: ['Слова-сверка в звонке', 'Два слова из отпечатков шифрования: совпали — посредника нет.'],
+  tempNotes: ['Временные заметки', 'Заметки в «Избранном», которые сгорают через 1, 7 или 30 дней.'],
+  duress: ['Аварийный пароль', 'Второй пароль открывает пустой Veil.'],
+  scheduled: ['Отложенная отправка и капсула времени', 'Сообщения по расписанию и сообщения, которые откроются в нужный день.'],
+  presence: ['Скрытие присутствия', 'Отдельно «в сети», «прочитано» и «печатает», для каждого контакта.'],
+  hiddenChats: ['Скрытые чаты', 'Чаты за отдельным PIN, открываются секретной фразой в поиске.'],
+  securityLog: ['Журнал безопасности', 'Входы, смена ключей и пароля — с кнопкой «Это не я».'],
+  backupFile: ['Резервная копия .veil', 'Один файл, зашифрованный отдельным паролем.'],
+  linkPreviews: ['Превью ссылок', 'Превью делает отправитель, получатель ссылку не открывает.'],
+  invites: ['Приглашения veil://', 'Ссылка или QR-код с отпечатком ключа: контакт сразу сверен.'],
+  groups: ['Группы', 'Групповые чаты со сквозным шифрованием (Sender Keys).'],
+  video: ['Видеозвонки и показ экрана', 'Камера и экран в звонке; при показе экрана включается Вуаль.'],
+  transcribe: ['Голосовые в текст', 'Распознавание на этом устройстве, модель — только с вашего согласия.'],
+  search: ['Поиск по переписке', 'Поиск по всем чатам только на этом устройстве.'],
+};
+
+/** Every v2 feature can be switched off; a switched-off feature leaves no trace in the interface. */
+function FeaturesTab({ snapshot, set }: { snapshot: MessengerSnapshot; set(patch: Partial<Settings>): void }) {
+  const features = snapshot.settings.features;
+  return (
+    <div>
+      <p className="field-hint" style={{ marginTop: 0 }}>
+        Выключенная функция пропадает из интерфейса и ничего не отправляет. Данные, которые она уже сохранила, остаются на этом устройстве.
+      </p>
+      {FEATURE_NAMES.map((name) => (
+        <Row key={name} title={FEATURE_TEXT[name][0]} text={FEATURE_TEXT[name][1]}>
+          <Toggle label={FEATURE_TEXT[name][0]} on={features[name] !== false} onChange={(on) => set({ features: { ...features, [name]: on } })} />
+        </Row>
+      ))}
+    </div>
+  );
+}
+
 function AboutTab() {
   const items = [
     ['Обмен ключами', 'X3DH: X25519 + подписанные Ed25519 предключи'],
@@ -789,7 +887,7 @@ function AboutTab() {
         <h1 style={{ fontSize: 24 }}>
           <span className="gradient-text">Veil</span>
         </h1>
-        <p>Версия {bridge?.version ?? '1.3.0'} · открытый исходный код</p>
+        <p>Версия {bridge?.version ?? '2.0.0'} · открытый исходный код</p>
       </div>
       <UpdatesSection />
       <div className="section">

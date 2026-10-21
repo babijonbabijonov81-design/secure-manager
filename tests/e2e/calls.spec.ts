@@ -54,7 +54,7 @@ test('audio calls: ring, answer, talk, mute, hang up, decline, missed', async ({
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-checked', 'false');
   }
-  await alice.page.getByRole('button', { name: 'Закрыть' }).first().click();
+  await alice.page.getByRole('button', { name: 'Закрыть', exact: true }).first().click();
 
   // 1. Alice calls, Bob answers, they talk.
   await alice.page.locator('.chat-header').getByRole('button', { name: 'Позвонить' }).click();
@@ -128,7 +128,7 @@ test('audio calls: ring, answer, talk, mute, hang up, decline, missed', async ({
   // to silence, so only check that the meter is live, not how loud it is.)
   await expect.poll(() => bob.page.locator('.mic-meter').evaluate((el) => el.style.getPropertyValue('--level'))).not.toBe('');
   await shot(bob.page, '24-audio-settings');
-  await bob.page.getByRole('button', { name: 'Закрыть' }).first().click();
+  await bob.page.getByRole('button', { name: 'Закрыть', exact: true }).first().click();
 
   // The chosen microphone is used for the next call.
   await bob.page.locator('.chat-header').getByRole('button', { name: 'Позвонить' }).click();

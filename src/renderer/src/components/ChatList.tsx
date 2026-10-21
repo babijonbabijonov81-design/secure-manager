@@ -22,6 +22,7 @@ import { forwardRef, useMemo, useState, type MouseEvent } from 'react';
 import { snippetOf, type Messenger } from '../../../core/messenger.ts';
 import { isSavedChat, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
 import { formatListTime, systemText } from '../lib/format.ts';
+import { veiledFor } from '../lib/hooks.ts';
 import { Avatar, ConfirmDialog, ContextMenu, type MenuItem } from '../lib/ui.tsx';
 
 interface Props {
@@ -143,6 +144,7 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
             typing={!!snapshot.typing[contact.id]}
             online={!!snapshot.online[contact.id]}
             active={contact.id === activeId}
+            veiled={veiledFor(snapshot.settings, contact)}
             onClick={() => onSelect(contact.id)}
             onMenu={(e) => openMenu(e, contact)}
           />
@@ -207,6 +209,7 @@ function ChatItem({
   typing,
   online,
   active,
+  veiled,
   onClick,
   onMenu,
 }: {
@@ -215,6 +218,7 @@ function ChatItem({
   typing: boolean;
   online: boolean;
   active: boolean;
+  veiled: boolean;
   onClick(): void;
   onMenu(e: MouseEvent): void;
 }) {
@@ -228,10 +232,18 @@ function ChatItem({
       : snippetOf(last);
   return (
     <div
-      className={`chat-item${active ? ' active' : ''}`}
+      className={`chat-item${active ? ' active' : ''}${veiled ? ' veiled' : ''}`}
       role="listitem"
+      tabIndex={0}
+      aria-current={active ? 'true' : undefined}
       data-testid={`chat-${contact.username || contact.id}`}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       onContextMenu={onMenu}
     >
       <span className="avatar-wrap">
@@ -270,7 +282,7 @@ function ChatItem({
             </span>
           )}
           {contact.muted && <BellOff size={14} className="meta-icon" />}
-          {contact.pinned && !contact.unread && <Pin size={14} className="meta-icon" />}
+          {contact.pinned && !contact.unread && !saved && <Pin size={14} className="meta-icon" />}
           {contact.unread > 0 && <span className={`badge${contact.muted ? ' muted' : ''}`}>{contact.unread > 99 ? '99+' : contact.unread}</span>}
         </div>
       </div>

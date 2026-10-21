@@ -55,6 +55,7 @@ import {
   type CallSignal,
   type Contact,
   isSavedChat,
+  normalizeSettings,
   SAVED_ID,
   type Content,
   type Message,
@@ -160,16 +161,21 @@ export function callTitle(message: Message): string {
 }
 
 export function snippetOf(message: Message): string {
-  if (message.call) return `📞 ${callTitle(message)}`;
+  if (message.call) return callTitle(message);
   if (message.text) return message.text.slice(0, 200);
   const atts = attachmentsOf(message);
   const first = atts[0];
   if (!first) return '';
-  if (first.kind === 'voice') return '🎤 Голосовое сообщение';
+  if (first.kind === 'voice') return first.dur ? `Голосовое · ${formatSeconds(first.dur)}` : 'Голосовое';
   if (first.kind === 'sticker') return 'Стикер';
-  if (first.kind === 'image') return atts.length > 1 ? `📷 ${atts.length} фото` : '📷 Фото';
-  return `📎 ${first.name}`;
+  if (first.kind === 'image') return atts.length > 1 ? `Фото · ${atts.length}` : 'Фото';
+  return `Файл · ${first.name}`;
 }
+
+const formatSeconds = (seconds: number) => {
+  const s = Math.max(0, Math.round(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 const cleanEmoji = (value: unknown) => (typeof value === 'string' ? [...value].slice(0, 8).join('') : '');
@@ -250,7 +256,7 @@ export async function unlock(
   ]);
   messenger.loadState({
     account,
-    settings: { ...DEFAULT_SETTINGS, ...settings },
+    settings: normalizeSettings(settings),
     contacts: contacts ?? {},
     sessions: sessions ?? {},
     outbox: outbox ?? [],
@@ -309,7 +315,7 @@ export async function restoreAccount(
   };
   messenger.loadState({
     account,
-    settings: { ...DEFAULT_SETTINGS, ...payload.settings },
+    settings: normalizeSettings(payload.settings),
     contacts: payload.contacts ?? {},
     sessions: {},
     outbox: [],
@@ -847,8 +853,18 @@ export class Messenger {
 
   setVerified(contactId: string, verified: boolean): void {
     if (!this.contacts[contactId]) return;
-    this.updateContact(contactId, { verified, keyWarning: false });
+    this.updateContact(contactId, { verified, keyWarning: false, verifiedAt: verified ? Date.now() : undefined });
     this.addSystem(contactId, { kind: 'verified', value: verified });
+  }
+
+  /** «Вуаль» for one chat (when it is on only for selected chats). */
+  setVeil(contactId: string, veil: boolean): void {
+    this.updateContact(contactId, { veil: veil || undefined });
+  }
+
+  /** Takes the contact's new key without comparing codes: the warning goes, the chat stays unverified. */
+  acceptKeyChange(contactId: string): void {
+    this.updateContact(contactId, { keyWarning: false });
   }
 
   setBlocked(contactId: string, blocked: boolean): void {

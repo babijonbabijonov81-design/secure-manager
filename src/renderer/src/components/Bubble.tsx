@@ -129,6 +129,8 @@ interface BubbleProps {
   groupStart: boolean;
   groupEnd: boolean;
   highlighted: boolean;
+  /** «Вуаль»: blurred until hovered or focused, so the bubble takes keyboard focus. */
+  veiled?: boolean;
   onContext(e: MouseEvent, message: Message): void;
   onOpenMedia(message: Message, index: number): void;
   onRetry(message: Message): void;
@@ -219,7 +221,12 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
     >
       <div className="msg-col">
         <div className="bubble-line">
-          <div className={bubbleClass} onContextMenu={(e) => props.onContext(e, message)} onDoubleClick={() => react('❤️')}>
+          <div
+            className={bubbleClass}
+            onContextMenu={(e) => props.onContext(e, message)}
+            onDoubleClick={() => react('❤️')}
+            tabIndex={props.veiled && !out ? 0 : undefined}
+          >
             {message.fwd && (
               <div className="fwd" title={`${formatDay(message.fwd.ts)}, ${formatTime(message.fwd.ts)}`}>
                 <Forward size={13} /> Переслано от <b>{message.fwd.name}</b>

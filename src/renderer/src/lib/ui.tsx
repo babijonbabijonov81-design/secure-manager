@@ -1,38 +1,21 @@
 import { AlertCircle, Bookmark, CheckCircle2, Info, X } from 'lucide-react';
-import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { SAVED_ID } from '../../../core/types.ts';
-import { avatarGradient, initials } from './format.ts';
+import { avatarColor, initials } from './format.ts';
 
-const SHIELD = 'M32 9.5 49.5 15.6V30.2c0 11.1-7.3 19.9-17.5 24.8C21.8 50.1 14.5 41.3 14.5 30.2V15.6Z';
-
-/** App mark: white tile with a four-colour shield and a check mark (same artwork as the app icon). */
-export function Logo({ size = 44 }: { size?: number }) {
-  const id = useId().replace(/:/g, '');
+/**
+ * «Две вуали»: a V of two sheets with the conversation (a dot) hidden between them. The warm sheet
+ * is you, the cool one the person you talk to. Colours follow the theme (see --logo-* tokens).
+ */
+export function Logo({ size = 44, plate = true }: { size?: number; plate?: boolean }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true" className="logo">
-      <defs>
-        <linearGradient id={`${id}-tile`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#ffffff" />
-          <stop offset="1" stopColor="#eef1f6" />
-        </linearGradient>
-        <linearGradient id={`${id}-gloss`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#fff" stopOpacity="0.22" />
-          <stop offset="0.5" stopColor="#fff" stopOpacity="0" />
-        </linearGradient>
-        <clipPath id={`${id}-clip`}>
-          <path d={SHIELD} />
-        </clipPath>
-      </defs>
-      <rect x="0.5" y="0.5" width="63" height="63" rx="14.5" fill={`url(#${id}-tile)`} stroke="#d9dee8" />
-      <g clipPath={`url(#${id}-clip)`}>
-        <rect width="32" height="32" fill="#4285F4" />
-        <rect x="32" width="32" height="32" fill="#EA4335" />
-        <rect y="32" width="32" height="32" fill="#34A853" />
-        <rect x="32" y="32" width="32" height="32" fill="#FBBC05" />
-        <path d="M32 0V64M0 32H64" stroke="#fff" strokeWidth="1.6" />
-        <path d={SHIELD} fill={`url(#${id}-gloss)`} />
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true" className="logo">
+      {plate && <rect width="48" height="48" rx="10.56" style={{ fill: 'var(--logo-plate)' }} />}
+      <g transform={plate ? 'translate(7.2 7.2) scale(0.7)' : undefined}>
+        <path d="M7 9 Q19 10 24 39 Q11 29 7 9 Z" style={{ fill: 'var(--logo-a)' }} />
+        <path d="M41 9 Q29 10 24 39 Q37 29 41 9 Z" style={{ fill: 'var(--logo-b)', opacity: 'var(--logo-b-opacity)' }} />
+        <circle cx="24" cy="14" r="4.2" style={{ fill: 'var(--logo-dot)' }} />
       </g>
-      <path d="M24.2 31.6 29.6 37 40.2 26.4" fill="none" stroke="#fff" strokeWidth="4.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -47,7 +30,7 @@ export function Avatar({ name, seed, size = 44 }: { name: string; seed: string; 
   return (
     <div
       className="avatar"
-      style={{ width: size, height: size, background: avatarGradient(seed), fontSize: Math.round(size * 0.38) }}
+      style={{ width: size, height: size, background: avatarColor(seed), fontSize: Math.round(size * 0.38) }}
     >
       {initials(name)}
     </div>
@@ -244,9 +227,6 @@ export function ContextMenu({ x, y, items, header, onClose }: { x: number; y: nu
 export function Backdrop() {
   return (
     <div className="backdrop" aria-hidden="true">
-      <div className="orb a" />
-      <div className="orb b" />
-      <div className="orb c" />
       <div className="grid" />
     </div>
   );

@@ -117,9 +117,9 @@ test('two people chat end-to-end through the relay', async ({ browser }) => {
 
   await shot(alice.page, '05-chat');
 
-  // Safety numbers match on both sides.
-  await alice.page.getByRole('button', { name: 'Информация о чате' }).click();
-  await bob.page.getByRole('button', { name: 'Информация о чате' }).click();
+  // The chat shield is open on the right in a wide window; safety numbers match on both sides.
+  await expect(alice.page.getByTestId('chat-shield')).toContainText('из 6');
+  await expect(alice.page.getByTestId('shield-code')).toContainText('Не сверен');
   const aliceCode = await alice.page.getByTestId('safety-number').innerText();
   const bobCode = await bob.page.getByTestId('safety-number').innerText();
   expect(aliceCode.replace(/\s/g, '')).toMatch(/^\d{60}$/);
@@ -127,6 +127,9 @@ test('two people chat end-to-end through the relay', async ({ browser }) => {
   await alice.page.getByRole('button', { name: 'Коды совпадают — отметить как проверенный' }).click();
   await alice.page.getByRole('button', { name: '1 ч' }).click();
   await expect(bob.page.getByText('включил(а) исчезающие сообщения: 1 ч')).toBeVisible();
+  await expect(alice.page.getByTestId('shield-code')).toContainText('Сверен');
+  await expect(alice.page.getByTestId('shield-timer')).toContainText('Через 1 ч');
+  await expect(alice.page.locator('.chat-header .timer-chip')).toContainText('1 ЧАС');
   await alice.page.locator('.panel-body').evaluate((el) => (el.scrollTop = 0));
   await shot(alice.page, '06-info');
 
@@ -134,7 +137,7 @@ test('two people chat end-to-end through the relay', async ({ browser }) => {
   await alice.page.getByRole('button', { name: 'Настройки' }).click();
   await alice.page.getByRole('button', { name: 'Оформление' }).click();
   await alice.page.getByRole('button', { name: 'Светлая' }).click();
-  await alice.page.getByRole('button', { name: 'teal' }).click();
+  await expect(alice.page.locator('html')).toHaveAttribute('data-theme', 'light');
   await shot(alice.page, '07-settings');
   await alice.page.keyboard.press('Escape');
   await shot(alice.page, '08-light');
