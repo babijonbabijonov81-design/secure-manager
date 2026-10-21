@@ -4575,3 +4575,25 @@ button:disabled {
   font-size: 12px;
   opacity: 0.8;
 }
+
+/* ---- per-contact presence (P1-6) ---- */
+.privacy-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.privacy-row .grow {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.privacy-row small {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.privacy-row select {
+  width: 150px;
+  height: 40px;
+  font-size: 12.5px;
+}

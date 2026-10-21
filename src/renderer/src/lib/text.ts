@@ -1,11 +1,13 @@
 // Presence wording and autocorrection.
 
 import { bridge } from '../../../core/platform.ts';
-import type { Contact } from '../../../core/types.ts';
+import { sharesWith, type Contact, type Settings } from '../../../core/types.ts';
 import { formatDay, formatTime } from './format.ts';
 
 /** "в сети", "был(а) в сети сегодня в 14:32", "был(а) недавно"… or null if unknown. */
-export function presenceText(contact: Contact, online: boolean): string | null {
+export function presenceText(contact: Contact, online: boolean, settings?: Settings): string | null {
+  // Reciprocity: hiding my «в сети» from someone hides theirs from me.
+  if (settings && !sharesWith(settings, contact, 'online')) return null;
   if (online) return 'в сети';
   if (contact.presenceHidden) return 'был(а) недавно';
   if (!contact.lastSeen) return null;

@@ -23,7 +23,7 @@ import {
 import { useMemo, useRef, useState } from 'react';
 import { formatSafetyNumber } from '../../../core/crypto/fingerprint.ts';
 import type { Messenger } from '../../../core/messenger.ts';
-import { isSavedChat, TIMER_OPTIONS, type Contact, type MessengerSnapshot } from '../../../core/types.ts';
+import { isSavedChat, sharesWith, TIMER_OPTIONS, type Contact, type MessengerSnapshot, type PresenceKind } from '../../../core/types.ts';
 import { timerLabel } from '../lib/format.ts';
 import { feature } from '../lib/hooks.ts';
 import { chatShield, SHIELD_SUMMARY, type ShieldItem } from '../lib/shield.ts';
@@ -146,7 +146,7 @@ export function InfoPanel({
             {contact.verified && <ShieldCheck size={18} style={{ color: 'var(--success)' }} />}
           </h4>
           {contact.username && <span className="handle selectable">@{contact.username}</span>}
-          {presenceText(contact, online) && <span className={`presence${online ? ' online' : ''}`}>{presenceText(contact, online)}</span>}
+          {presenceText(contact, online, snapshot.settings) && <span className={`presence${online ? ' online' : ''}`}>{presenceText(contact, online, snapshot.settings)}</span>}
           <div style={{ marginTop: 8 }}>
             {contact.verified ? (
               <span className="chip success">
@@ -215,6 +215,8 @@ export function InfoPanel({
           </div>
           <p>Новые сообщения будут удаляться у обоих собеседников через выбранное время.</p>
         </div>
+
+        {feature(settings, 'presence') && <ContactPrivacy messenger={messenger} snapshot={snapshot} contact={contact} />}
 
         <div className="section action-list">
           <button className="action-item" onClick={() => messenger.setPinned(contact.id, !contact.pinned)}>
@@ -294,6 +296,46 @@ export function InfoPanel({
         />
       )}
     </aside>
+  );
+}
+
+const PRESENCE_ROWS: [PresenceKind, string][] = [
+  ['online', '«В сети» и время захода'],
+  ['read', 'Отчёты о прочтении'],
+  ['typing', '«Печатает»'],
+];
+
+/** What this one contact sees of me; «как в настройках» follows the global switches. */
+function ContactPrivacy({ messenger, snapshot, contact }: { messenger: Messenger; snapshot: MessengerSnapshot; contact: Contact }) {
+  return (
+    <div className="section" data-testid="contact-privacy">
+      <div className="section-title">
+        <EyeOff size={16} /> Что видит {contact.displayName}
+      </div>
+      {PRESENCE_ROWS.map(([kind, label]) => {
+        const own = contact.privacy?.[kind];
+        const value = own === undefined ? 'default' : own ? 'show' : 'hide';
+        const effective = sharesWith(snapshot.settings, contact, kind);
+        return (
+          <label className="privacy-row" key={kind}>
+            <span className="grow">
+              {label}
+              <small>{effective ? 'видит' : 'скрыто — и вы не видите это у него'}</small>
+            </span>
+            <select
+              className="input"
+              aria-label={label}
+              value={value}
+              onChange={(e) => messenger.setContactPrivacy(contact.id, { [kind]: e.target.value === 'default' ? undefined : e.target.value === 'show' })}
+            >
+              <option value="default">Как в настройках</option>
+              <option value="show">Показывать</option>
+              <option value="hide">Скрывать</option>
+            </select>
+          </label>
+        );
+      })}
+    </div>
   );
 }
 

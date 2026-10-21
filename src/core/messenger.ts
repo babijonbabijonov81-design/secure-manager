@@ -69,6 +69,8 @@ import {
   type Message,
   type MessengerSnapshot,
   type NoteKind,
+  type PresenceKind,
+  sharesWith,
   type OutboxItem,
   type ReplyRef,
   type Settings,
@@ -834,15 +836,13 @@ export class Messenger {
     for (const [id, state] of Object.entries(this.online)) {
       if (state.until > now) continue;
       delete this.online[id];
-      if (this.contacts[id] && !this.contacts[id].presenceHidden) this.updateContact(id, { lastSeen: state.last });
+      if (this.contacts[id] && !this.contacts[id].presenceHidden && this.shares(id, 'online')) this.updateContact(id, { lastSeen: state.last });
       this.changed();
     }
     if (now - this.lastHeartbeat > HEARTBEAT_MS && this.relay?.status === 'online') {
       this.lastHeartbeat = now;
       // Keep contacts who are online now up to date that we are still here.
-      if (this.settings.lastSeen === 'everyone') {
-        for (const id of Object.keys(this.online)) void this.sendEphemeral(id, { t: 'pres', s: 'on' });
-      }
+      for (const id of Object.keys(this.online)) if (this.shares(id, 'online')) void this.sendEphemeral(id, { t: 'pres', s: 'on' });
     }
   }
 
@@ -1063,6 +1063,25 @@ export class Messenger {
     if (match) this.updateContact(contactId, { verified: true, keyWarning: false, verifiedAt: Date.now(), verifiedBy: 'call' });
     else this.updateContact(contactId, { verified: false, verifiedAt: undefined, verifiedBy: undefined });
     this.addSystem(contactId, { kind: 'callwords', match });
+  }
+
+  private shares(contactId: string, kind: PresenceKind): boolean {
+    const contact = this.contacts[contactId];
+    return !!contact && sharesWith(this.settings, contact, kind);
+  }
+
+  /** Per-contact «в сети» / «прочитано» / «печатает»; undefined goes back to the global setting. */
+  setContactPrivacy(contactId: string, patch: Partial<Record<PresenceKind, boolean | undefined>>): void {
+    const contact = this.contacts[contactId];
+    if (!contact) return;
+    const privacy = { ...contact.privacy, ...patch };
+    for (const key of Object.keys(privacy) as PresenceKind[]) if (privacy[key] === undefined) delete privacy[key];
+    this.updateContact(contactId, { privacy: Object.keys(privacy).length ? privacy : undefined });
+    if ('online' in patch) {
+      if (!this.shares(contactId, 'online')) delete this.online[contactId];
+      void this.sendEphemeral(contactId, { t: 'pres', s: this.shares(contactId, 'online') ? 'on' : 'hidden', ask: 1 });
+    }
+    if ('typing' in patch && !this.shares(contactId, 'typing')) this.clearTyping(contactId);
   }
 
   /** «Вуаль» for one chat (when it is on only for selected chats). */
@@ -1671,7 +1690,7 @@ export class Messenger {
     if (!unreported.length) return;
     const ids = unreported.map((m) => m.id);
     this.patchMessages(contactId, new Set(ids), (m) => ({ ...m, readSent: true }));
-    if (this.settings.readReceipts && !contact.blocked) void this.sendControl(contact, { t: 'rcpt', k: 'r', ids });
+    if (this.shares(contactId, 'read') && !contact.blocked) void this.sendControl(contact, { t: 'rcpt', k: 'r', ids });
   }
 
   /** Deleting never leaves a "message deleted" trace — on either side. */
@@ -1724,7 +1743,7 @@ export class Messenger {
   }
 
   sendTyping(contactId: string, on: boolean): void {
-    if (!this.settings.typingIndicators) return;
+    if (!this.shares(contactId, 'typing')) return;
     const last = this.lastTypingSent.get(contactId) ?? 0;
     if (on && Date.now() - last < 3000) return;
     this.lastTypingSent.set(contactId, on ? Date.now() : 0);
@@ -1810,10 +1829,10 @@ export class Messenger {
   /** Tells contacts we came online (asking for their status) or are leaving. */
   private announcePresence(state: 'on' | 'off', ask = false): void {
     if (!this.relay || this.relay.status !== 'online') return;
-    const hidden = this.settings.lastSeen === 'nobody';
     for (const contact of Object.values(this.contacts)) {
       if (contact.blocked) continue;
       if (state === 'off' && !this.online[contact.id]) continue;
+      const hidden = !this.shares(contact.id, 'online');
       const content: Content = hidden ? { t: 'pres', s: 'hidden', ...(ask ? { ask: 1 } : {}) } : { t: 'pres', s: state, ...(ask ? { ask: 1 } : {}) };
       void this.sendEphemeral(contact.id, content);
     }
@@ -1821,7 +1840,7 @@ export class Messenger {
 
   private markOnline(contactId: string): void {
     const contact = this.contacts[contactId];
-    if (!contact || contact.presenceHidden) return;
+    if (!contact || contact.presenceHidden || !this.shares(contactId, 'online')) return;
     const now = Date.now();
     const wasOnline = !!this.online[contactId];
     this.online[contactId] = { until: now + ONLINE_GRACE_MS, last: now };
@@ -1830,7 +1849,10 @@ export class Messenger {
 
   private handlePresence(contact: Contact, content: Extract<Content, { t: 'pres' }>): void {
     const now = Date.now();
-    if (content.s === 'hidden') {
+    const mine = this.shares(contact.id, 'online');
+    if (!mine) {
+      // Reciprocity: I hide «в сети» from them, so I do not see theirs either.
+    } else if (content.s === 'hidden') {
       delete this.online[contact.id];
       if (!contact.presenceHidden || contact.lastSeen) this.updateContact(contact.id, { presenceHidden: true, lastSeen: undefined });
       this.changed();
@@ -1841,10 +1863,7 @@ export class Messenger {
       if (contact.presenceHidden) this.updateContact(contact.id, { presenceHidden: false });
       this.markOnline(contact.id);
     }
-    if (content.ask) {
-      const hidden = this.settings.lastSeen === 'nobody';
-      void this.sendEphemeral(contact.id, { t: 'pres', s: hidden ? 'hidden' : 'on' });
-    }
+    if (content.ask) void this.sendEphemeral(contact.id, { t: 'pres', s: mine ? 'on' : 'hidden' });
   }
 
   // ---- receiving -----------------------------------------------------------------------
@@ -2056,7 +2075,8 @@ export class Messenger {
         return;
       }
       case 'rcpt':
-        if (Array.isArray(content.ids)) this.setStatus(contact.id, content.ids, content.k === 'r' ? 'read' : 'delivered');
+        // Reciprocity: without sending «прочитано» myself, I only learn «доставлено».
+        if (Array.isArray(content.ids)) this.setStatus(contact.id, content.ids, content.k === 'r' && this.shares(contact.id, 'read') ? 'read' : 'delivered');
         return;
       case 'typ':
         this.setTyping(contact.id, !!content.on);
@@ -2118,7 +2138,7 @@ export class Messenger {
   }
 
   private setTyping(contactId: string, on: boolean): void {
-    if (!this.settings.typingIndicators) return;
+    if (!this.shares(contactId, 'typing')) return;
     clearTimeout(this.typingTimers.get(contactId));
     if (!on) return this.clearTyping(contactId);
     this.typing[contactId] = Date.now() + TYPING_TIMEOUT_MS;
@@ -2200,7 +2220,10 @@ export class Messenger {
     const before = this.settings.lastSeen;
     this.settings = { ...this.settings, ...patch };
     if (patch.typingIndicators === false) this.typing = {};
-    if (patch.lastSeen && patch.lastSeen !== before) this.announcePresence('on');
+    if (patch.lastSeen && patch.lastSeen !== before) {
+      if (patch.lastSeen === 'nobody') for (const id of Object.keys(this.online)) if (!this.shares(id, 'online')) delete this.online[id];
+      this.announcePresence('on', true);
+    }
     this.markDirty('settings');
     this.scheduleBackup();
     this.changed();

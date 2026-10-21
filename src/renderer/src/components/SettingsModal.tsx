@@ -93,26 +93,23 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
             {tab === 'profile' && <ProfileTab messenger={messenger} snapshot={snapshot} />}
             {tab === 'privacy' && (
               <div>
-                <div className="field" style={{ marginBottom: 6 }}>
-                  <span className="field-label">Время последнего захода</span>
-                  <div className="segmented">
-                    <button className={s.lastSeen === 'everyone' ? 'active' : ''} onClick={() => set({ lastSeen: 'everyone' })}>
-                      «в сети» и время захода
-                    </button>
-                    <button className={s.lastSeen === 'nobody' ? 'active' : ''} onClick={() => set({ lastSeen: 'nobody' })}>
-                      «был(а) недавно»
-                    </button>
-                  </div>
-                  <span className="field-hint">
-                    {s.lastSeen === 'everyone'
-                      ? 'Собеседники видят, когда вы в сети и когда заходили. Статус передаётся только им и в зашифрованном виде.'
-                      : 'Собеседники видят только «был(а) недавно» — ни статуса «в сети», ни точного времени.'}
-                  </span>
+                <div className="field-label" style={{ marginBottom: 2 }}>
+                  Присутствие
                 </div>
+                <span className="field-hint">
+                  Правило взаимности: что вы скрываете от других, того не видите и у них.
+                  {feature(s, 'presence') && ' Для отдельного контакта это можно изменить в его Щите чата.'}
+                </span>
+                <Row
+                  title="«В сети» и время захода"
+                  text={s.lastSeen === 'everyone' ? 'Собеседники видят, когда вы в сети и когда заходили. Передаётся только им и в зашифрованном виде.' : 'Собеседники видят только «был(а) недавно».'}
+                >
+                  <Toggle label="В сети и время захода" on={s.lastSeen === 'everyone'} onChange={(v) => set({ lastSeen: v ? 'everyone' : 'nobody' })} />
+                </Row>
                 <Row title="Отчёты о прочтении" text="Собеседник увидит, что вы прочитали сообщение. Если выключить — вы тоже не увидите его отчёты.">
                   <Toggle label="Отчёты о прочтении" on={s.readReceipts} onChange={(v) => set({ readReceipts: v })} />
                 </Row>
-                <Row title="Индикатор набора" text="Показывать «печатает…». Передаётся только в зашифрованном виде.">
+                <Row title="Индикатор набора" text="Показывать «печатает…». Если выключить — вы тоже не увидите, что собеседник печатает.">
                   <Toggle label="Индикатор набора" on={s.typingIndicators} onChange={(v) => set({ typingIndicators: v })} />
                 </Row>
                 <Row title="Уведомления" text="Системные уведомления о новых сообщениях.">

@@ -197,6 +197,20 @@ export interface Contact {
   verifiedBy?: 'code' | 'call' | 'invite';
   /** «Вуаль» for this chat when it is enabled only for selected chats. */
   veil?: boolean;
+  /** What this contact sees of me, overriding the global settings (features.presence). */
+  privacy?: Partial<Record<PresenceKind, boolean>>;
+}
+
+export type PresenceKind = 'online' | 'read' | 'typing';
+
+/**
+ * Whether I share «в сети», «прочитано» or «печатает» with this contact. Reciprocity: what I do
+ * not share, I do not see from them either.
+ */
+export function sharesWith(settings: Settings, contact: Pick<Contact, 'privacy'>, kind: PresenceKind): boolean {
+  const global = kind === 'online' ? settings.lastSeen === 'everyone' : kind === 'read' ? settings.readReceipts : settings.typingIndicators;
+  if (settings.features?.presence === false) return global;
+  return contact.privacy?.[kind] ?? global;
 }
 
 export type MessageStatus = 'scheduled' | 'pending' | 'sent' | 'delivered' | 'read' | 'failed';

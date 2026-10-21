@@ -317,7 +317,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
     previous = message;
   });
 
-  const status = typing ? null : presenceText(contact, online);
+  const status = typing ? null : presenceText(contact, online, snapshot.settings);
   const held = messenger.isHeld(contact.id);
   const shield = !saved && feature(snapshot.settings, 'shield') ? chatShield(contact, snapshot, messenger.iceServers.hasTurn) : null;
   const ShieldIcon = shield?.level === 'alert' ? ShieldAlert : shield?.level === 'ok' ? ShieldCheck : Shield;
