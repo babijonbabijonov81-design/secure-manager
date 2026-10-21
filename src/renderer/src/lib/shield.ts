@@ -48,9 +48,9 @@ export function chatShield(contact: Contact, snapshot: MessengerSnapshot, hasTur
       value: contact.keyWarning
         ? 'Ключ изменился — сверьте заново'
         : contact.verified
-          ? contact.verifiedAt
-            ? `Сверен ${formatDay(contact.verifiedAt).toLowerCase()}`
-            : 'Сверен'
+          ? `${contact.verifiedBy === 'call' ? 'Сверен голосом в звонке' : contact.verifiedBy === 'invite' ? 'Сверен приглашением' : 'Сверен'}${
+              contact.verifiedAt ? ` ${formatDay(contact.verifiedAt).toLowerCase()}` : ''
+            }`
           : 'Не сверен',
       state: contact.keyWarning ? 'alert' : contact.verified ? 'ok' : 'weak',
       target: { panel: 'safety' },

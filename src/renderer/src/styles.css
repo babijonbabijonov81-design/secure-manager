@@ -4297,3 +4297,42 @@ button:disabled {
 .notice.warn svg {
   color: var(--amber-text);
 }
+
+/* ---- «Слова-сверка» in a call (P1-2) ---- */
+.call-words {
+  margin: 4px auto 18px;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  text-align: center;
+}
+.call-words-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.call-words b {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text);
+}
+.call-words.checked b {
+  color: var(--mint-text);
+}
+.call-words-hint {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.call-words-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}

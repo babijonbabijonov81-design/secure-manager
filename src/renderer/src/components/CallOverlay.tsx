@@ -31,7 +31,7 @@ function statusText(call: CallState, clock: string): string {
 }
 
 /** The call window: full card while ringing or talking, a slim bar when minimized. */
-export function CallOverlay({ calls, contacts }: { calls: CallManager; contacts: Contact[] }) {
+export function CallOverlay({ calls, contacts, showWords }: { calls: CallManager; contacts: Contact[]; showWords: boolean }) {
   const call = useSyncExternalStore(calls.subscribe, calls.getState);
   if (!call) return null;
   const contact = contacts.find((c) => c.id === call.contactId);
@@ -39,11 +39,11 @@ export function CallOverlay({ calls, contacts }: { calls: CallManager; contacts:
   return call.minimized && call.phase !== 'ended' ? (
     <CallBar calls={calls} call={call} contact={contact} />
   ) : (
-    <CallCard calls={calls} call={call} contact={contact} />
+    <CallCard calls={calls} call={call} contact={contact} showWords={showWords} />
   );
 }
 
-function CallCard({ calls, call, contact }: { calls: CallManager; call: CallState; contact: Contact }) {
+function CallCard({ calls, call, contact, showWords }: { calls: CallManager; call: CallState; contact: Contact; showWords: boolean }) {
   const clock = useClock(call.connectedAt);
   const avatar = useRef<HTMLDivElement>(null);
   const remote = calls.remoteStream;
@@ -80,6 +80,30 @@ function CallCard({ calls, call, contact }: { calls: CallManager; call: CallStat
           {statusText(call, clock)}
           {call.muted && call.phase !== 'ended' && <span className="call-muted"> · микрофон выключен</span>}
         </p>
+
+        {showWords && call.words && call.phase === 'active' && (
+          <div className={`call-words${call.wordsChecked ? ' checked' : ''}`} data-testid="call-words">
+            <span className="call-words-label">Слова-сверка</span>
+            <b>
+              {call.words[0]} · {call.words[1]}
+            </b>
+            {call.wordsChecked ? (
+              <span className="call-words-hint">Отмечено в Щите чата</span>
+            ) : (
+              <>
+                <span className="call-words-hint">Произнесите вслух: если у собеседника те же слова, посредника нет.</span>
+                <div className="call-words-actions">
+                  <button className="btn btn-sm btn-secondary" onClick={() => calls.checkWords(false)}>
+                    Не совпало
+                  </button>
+                  <button className="btn btn-sm btn-primary" onClick={() => calls.checkWords(true)}>
+                    Совпало
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {call.phase === 'incoming' ? (
           <div className="call-controls">

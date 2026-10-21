@@ -311,7 +311,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           </button>
         </div>
       )}
-      {calls && <CallOverlay calls={calls} contacts={snapshot.contacts} />}
+      {calls && <CallOverlay calls={calls} contacts={snapshot.contacts} showWords={feature(settings, 'callWords')} />}
       {update && !updateHidden && ['available', 'downloading', 'ready'].includes(update.status) && (
         <div className="banner update">
           <DownloadCloud size={15} />

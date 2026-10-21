@@ -2,6 +2,7 @@
 // encryption) travels inside Veil's end-to-end encrypted channel, so neither the relay nor a
 // STUN/TURN server can listen in or slip itself between the two sides.
 import { randomId } from '../../../../server/src/shared/wire.ts';
+import { callWords, sdpFingerprint } from '../../../core/call-words.ts';
 import type { Messenger } from '../../../core/messenger.ts';
 import type { AudioSettings, CallEndReason, CallRecord, CallSignal, Contact } from '../../../core/types.ts';
 import { openMicrophone, routeOutput, Tones } from './audio.ts';
@@ -19,6 +20,10 @@ export interface CallState {
   minimized: boolean;
   /** Why the call ended, shown for a moment before the window closes. */
   endText?: string;
+  /** «Слова-сверка» from both DTLS fingerprints, once connected. */
+  words?: [string, string];
+  /** The person said the words matched (or not) in this call. */
+  wordsChecked?: boolean;
 }
 
 const RING_TIMEOUT_MS = 45_000;
@@ -182,6 +187,22 @@ export class CallManager {
     this.finish('declined', 'Звонок завершён', 'hangup');
   }
 
+  /** Both fingerprints, local and remote, come from the SDPs exchanged end-to-end encrypted. */
+  private words(pc: RTCPeerConnection): [string, string] | undefined {
+    const local = sdpFingerprint(pc.localDescription?.sdp);
+    const remote = sdpFingerprint(pc.remoteDescription?.sdp);
+    return local && remote ? callWords(local, remote) : undefined;
+  }
+
+  /** «Совпало» marks the contact as verified by voice; «Не совпало» warns and hangs up. */
+  checkWords(match: boolean): void {
+    const s = this.state;
+    if (!s?.words || s.wordsChecked) return;
+    this.messenger.confirmCallWords(s.contactId, match);
+    this.patch({ wordsChecked: true });
+    if (!match) this.hangup();
+  }
+
   toggleMute(): void {
     const s = this.state;
     if (!s) return;
@@ -311,7 +332,7 @@ export class CallManager {
         this.clearTimer();
         if (s.phase !== 'active') {
           if (!s.connectedAt) this.tones.play('connected');
-          this.patch({ phase: 'active', connectedAt: s.connectedAt ?? Date.now() });
+          this.patch({ phase: 'active', connectedAt: s.connectedAt ?? Date.now(), words: s.words ?? this.words(pc) });
         }
         return;
       case 'disconnected':

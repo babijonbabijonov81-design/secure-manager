@@ -122,6 +122,10 @@ export function systemText(message: Message, contact: Contact | undefined): stri
       return `Ключ контакта «${name}» изменился. Сверьте код безопасности заново`;
     case 'reset':
       return 'Сеанс шифрования сброшен';
+    case 'callwords':
+      return sys.match
+        ? `Слова в звонке совпали — между вами и «${name}» никого нет`
+        : 'Слова в звонке не совпали. Разговор могли перехватить — сверьте код безопасности при встрече';
   }
 }
 

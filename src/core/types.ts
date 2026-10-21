@@ -189,6 +189,8 @@ export interface Contact {
   presenceHidden?: boolean;
   /** When the safety number was last confirmed. */
   verifiedAt?: number;
+  /** How: the safety number, the words in a call, or a veil:// invite passed in person. */
+  verifiedBy?: 'code' | 'call' | 'invite';
   /** «Вуаль» for this chat when it is enabled only for selected chats. */
   veil?: boolean;
 }
@@ -216,7 +218,9 @@ export type SystemEvent =
   | { kind: 'timer'; seconds: number; by: 'me' | 'them' }
   | { kind: 'verified'; value: boolean }
   | { kind: 'keychange' }
-  | { kind: 'reset' };
+  | { kind: 'reset' }
+  /** The two words in a call matched (no one in the middle) or did not. */
+  | { kind: 'callwords'; match: boolean };
 
 /** A call as shown in the chat; kept only on this device. */
 export interface CallRecord {

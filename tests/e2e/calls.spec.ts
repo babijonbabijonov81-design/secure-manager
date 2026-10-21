@@ -73,6 +73,13 @@ test('audio calls: ring, answer, talk, mute, hang up, decline, missed', async ({
     .toBeGreaterThan(0);
   await shot(alice.page, '21-call-active');
 
+  // «Слова-сверка»: the same two words on both screens; «Совпало» marks the contact verified.
+  const words = (await alice.page.getByTestId('call-words').locator('b').innerText()).trim();
+  expect(words).toMatch(/^[а-я]+ · [а-я]+$/);
+  await expect(bob.page.getByTestId('call-words').locator('b')).toHaveText(words);
+  await alice.page.getByTestId('call-words').getByRole('button', { name: 'Совпало', exact: true }).click();
+  await expect(alice.page.getByTestId('call-words')).toContainText('Отмечено в Щите чата');
+
   await alice.page.getByRole('button', { name: 'Выключить микрофон' }).click();
   await expect(status(alice.page)).toContainText('микрофон выключен');
   await alice.page.getByRole('button', { name: 'Включить микрофон' }).click();
@@ -93,6 +100,8 @@ test('audio calls: ring, answer, talk, mute, hang up, decline, missed', async ({
   await expect(records(alice.page).last()).toContainText('Исходящий звонок');
   await expect(records(alice.page).last()).toContainText(/сек|мин/);
   await expect(records(bob.page).last()).toContainText('Входящий звонок');
+  await expect(alice.page.getByTestId('shield-code')).toContainText('Сверен голосом в звонке');
+  await expect(alice.page.locator('.sys-msg', { hasText: 'Слова в звонке совпали' })).toBeVisible();
 
   // 2. Bob calls back from the call record, Alice declines.
   await expect(bob.page.locator('.call-overlay')).toBeHidden({ timeout: 10_000 });

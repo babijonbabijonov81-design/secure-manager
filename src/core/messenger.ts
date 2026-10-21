@@ -984,8 +984,19 @@ export class Messenger {
 
   setVerified(contactId: string, verified: boolean): void {
     if (!this.contacts[contactId]) return;
-    this.updateContact(contactId, { verified, keyWarning: false, verifiedAt: verified ? Date.now() : undefined });
+    this.updateContact(contactId, { verified, keyWarning: false, verifiedAt: verified ? Date.now() : undefined, verifiedBy: verified ? 'code' : undefined });
     this.addSystem(contactId, { kind: 'verified', value: verified });
+  }
+
+  /**
+   * «Слова-сверка»: the two words in a call matched (the contact counts as verified, by voice) or
+   * did not (the verified mark goes, a red line says the call may have been intercepted).
+   */
+  confirmCallWords(contactId: string, match: boolean): void {
+    if (!this.contacts[contactId] || isSavedChat(contactId)) return;
+    if (match) this.updateContact(contactId, { verified: true, keyWarning: false, verifiedAt: Date.now(), verifiedBy: 'call' });
+    else this.updateContact(contactId, { verified: false, verifiedAt: undefined, verifiedBy: undefined });
+    this.addSystem(contactId, { kind: 'callwords', match });
   }
 
   /** «Вуаль» for one chat (when it is on only for selected chats). */

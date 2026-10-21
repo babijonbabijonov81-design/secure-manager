@@ -272,7 +272,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
       previous = undefined;
     }
     if (message.dir === 'system') {
-      const warn = message.sys?.kind === 'keychange';
+      const warn = message.sys?.kind === 'keychange' || (message.sys?.kind === 'callwords' && !message.sys.match);
       rows.push(
         <div className={`sys-msg${warn ? ' warn' : ''}`} key={message.id}>
           {warn ? <TriangleAlert size={13} /> : message.sys?.kind === 'timer' ? <Hourglass size={13} /> : <ShieldCheck size={13} />}
