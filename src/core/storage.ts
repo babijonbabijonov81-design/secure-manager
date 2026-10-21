@@ -134,6 +134,12 @@ export class SecureStore {
       .map((key) => key.slice(2));
   }
 
+  /** A copy of the data key (quick unlock keeps it in the system keychain). */
+  exportKey(): Uint8Array {
+    this.assertOpen();
+    return this.dataKey.slice();
+  }
+
   /** Forget the key; the store is unusable afterwards. */
   close(): void {
     this.closed = true;

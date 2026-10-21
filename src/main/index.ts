@@ -27,6 +27,17 @@ import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
 import { SecretClipboard } from '../core/secret-clipboard.ts';
+import {
+  disableQuickUnlock,
+  enableFingerprint,
+  enablePin,
+  loadPin,
+  pinFailed,
+  pinSucceeded,
+  quickUnlockStatus,
+  unlockWithFingerprint,
+  watchSystemLock,
+} from './system.ts';
 import { closeAllCards, closeCard, setupNotificationCards, showNotificationCard, type NotificationCard } from './notifications.ts';
 import { setupUpdater } from './updater.ts';
 import trayDark2xPath from '../../resources/tray-dark@2x.png?asset';
@@ -57,6 +68,7 @@ let quitting = false;
 let relay: RelayHandle | null = null;
 let relayError: string | undefined;
 let lastBadge = 0;
+let systemLock: Promise<boolean> = Promise.resolve(false);
 
 const userData = () => app.getPath('userData');
 const vaultDir = () => join(userData(), 'vault');
@@ -203,6 +215,7 @@ function createWindow(state: AppConfig['window'] = undefined): void {
     // Keep running in the background so messages keep arriving.
     event.preventDefault();
     mainWindow?.hide();
+    mainWindow?.webContents.send('window-hidden');
     if (!isMac) void showTrayHint();
   });
 
@@ -382,6 +395,18 @@ function registerIpc(): void {
   ipcMain.on('notify:close', (event, tag: unknown) => {
     if (trusted(event) && typeof tag === 'string') closeCard(tag);
   });
+  // Locked: no message text may stay on screen in notification cards.
+  ipcMain.on('notify:close-all', (event) => trusted(event) && closeAllCards());
+
+  handle('quick:status', () => quickUnlockStatus());
+  handle('quick:enable-pin', (blob: string) => enablePin(blob));
+  handle('quick:load-pin', () => loadPin());
+  handle('quick:pin-failed', () => pinFailed());
+  handle('quick:pin-ok', () => pinSucceeded());
+  handle('quick:enable-fingerprint', (key: string) => enableFingerprint(key));
+  handle('quick:fingerprint', () => unlockWithFingerprint());
+  handle('quick:disable', (what: 'pin' | 'fingerprint' | 'all') => disableQuickUnlock(['pin', 'fingerprint'].includes(what) ? what : 'all'));
+  handle('system:lock-supported', () => systemLock);
 
   ipcMain.on('badge', (event, count: number) => {
     if (!trusted(event)) return;
@@ -567,6 +592,7 @@ app.whenReady().then(async () => {
 
   registerIpc();
   createMenu();
+  systemLock = watchSystemLock(() => mainWindow?.webContents.send('system-lock'));
   setupNotificationCards(
     (tag) => {
       showWindow();

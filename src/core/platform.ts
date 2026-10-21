@@ -29,6 +29,15 @@ export interface NotificationCardData {
   call?: boolean;
 }
 
+export interface QuickUnlockStatus {
+  available: boolean;
+  keychain: 'dpapi' | 'keychain' | 'libsecret' | 'kwallet' | 'test' | 'none';
+  pin: boolean;
+  attemptsLeft: number;
+  fingerprint: { available: boolean; enabled: boolean };
+  hello: false;
+}
+
 export interface VeilBridge {
   platform: 'darwin' | 'win32' | 'linux';
   version: string;
@@ -44,6 +53,8 @@ export interface VeilBridge {
   onNotificationClick(callback: (tag: string) => void): () => void;
   /** Removes a notification card (e.g. an incoming call that was answered or ended). */
   closeNotification(tag: string): void;
+  /** Removes every notification card (when Veil locks). */
+  closeAllNotifications(): void;
   /** Answer/decline pressed on an incoming call card. */
   onCallAction(callback: (action: { tag: string; action: 'accept' | 'decline' }) => void): () => void;
   setBadge(count: number): void;
@@ -67,6 +78,23 @@ export interface VeilBridge {
     setEnabled(enabled: boolean): void;
   };
   requestMicrophone(): Promise<boolean>;
+  /** Quick unlock: the vault key in the system keychain, behind a PIN or a fingerprint. */
+  quickUnlock: {
+    status(): Promise<QuickUnlockStatus>;
+    enablePin(blob: string): Promise<void>;
+    loadPin(): Promise<string | null>;
+    pinFailed(): Promise<number>;
+    pinSucceeded(): Promise<void>;
+    enableFingerprint(key: string): Promise<void>;
+    fingerprint(): Promise<string | null>;
+    disable(what: 'pin' | 'fingerprint' | 'all'): Promise<void>;
+  };
+  /** The operating system locked the screen or went to sleep. */
+  onSystemLock(callback: () => void): () => void;
+  /** Whether locking together with the system can be detected here. */
+  systemLockSupported(): Promise<boolean>;
+  /** The window was hidden to the tray. */
+  onHidden(callback: () => void): () => void;
   toggleFullscreen(): void;
   onFullscreen(callback: (fullscreen: boolean) => void): () => void;
   update: {

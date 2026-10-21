@@ -1,9 +1,12 @@
-import { Eye, EyeOff, KeyRound, LockKeyhole, Smartphone } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { Eye, EyeOff, Fingerprint, KeyRound, LockKeyhole, Smartphone } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { unb64 } from '../../../../server/src/shared/wire.ts';
 import { WrongPasswordError } from '../../../core/crypto/vault.ts';
-import { unlock, type Messenger, type MessengerEvents } from '../../../core/messenger.ts';
+import { unlock, unlockWithKey, type Messenger, type MessengerEvents } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
+import { unwrapWithPin, type PinBlob } from '../../../core/quick-unlock.ts';
 import type { StorageBackend } from '../../../core/storage.ts';
+import { useQuickUnlockStatus } from '../components/QuickUnlock.tsx';
 import { CodeInput } from '../components/SecurityDialogs.tsx';
 import { Backdrop, ConfirmDialog, Logo } from '../lib/ui.tsx';
 
@@ -27,6 +30,72 @@ export function LockScreen({
   const [confirmReset, setConfirmReset] = useState(false);
   const [pending, setPending] = useState<Messenger | null>(null);
   const [code, setCode] = useState('');
+  const [quick] = useQuickUnlockStatus();
+  const [mode, setMode] = useState<'password' | 'pin'>('password');
+  const [pin, setPin] = useState('');
+  useEffect(() => {
+    if (quick?.pin) setMode('pin');
+  }, [quick?.pin]);
+
+  const opened = (messenger: Messenger) => {
+    if (messenger.needsTotp) {
+      setPending(messenger);
+      setBusy(false);
+      setPassword('');
+      setPin('');
+    } else onUnlock(messenger);
+  };
+  const failed = (text: string) => {
+    setError(text);
+    setShake((n) => n + 1);
+    setBusy(false);
+    setProgress(0);
+  };
+
+  const submitPin = async (e: FormEvent) => {
+    e.preventDefault();
+    if (pin.length < 4 || busy) return;
+    setBusy(true);
+    setError('');
+    const blob = await bridge!.quickUnlock.loadPin();
+    if (!blob) {
+      setMode('password');
+      return failed('Вход по PIN недоступен. Введите пароль.');
+    }
+    let key: Uint8Array;
+    try {
+      key = await unwrapWithPin(JSON.parse(blob) as PinBlob, pin);
+    } catch {
+      setPin('');
+      const left = await bridge!.quickUnlock.pinFailed();
+      if (left > 0) return failed(`Неверный PIN. Осталось попыток: ${left}`);
+      setMode('password');
+      return failed('Пять неверных PIN подряд: PIN отключён. Войдите по паролю.');
+    }
+    await bridge!.quickUnlock.pinSucceeded();
+    try {
+      opened(await unlockWithKey(storage, key, events));
+    } catch (err) {
+      failed((err as Error).message);
+    } finally {
+      key.fill(0);
+    }
+  };
+
+  const unlockByFingerprint = async () => {
+    setBusy(true);
+    setError('');
+    const key = await bridge!.quickUnlock.fingerprint();
+    if (!key) return failed('Отпечаток не распознан');
+    const bytes = unb64(key);
+    try {
+      opened(await unlockWithKey(storage, bytes, events));
+    } catch (err) {
+      failed((err as Error).message);
+    } finally {
+      bytes.fill(0);
+    }
+  };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -34,18 +103,10 @@ export function LockScreen({
     setBusy(true);
     setError('');
     try {
-      const messenger = await unlock(storage, password, events, setProgress);
-      if (messenger.needsTotp) {
-        setPending(messenger);
-        setBusy(false);
-        setPassword('');
-      } else onUnlock(messenger);
+      opened(await unlock(storage, password, events, setProgress));
     } catch (err) {
-      setError(err instanceof WrongPasswordError ? 'Неверный пароль' : (err as Error).message);
-      setShake((n) => n + 1);
       setPassword('');
-      setBusy(false);
-      setProgress(0);
+      failed(err instanceof WrongPasswordError ? 'Неверный пароль' : (err as Error).message);
     }
   };
 
@@ -92,6 +153,62 @@ export function LockScreen({
                   }}
                 >
                   Назад
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </>
+    );
+  }
+
+  if (mode === 'pin') {
+    return (
+      <>
+        <Backdrop />
+        {bridge && <div className="titlebar" style={{ background: 'transparent', borderBottom: 0, position: 'fixed', inset: '0 0 auto 0' }} />}
+        <div className="center-stage">
+          <form className={`glass-card${shake ? ' shake' : ''}`} key={shake} onSubmit={submitPin} style={{ maxWidth: 400 }}>
+            <div className="brand" style={{ marginBottom: 24 }}>
+              <div className="brand-logo">
+                <Logo size={68} />
+              </div>
+              <h1 style={{ fontSize: 24 }}>Veil заблокирован</h1>
+              <p>Введите PIN этого компьютера.</p>
+            </div>
+            <div className="form">
+              <input
+                className={`input pin-input${error ? ' invalid' : ''}`}
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={8}
+                placeholder="PIN"
+                aria-label="PIN"
+                autoFocus
+                value={pin}
+                disabled={busy}
+                onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+              />
+              {error && <span className="field-error">{error}</span>}
+              <button className="btn btn-primary btn-lg btn-block" disabled={busy || pin.length < 4}>
+                {busy ? <span className="spinner" /> : <LockKeyhole size={18} />} Разблокировать
+              </button>
+              {quick?.fingerprint.enabled && (
+                <button type="button" className="btn btn-secondary btn-block" disabled={busy} onClick={() => void unlockByFingerprint()}>
+                  <Fingerprint size={18} /> Приложите палец к сканеру
+                </button>
+              )}
+              <div style={{ textAlign: 'center' }}>
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => {
+                    setMode('password');
+                    setError('');
+                  }}
+                >
+                  Войти по паролю
                 </button>
               </div>
             </div>
@@ -156,7 +273,17 @@ export function LockScreen({
                 </>
               )}
             </button>
-            <div style={{ textAlign: 'center' }}>
+            {quick?.fingerprint.enabled && (
+              <button type="button" className="btn btn-secondary btn-block" disabled={busy} onClick={() => void unlockByFingerprint()}>
+                <Fingerprint size={18} /> Войти по отпечатку
+              </button>
+            )}
+            <div style={{ textAlign: 'center', display: 'flex', justifyContent: 'center', gap: 18 }}>
+              {quick?.pin && (
+                <button type="button" className="link-btn" onClick={() => setMode('pin')}>
+                  Войти по PIN
+                </button>
+              )}
               <button type="button" className="link-btn" onClick={() => setConfirmReset(true)}>
                 Забыли пароль?
               </button>
@@ -173,6 +300,7 @@ export function LockScreen({
           onClose={() => setConfirmReset(false)}
           onConfirm={async () => {
             await storage.clear();
+            await bridge?.quickUnlock.disable('all');
             onReset();
           }}
         />

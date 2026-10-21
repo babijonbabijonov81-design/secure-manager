@@ -103,6 +103,8 @@ export function App() {
     const current = messenger;
     setMessenger(null);
     setPhase('locked');
+    // Locked means no message text anywhere on screen, notification cards included.
+    bridge?.closeAllNotifications();
     await current?.lock();
   };
 

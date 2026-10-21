@@ -33,6 +33,7 @@ import { formatDay, formatTime } from '../lib/format.ts';
 import { feature } from '../lib/hooks.ts';
 import { isOwnServer } from '../lib/shield.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
+import { QuickUnlockSection } from './QuickUnlock.tsx';
 import { CodeInput, RecoveryEmailDialog, TotpDisableDialog, TotpSetupDialog } from './SecurityDialogs.tsx';
 
 export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'features' | 'about';
@@ -61,6 +62,8 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
   useEscape(onClose);
   const set = (patch: Partial<Settings>) => messenger.updateSettings(patch);
   const s = snapshot.settings;
+  const [systemLock, setSystemLock] = useState<boolean | null>(null);
+  useEffect(() => void bridge?.systemLockSupported().then(setSystemLock), []);
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -203,8 +206,12 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
                   </select>
                 </Row>
                 {bridge && (
-                  <Row title="Вместе с экраном компьютера" text={lockOnSystemHint}>
-                    <Toggle label="Блокировать вместе с экраном компьютера" on={s.lockOnSystemLock} onChange={(v) => set({ lockOnSystemLock: v })} />
+                  <Row title="Вместе с экраном компьютера" text={systemLock === false ? lockOnSystemMissing : lockOnSystemHint}>
+                    {systemLock === false ? (
+                      <span className="chip">Недоступно</span>
+                    ) : (
+                      <Toggle label="Блокировать вместе с экраном компьютера" on={s.lockOnSystemLock} onChange={(v) => set({ lockOnSystemLock: v })} />
+                    )}
                   </Row>
                 )}
                 {bridge && (
@@ -262,6 +269,9 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
     </div>
   );
 }
+
+const lockOnSystemMissing =
+  'На этой системе блокировку экрана отследить нельзя (нет gdbus). Включите автоблокировку по времени или при сворачивании в трей.';
 
 const lockOnSystemHint =
   bridge?.platform === 'linux'
@@ -679,7 +689,9 @@ function SecurityTab({ messenger, snapshot, onDeleted }: { messenger: Messenger;
         </button>
       </form>
 
-      <div className="section" style={{ borderColor: 'rgba(255,92,122,0.25)' }}>
+      {feature(snapshot.settings, 'quickUnlock') && <QuickUnlockSection messenger={messenger} />}
+
+      <div className="section" style={{ borderColor: 'rgba(var(--danger-rgb), 0.3)' }}>
         <div className="section-title" style={{ color: 'var(--danger)' }}>
           <Trash2 size={16} style={{ color: 'var(--danger)' }} /> Удаление аккаунта
         </div>

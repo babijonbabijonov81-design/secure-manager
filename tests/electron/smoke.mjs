@@ -1,7 +1,7 @@
 // Launches the built desktop app, creates an account against the embedded relay and
 // takes a screenshot. Run after `npm run build` (on Linux CI: under xvfb-run).
 //   node tests/electron/smoke.mjs [screenshot.png] [card.png] [call-card.png]
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron } from '@playwright/test';
@@ -9,7 +9,7 @@ import { _electron as electron } from '@playwright/test';
 const home = mkdtempSync(join(tmpdir(), 'veil-smoke-'));
 const app = await electron.launch({
   args: ['.', '--no-sandbox'],
-  env: { ...process.env, VEIL_PROFILE: `smoke${process.pid}`, HOME: home, XDG_CONFIG_HOME: home, APPDATA: home },
+  env: { ...process.env, VEIL_PROFILE: `smoke${process.pid}`, HOME: home, XDG_CONFIG_HOME: home, APPDATA: home, VEIL_TEST_KEYCHAIN: '1' },
 });
 try {
   const page = await app.firstWindow();
@@ -34,6 +34,23 @@ try {
   const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
   if (copied !== 'Привет из Veil') throw new Error(`clipboard: ${copied}`);
   console.log('clipboard ok');
+
+  // A password copied from «Избранное» is erased after the timeout, but only if still there.
+  await page.evaluate(() => window.veil.copySecret('пароль-для-смоук-теста', 1));
+  if ((await app.evaluate(({ clipboard }) => clipboard.readText())) !== 'пароль-для-смоук-теста') throw new Error('secret copy');
+  await page.waitForTimeout(1600);
+  if ((await app.evaluate(({ clipboard }) => clipboard.readText())) !== '') throw new Error('secret not cleared');
+  await page.evaluate(() => window.veil.copySecret('второй-пароль', 1));
+  await app.evaluate(({ clipboard }) => clipboard.writeText('чужой текст'));
+  await page.waitForTimeout(1600);
+  if ((await app.evaluate(({ clipboard }) => clipboard.readText())) !== 'чужой текст') throw new Error('cleared somebody else\'s text');
+  console.log('clipboard clearing ok');
+
+  // Quick unlock reports the keychain honestly; system lock detection answers.
+  const quick = await page.evaluate(() => window.veil.quickUnlock.status());
+  const systemLock = await page.evaluate(() => window.veil.systemLockSupported());
+  console.log('quick unlock:', JSON.stringify(quick), 'system lock:', systemLock);
+  if (quick.keychain === 'none' && quick.available) throw new Error('quick unlock without a keychain');
 
   // Spellchecker bridge must not throw even without dictionaries.
   await page.evaluate(() => window.veil.spell.suggestions('превет'));
@@ -77,6 +94,48 @@ try {
   const action = await page.evaluate(() => window.__callActions[0]);
   if (action.tag !== 'call:smoke' || action.action !== 'accept') throw new Error(`call action: ${JSON.stringify(action)}`);
   console.log('call card ok');
+
+  // «При сворачивании в трей»: closing the window hides it and locks Veil; notification cards go.
+  await page.getByRole('button', { name: 'Настройки' }).click();
+  await page.getByRole('button', { name: 'Конфиденциальность' }).click();
+  await page.getByRole('switch', { name: 'Блокировать при сворачивании в трей' }).click();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).first().click();
+  await page.evaluate(() =>
+    window.veil.notify({ title: 'Алиса', body: 'Секрет', tag: 'y', card: { title: 'Алиса', body: 'Секрет в карточке', initials: 'АЛ', gradient: '#e2582a', theme: 'dark', accent: '#ff7a45' } }),
+  );
+  await app.waitForEvent('window', { predicate: (w) => w.url().includes('card.html'), timeout: 10_000 });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('card.html'))?.close());
+  await page.getByText('Veil заблокирован').waitFor({ timeout: 10_000 });
+  await page.waitForTimeout(500);
+  const cards = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => w.webContents.getURL().includes('card.html') && w.isVisible()).length);
+  if (cards) throw new Error(`${cards} notification cards still on screen after locking`);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('card.html'))?.show());
+  await page.getByLabel('Пароль', { exact: true }).fill('Smoke-Test-123');
+  await page.getByRole('button', { name: 'Разблокировать' }).click();
+  await page.getByText('Добро пожаловать').waitFor({ timeout: 60_000 });
+  console.log('lock on hide ok');
+
+  // Quick unlock with a PIN: wrong PIN counts down, the right one opens the vault.
+  await page.getByRole('button', { name: 'Настройки' }).click();
+  await page.getByRole('button', { name: 'Безопасность' }).click();
+  await page.getByRole('switch', { name: 'Вход по PIN' }).click();
+  await page.getByLabel('Пароль Veil').fill('Smoke-Test-123');
+  await page.getByLabel('Новый PIN').fill('482913');
+  await page.getByLabel('Повторите PIN').fill('482913');
+  await page.getByRole('button', { name: 'Включить' }).click();
+  await page.getByTestId('quick-unlock').getByText('PIN включён').waitFor({ timeout: 20_000 });
+  const userData = await app.evaluate(({ app: a }) => a.getPath('userData'));
+  const stored = readFileSync(join(userData, 'quick-unlock.json'), 'utf8');
+  if (stored.includes('482913')) throw new Error('PIN stored in plain text');
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).first().click();
+  await page.locator('.rail').getByRole('button', { name: 'Заблокировать' }).click();
+  await page.getByLabel('PIN', { exact: true }).fill('111111');
+  await page.getByRole('button', { name: 'Разблокировать' }).click();
+  await page.getByText('Неверный PIN. Осталось попыток: 4').waitFor({ timeout: 20_000 });
+  await page.getByLabel('PIN', { exact: true }).fill('482913');
+  await page.getByRole('button', { name: 'Разблокировать' }).click();
+  await page.getByText('Добро пожаловать').waitFor({ timeout: 30_000 });
+  console.log('quick unlock with PIN ok');
 
   const maximized = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isMaximized()));
   console.log('maximized on first launch:', maximized);

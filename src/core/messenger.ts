@@ -263,8 +263,24 @@ export async function unlock(
   const meta = await readVaultMeta(storage);
   if (!meta) throw new MessengerError('no_account', 'Аккаунт не найден');
   const dataKey = await unlockVault(meta, password, onProgress);
+  return openVault(storage, meta, dataKey, events);
+}
+
+/** Quick unlock: the vault key came from the system keychain (behind a PIN or a fingerprint). */
+export async function unlockWithKey(storage: StorageBackend, dataKey: Uint8Array, events: MessengerEvents = {}): Promise<Messenger> {
+  const meta = await readVaultMeta(storage);
+  if (!meta) throw new MessengerError('no_account', 'Аккаунт не найден');
+  return openVault(storage, meta, dataKey.slice(), events);
+}
+
+async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint8Array, events: MessengerEvents): Promise<Messenger> {
   const store = new SecureStore(storage, dataKey);
-  const account = await store.getJSON<AccountRecord>('account');
+  let account: AccountRecord | null;
+  try {
+    account = await store.getJSON<AccountRecord>('account');
+  } catch {
+    throw new WrongPasswordError();
+  }
   if (!account) throw new MessengerError('corrupt', 'Данные повреждены');
   const messenger = new Messenger(storage, store, meta, events);
   const [settings, contacts, sessions, outbox, seen, stickers] = await Promise.all([
@@ -1987,6 +2003,16 @@ export class Messenger {
 
   reconnect(): void {
     this.connect();
+  }
+
+  /** Checks the vault password without changing anything (e.g. before turning on quick unlock). */
+  checkPassword(password: string): Promise<boolean> {
+    return verifyVaultPassword(this.meta, password);
+  }
+
+  /** A copy of the vault key, to be kept in the system keychain for quick unlock. */
+  quickUnlockKey(): Uint8Array {
+    return this.store.exportKey();
   }
 
   async changePassword(oldPassword: string, newPassword: string): Promise<void> {

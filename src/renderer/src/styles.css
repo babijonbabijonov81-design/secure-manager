@@ -4165,3 +4165,17 @@ button:disabled {
   margin-left: 14px;
   margin-right: 14px;
 }
+
+/* ---- PIN (P0-7) ---- */
+.input.pin-input {
+  font-family: var(--mono);
+  font-size: 22px;
+  letter-spacing: 0.4em;
+  text-align: center;
+  height: 52px;
+}
+.input.pin-input::placeholder {
+  font-family: var(--font);
+  font-size: 15px;
+  letter-spacing: normal;
+}

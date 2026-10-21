@@ -197,6 +197,18 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
   useEffect(() => setBadge(unread), [unread]);
   useEffect(() => () => setBadge(0), []);
 
+  // Locking together with the system's lock screen, and when hidden to the tray.
+  useEffect(() => {
+    if (!bridge) return;
+    const inCall = () => !!calls?.getState();
+    const offSystem = bridge.onSystemLock(() => messenger.getSnapshot().settings.lockOnSystemLock && !inCall() && onLock());
+    const offHidden = bridge.onHidden(() => messenger.getSnapshot().settings.lockOnHide && !inCall() && onLock());
+    return () => {
+      offSystem();
+      offHidden();
+    };
+  }, [messenger, calls, onLock]);
+
   // Auto-lock after inactivity.
   const lockAfter = settings.autoLockMinutes;
   useEffect(() => {
