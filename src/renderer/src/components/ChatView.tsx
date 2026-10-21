@@ -170,6 +170,13 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
   );
   const onCopy = useCallback((message: Message) => void copy(message), [copy]);
   const onCallBack = useCallback(() => onCall(contact.id), [onCall, contact.id]);
+  const onScheduled = useCallback(
+    (message: Message, action: 'now' | 'cancel') => {
+      if (action === 'now') void messenger.sendScheduledNow(contact.id, message.id).catch((e: Error) => toast(e.message, 'error'));
+      else void messenger.deleteMessage(contact.id, message.id, false);
+    },
+    [messenger, contact.id, toast],
+  );
   const [onceView, setOnceView] = useState<{ url: string; video: boolean } | null>(null);
   const onOpenOnce = useCallback(
     (message: Message) => {
@@ -237,7 +244,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
       });
     if (m.status === 'failed') items.push({ label: 'Отправить снова', icon: <RotateCcw size={16} />, onClick: () => onRetry(m) });
     items.push({ label: 'Удалить у меня', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, false) });
-    if (!saved && m.dir === 'out' && m.status !== 'failed' && m.status !== 'pending')
+    if (!saved && m.dir === 'out' && m.status !== 'failed' && m.status !== 'pending' && m.status !== 'scheduled')
       items.push({ label: 'Удалить у всех', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, true) });
     return items;
   }, [menu, messenger, contact.id, toast, onRetry, copy, snapshot.stickers, onCall, saved]);
@@ -304,6 +311,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
         onJump={onJump}
         onCallBack={onCallBack}
         onOpenOnce={onOpenOnce}
+        onScheduled={onScheduled}
       />,
     );
     previous = message;

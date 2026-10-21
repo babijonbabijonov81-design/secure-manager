@@ -26,6 +26,25 @@ export function formatDay(ts: number): string {
   return `${d.getDate()} ${MONTHS[d.getMonth()]}${sameYear ? '' : ` ${d.getFullYear()}`}`;
 }
 
+/** "сегодня в 18:00", "завтра в 9:00", "1 января в 9:00", "1 января 2027 в 9:00". */
+export function formatWhen(ts: number): string {
+  const today = startOfDay(Date.now());
+  const day = startOfDay(ts);
+  const d = new Date(ts);
+  const time = `${d.getHours()}:${pad(d.getMinutes())}`;
+  if (day === today) return `сегодня в ${time}`;
+  if (day === today + 86_400_000) return `завтра в ${time}`;
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}${sameYear ? '' : ` ${d.getFullYear()}`} в ${time}`;
+}
+
+/** "1 января", "1 января 2027". */
+export function formatDate(ts: number): string {
+  const d = new Date(ts);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}${sameYear ? '' : ` ${d.getFullYear()}`}`;
+}
+
 /** Compact timestamp for the chat list. */
 export function formatListTime(ts: number): string {
   const today = startOfDay(Date.now());

@@ -176,6 +176,7 @@ export function callTitle(message: Message): string {
 
 export function snippetOf(message: Message): string {
   if (message.call) return callTitle(message);
+  if (message.capsule && !message.text) return 'Капсула времени';
   if (message.once) return isVideo(attachmentsOf(message)[0]?.mime) ? 'Видео · один просмотр' : 'Фото · один просмотр';
   // A password never shows up in previews, quotes or search.
   if (message.note?.kind === 'password') return message.note.title ? `Пароль · ${message.note.title}` : 'Пароль';
@@ -487,6 +488,10 @@ interface LoadedState {
 export interface SendOptions {
   /** Id of the message being replied to. */
   replyTo?: string;
+  /** Scheduled send: deliver at this time (ms). */
+  at?: number;
+  /** Time capsule: deliver now, open at this time (ms). */
+  capsule?: number;
 }
 
 export interface MediaOptions extends SendOptions {
@@ -825,6 +830,7 @@ export class Messenger {
     this.sweepExpired();
     const now = Date.now();
     this.remindNotes(now);
+    this.processTimed(now);
     for (const [id, state] of Object.entries(this.online)) {
       if (state.until > now) continue;
       delete this.online[id];
@@ -1207,10 +1213,84 @@ export class Messenger {
     const body = text.trim();
     if (!body) return;
     const contact = this.requireSendable(contactId);
+    const now = Date.now();
+    if (options.capsule && options.capsule > now + 60_000 && !isSavedChat(contactId)) {
+      // The text is sealed with a key only this side has until the date comes.
+      const key = newContentKey();
+      const ct = b64(sealContent(key, utf8(body), 'capsule'));
+      const message = this.newOutgoing(contact, { text: body, capsule: { at: options.capsule, k: b64(key), ct } }, options.replyTo);
+      key.fill(0);
+      this.addMessage(contactId, message);
+      this.updateContact(contactId, { lastActivity: message.ts, draft: undefined });
+      await this.deliverMessage(contact, message);
+      return;
+    }
+    if (options.at && options.at > now + 30_000 && !isSavedChat(contactId)) {
+      // Waits here, in the encrypted vault, until its time.
+      const message = this.newOutgoing(contact, { text: body, status: 'scheduled', schedule: { at: options.at } }, options.replyTo);
+      this.addMessage(contactId, message);
+      this.updateContact(contactId, { draft: undefined });
+      return;
+    }
     const message = this.newOutgoing(contact, { text: body }, options.replyTo);
     this.addMessage(contactId, message);
     this.updateContact(contactId, { lastActivity: message.ts, draft: undefined });
     await this.deliverMessage(contact, message);
+  }
+
+  /** A scheduled message goes now (or is cancelled with deleteMessage). */
+  async sendScheduledNow(contactId: string, messageId: string): Promise<void> {
+    const message = this.conversations.get(contactId)?.find((m) => m.id === messageId && m.status === 'scheduled');
+    if (message) await this.releaseScheduled(contactId, message, Date.now(), false);
+  }
+
+  private async releaseScheduled(contactId: string, message: Message, now: number, late: boolean): Promise<void> {
+    const contact = this.contacts[contactId];
+    if (!contact || contact.blocked || this.isHeld(contactId)) return;
+    const updated: Message = { ...message, status: 'pending', ts: now, schedule: { at: message.schedule?.at ?? now, ...(late ? { late: true } : {}) } };
+    // Disappearing timers count from the moment it is really sent.
+    if (updated.timer) updated.expiresAt = now + updated.timer * 1000;
+    // It moves to the end of the chat, where it is sent.
+    this.patchMessages(contactId, new Set([message.id]), () => null);
+    this.addMessage(contactId, updated);
+    this.updateContact(contactId, { lastActivity: now });
+    await this.deliverMessage(contact, updated);
+  }
+
+  private lastTimedScan = 0;
+  /**
+   * Scheduled messages whose time came (a computer that was off sends them at start, marked late),
+   * capsule keys to send, and received capsules to open.
+   */
+  private processTimed(now: number): void {
+    if (now - this.lastTimedScan < 5000 || this.locked) return;
+    this.lastTimedScan = now;
+    for (const [contactId, list] of this.conversations) {
+      if (isSavedChat(contactId)) continue;
+      for (const message of list) {
+        if (message.status === 'scheduled' && message.schedule && message.schedule.at <= now) {
+          void this.releaseScheduled(contactId, message, now, now - message.schedule.at > 120_000);
+        } else if (message.capsule && message.capsule.at <= now) {
+          if (message.dir === 'out' && message.capsule.k && !message.capsule.sent && message.status !== 'pending' && message.status !== 'failed') {
+            const contact = this.contacts[contactId];
+            if (!contact || contact.blocked) continue;
+            this.patchMessages(contactId, new Set([message.id]), (m) => ({ ...m, capsule: { ...m.capsule!, sent: true } }));
+            void this.sendControl(contact, { t: 'capkey', id: message.id, k: message.capsule.k });
+          } else if (message.dir === 'in' && message.capsule.k && !message.capsule.opened) this.openCapsule(contactId, message);
+        }
+      }
+    }
+  }
+
+  private openCapsule(contactId: string, message: Message): void {
+    const capsule = message.capsule!;
+    let text: string;
+    try {
+      text = fromUtf8(openContent(unb64(capsule.k!), unb64(capsule.ct ?? ''), 'capsule')).slice(0, 64_000);
+    } catch {
+      return;
+    }
+    this.patchMessages(contactId, new Set([message.id]), (m) => ({ ...m, text, capsule: { at: capsule.at, opened: true } }));
   }
 
   /**
@@ -1416,7 +1496,8 @@ export class Messenger {
       t: 'msg',
       id: message.id,
       ts: message.ts,
-      ...(message.text ? { text: message.text } : {}),
+      ...(message.text && !message.capsule ? { text: message.text } : {}),
+      ...(message.capsule?.ct ? { cap: { at: message.capsule.at, ct: message.capsule.ct } } : {}),
       ...(message.timer ? { timer: message.timer } : {}),
       ...(message.reply ? { r: { id: message.reply.id, s: message.reply.text, a: message.reply.out ? 'me' : 'you' } } : {}),
       ...(message.once?.k ? { once: { k: message.once.k } } : {}),
@@ -1574,7 +1655,7 @@ export class Messenger {
 
   private setStatus(contactId: string, ids: string[], status: Message['status'], force = false): void {
     if (!ids.length) return;
-    const rank = { failed: 0, pending: 1, sent: 2, delivered: 3, read: 4 } as const;
+    const rank = { scheduled: 0, failed: 0, pending: 1, sent: 2, delivered: 3, read: 4 } as const;
     this.patchMessages(contactId, new Set(ids), (m) => {
       if (m.dir !== 'out') return m;
       if (!force && m.status && status && m.status !== 'failed' && rank[m.status] >= rank[status]) return m;
@@ -1942,6 +2023,10 @@ export class Messenger {
           content.r && typeof content.r.id === 'string'
             ? { id: content.r.id, text: String(content.r.s ?? '').slice(0, 300), out: content.r.a === 'you' }
             : undefined;
+        const cap =
+          content.cap && typeof content.cap.ct === 'string' && content.cap.ct.length < 100_000 && Number(content.cap.at) > 0
+            ? { at: Number(content.cap.at), ct: content.cap.ct }
+            : undefined;
         const onceKey = typeof content.once?.k === 'string' && unb64Safe(content.once.k)?.length === 32 ? content.once.k : undefined;
         if (content.once && (!onceKey || atts.length !== 1)) {
           for (const att of atts) await this.store.delete(`att.${att.id}`);
@@ -1952,7 +2037,8 @@ export class Messenger {
           dir: 'in',
           ts: Number(content.ts) || now,
           at: now,
-          ...(typeof content.text === 'string' ? { text: content.text.slice(0, 64_000) } : {}),
+          ...(typeof content.text === 'string' && !cap ? { text: content.text.slice(0, 64_000) } : {}),
+          ...(cap ? { capsule: cap } : {}),
           ...(atts.length ? { atts } : {}),
           ...(reply ? { reply } : {}),
           ...(timer > 0 ? { timer, expiresAt: now + timer * 1000 } : {}),
@@ -1989,6 +2075,16 @@ export class Messenger {
           (this.conversations.get(contact.id) ?? []).filter((m) => m.dir === 'in' && content.ids.includes(m.id)).map((m) => m.id),
         );
         if (theirs.size) await this.eraseMessages(contact.id, theirs);
+        return;
+      }
+      case 'capkey': {
+        if (typeof content.id !== 'string' || typeof content.k !== 'string' || unb64Safe(content.k)?.length !== 32) return;
+        const sealed = this.conversations.get(contact.id)?.find((m) => m.id === content.id && m.dir === 'in' && m.capsule && !m.capsule.opened);
+        if (!sealed) return;
+        this.patchMessages(contact.id, new Set([sealed.id]), (m) => ({ ...m, capsule: { ...m.capsule!, k: content.k } }));
+        // Opens now if its date has come on this computer's clock too, otherwise at that time.
+        const updated = this.conversations.get(contact.id)?.find((m) => m.id === sealed.id);
+        if (updated && updated.capsule!.at <= Date.now() + 5 * 60_000) this.openCapsule(contact.id, updated);
         return;
       }
       case 'viewed': {

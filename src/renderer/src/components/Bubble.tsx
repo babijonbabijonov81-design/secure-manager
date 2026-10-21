@@ -5,9 +5,11 @@ import {
   Clock,
   Copy,
   CornerUpLeft,
+  CalendarClock,
   Download,
   FileText,
   Film,
+  Hourglass,
   Flame,
   Forward,
   ImageIcon,
@@ -25,7 +27,7 @@ import { callTitle, type Messenger } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
 import { attachmentsOf, type Attachment, type Message } from '../../../core/types.ts';
 import { saveAttachment, useAttachmentUrl } from '../lib/attachments.ts';
-import { formatCallDuration, formatDay, formatSize, formatTime, isEmojiOnly, remaining } from '../lib/format.ts';
+import { formatCallDuration, formatDate, formatDay, formatSize, formatTime, formatWhen, isEmojiOnly, remaining } from '../lib/format.ts';
 import { ReactionPicker } from './ReactionPicker.tsx';
 import { VoicePlayer } from './VoicePlayer.tsx';
 
@@ -62,6 +64,8 @@ function StatusIcon({ status }: { status: Message['status'] }) {
       return <CheckCheck size={14} className="read" aria-label="Прочитано" strokeWidth={2.6} />;
     case 'failed':
       return <AlertCircle size={13} className="failed" aria-label="Не отправлено" />;
+    case 'scheduled':
+      return <CalendarClock size={13} aria-label="Запланировано" />;
     default:
       return null;
   }
@@ -142,6 +146,8 @@ interface BubbleProps {
   onJump(id: string): void;
   onCallBack(): void;
   onOpenOnce(message: Message): void;
+  /** A scheduled message: send it now or cancel it. */
+  onScheduled(message: Message, action: 'now' | 'cancel'): void;
 }
 
 /** A call in the chat history: direction, outcome, length and a call-back button. */
@@ -236,7 +242,7 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
 
   return (
     <div
-      className={`msg-row ${message.dir}${groupStart ? ' group-start' : ''}${groupEnd ? ' group-end' : ''}${highlighted ? ' highlight' : ''}${pickerAnchor ? ' picking' : ''}`}
+      className={`msg-row ${message.dir}${message.status === 'scheduled' ? ' scheduled' : ''}${groupStart ? ' group-start' : ''}${groupEnd ? ' group-end' : ''}${highlighted ? ' highlight' : ''}${pickerAnchor ? ' picking' : ''}`}
       data-testid="message"
       data-dir={message.dir}
       id={`msg-${message.id}`}
@@ -259,6 +265,19 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
                 <b>{message.reply.out ? 'Вы' : contactName}</b>
                 <span>{message.reply.text || 'Сообщение'}</span>
               </button>
+            )}
+            {message.capsule && !message.text && (
+              <div className="capsule-card" data-testid="capsule-card">
+                <span className="capsule-icon">
+                  <Hourglass size={18} />
+                </span>
+                <span className="capsule-text">
+                  <b>Капсула времени</b>
+                  <span>
+                    {message.capsule.at > Date.now() ? `Откроется ${formatDate(message.capsule.at)}` : 'Ждём ключ: он придёт, когда собеседник будет в сети'}
+                  </span>
+                </span>
+              </div>
             )}
             {message.once && <OnceCard message={message} onOpen={() => props.onOpenOnce(message)} />}
             {!message.once && sticker && <StickerImage messenger={messenger} att={sticker} />}
@@ -317,6 +336,28 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
                 {chip.count > 1 && <span>{chip.count}</span>}
               </button>
             ))}
+          </div>
+        )}
+        {message.status === 'scheduled' && message.schedule && (
+          <div className="schedule-line" data-testid="scheduled">
+            <CalendarClock size={12} /> Отправится {formatWhen(message.schedule.at)}
+            <button onClick={() => props.onScheduled(message, 'now')}>Отправить сейчас</button>
+            <button onClick={() => props.onScheduled(message, 'cancel')}>Отменить</button>
+          </div>
+        )}
+        {message.schedule?.late && message.status !== 'scheduled' && (
+          <div className="schedule-line late">
+            <CalendarClock size={12} /> Отправлено при запуске: компьютер был выключен в назначенное время
+          </div>
+        )}
+        {message.capsule && message.text && (
+          <div className="schedule-line">
+            <Hourglass size={12} />
+            {message.dir === 'out'
+              ? message.capsule.sent
+                ? `Капсула времени · ключ отправлен ${formatDate(message.capsule.at)}`
+                : `Капсула времени · откроется у собеседника ${formatDate(message.capsule.at)}`
+              : `Капсула времени · открыта ${formatDate(message.capsule.at)}`}
           </div>
         )}
         {message.status === 'failed' && (

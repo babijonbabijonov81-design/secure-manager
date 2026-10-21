@@ -1,4 +1,4 @@
-import { CornerUpLeft, LockKeyhole, Mic, Paperclip, SendHorizontal, Smile, Square, Trash2, X } from 'lucide-react';
+import { Clock, CornerUpLeft, LockKeyhole, Mic, Paperclip, SendHorizontal, Smile, Square, Trash2, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { snippetOf, type Messenger } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
@@ -8,12 +8,15 @@ import { MicrophoneError, openMicrophone } from '../lib/audio.ts';
 import { analyseAudio, formatDuration } from '../lib/media.ts';
 import { autocorrect, ignoreWord } from '../lib/text.ts';
 import { useToast } from '../lib/ui.tsx';
+import { formatDate, formatWhen } from '../lib/format.ts';
+import { feature } from '../lib/hooks.ts';
+import { SchedulePopover, type ScheduleChoice } from './SchedulePopover.tsx';
 import { StickerPanel } from './StickerPanel.tsx';
 
 interface Props {
   messenger: Messenger;
   contact: Contact;
-  settings: Pick<Settings, 'enterToSend' | 'autocorrect' | 'spellcheck' | 'audio'>;
+  settings: Pick<Settings, 'enterToSend' | 'autocorrect' | 'spellcheck' | 'audio' | 'features'>;
   stickers: StickerMeta[];
   replyTo: Message | null;
   onCancelReply(): void;
@@ -34,6 +37,7 @@ interface Recording {
 export function Composer({ messenger, contact, settings, stickers, replyTo, onCancelReply, onFiles }: Props) {
   const [text, setText] = useState(contact.draft ?? '');
   const [panel, setPanel] = useState<'closed' | 'emoji' | 'stickers'>('closed');
+  const [scheduling, setScheduling] = useState(false);
   const [emojiTab, setEmojiTab] = useState(0);
   const [hint, setHint] = useState<{ from: string; to: string } | null>(null);
   const [recording, setRecording] = useState<Recording | null>(null);
@@ -126,15 +130,22 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
     return true;
   };
 
-  const send = () => {
+  const send = (when?: ScheduleChoice) => {
     const value = text.trim();
     if (!value) return;
     setText('');
     latest.current = '';
     corrected.current = null;
     clearTimeout(draftTimer.current);
+    setScheduling(false);
     messenger.sendTyping(contactId, false);
-    void messenger.sendText(contactId, value, { replyTo: replyTo?.id }).catch((e) => toast((e as Error).message, 'error'));
+    void messenger
+      .sendText(contactId, value, { replyTo: replyTo?.id, ...when })
+      .then(() => {
+        if (when && 'at' in when) toast(`Сообщение отправится ${formatWhen(when.at)}`, 'success');
+        if (when && 'capsule' in when) toast(`Капсула отправлена · откроется ${formatDate(when.capsule)}`, 'success');
+      })
+      .catch((e) => toast((e as Error).message, 'error'));
     onCancelReply();
     area.current?.focus();
   };
@@ -341,8 +352,14 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
           <button className={`icon-btn${panel !== 'closed' ? ' active' : ''}`} onClick={() => setPanel(panel === 'closed' ? 'emoji' : 'closed')} aria-label="Эмодзи и стикеры">
             <Smile size={20} />
           </button>
+          {text.trim() && feature(settings as Settings, 'scheduled') && (
+            <button className={`icon-btn${scheduling ? ' active' : ''}`} onClick={() => setScheduling((v) => !v)} aria-label="Отправить позже" title="Отправить позже или капсулой времени">
+              <Clock size={19} />
+            </button>
+          )}
+          {scheduling && <SchedulePopover onPick={(choice) => send(choice)} onClose={() => setScheduling(false)} />}
           {text.trim() ? (
-            <button className="send-btn" onClick={send} aria-label="Отправить">
+            <button className="send-btn" onClick={() => send()} aria-label="Отправить">
               <SendHorizontal size={19} />
             </button>
           ) : (

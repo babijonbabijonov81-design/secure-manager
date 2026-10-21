@@ -229,7 +229,9 @@ function ChatItem({
       : 'Нет сообщений'
     : last.dir === 'system'
       ? systemText(last, contact)
-      : snippetOf(last);
+      : last.status === 'scheduled'
+        ? `Запланировано: ${snippetOf(last)}`
+        : snippetOf(last);
   return (
     <div
       className={`chat-item${active ? ' active' : ''}${veiled ? ' veiled' : ''}`}

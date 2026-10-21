@@ -199,7 +199,7 @@ export interface Contact {
   veil?: boolean;
 }
 
-export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type MessageStatus = 'scheduled' | 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 export type AttachmentKind = 'image' | 'file' | 'voice' | 'sticker';
 
@@ -279,6 +279,13 @@ export interface Message {
    * deleted on both sides once the recipient opens it (`opened`).
    */
   once?: { k?: string; opened?: number };
+  /** Scheduled send: kept here (encrypted on disk) until `at`; `late` if the computer was off then. */
+  schedule?: { at: number; late?: boolean };
+  /**
+   * Time capsule: delivered at once but sealed with key `k` until `at`. The sender keeps the key and
+   * sends it at that moment; the recipient holds only `ct` until then.
+   */
+  capsule?: { at: number; k?: string; ct?: string; sent?: boolean; opened?: boolean };
   /** «Избранное»: what kind of entry this is; temporary notes burn at `expiresAt`. */
   note?: { kind: NoteKind; title?: string; reminded?: boolean };
 }
@@ -307,6 +314,8 @@ export type Content =
       p?: { n: string };
       /** View-once: the key that opens the sealed attachment. */
       once?: { k: string };
+      /** Time capsule: the text, sealed until `at`; the key follows then. */
+      cap?: { at: number; ct: string };
     }
   | { t: 'rcpt'; k: 'd' | 'r'; ids: string[] }
   | { t: 'typ'; on: boolean }
@@ -314,6 +323,8 @@ export type Content =
   | { t: 'del'; ids: string[] }
   /** A view-once message was opened: the sender deletes its copy too. */
   | { t: 'viewed'; id: string }
+  /** The time capsule's date came: its key. */
+  | { t: 'capkey'; id: string; k: string }
   | { t: 'react'; id: string; e: string }
   /** Presence: online, going offline, or hidden ("recently"); `ask` requests a reply. */
   | { t: 'pres'; s: 'on' | 'off' | 'hidden'; ask?: 1 }
