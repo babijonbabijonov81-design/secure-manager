@@ -32,7 +32,7 @@ export function TotpSetupDialog({ messenger, onClose }: { messenger: Messenger; 
   const toast = useToast();
 
   useEffect(() => {
-    void QRCode.toDataURL(setup.url, { margin: 1, width: 220, errorCorrectionLevel: 'M', color: { dark: '#141824', light: '#ffffff' } }).then(setQr);
+    void QRCode.toDataURL(setup.url, { margin: 1, width: 220, errorCorrectionLevel: 'M', color: { dark: '#1a1411', light: '#ffffff' } }).then(setQr);
   }, [setup.url]);
 
   const submit = async (e: FormEvent) => {

@@ -16,6 +16,8 @@ import {
   MAX_ENVELOPE_BYTES,
   MAX_FRAME_BYTES,
   MAX_OPKS_PER_UPLOAD,
+  BRIDGE_ROOM_RE,
+  DEVICE_ID_RE,
   PROTOCOL_VERSION,
   registerExtra,
   signedPreKeyStatement,
@@ -23,6 +25,7 @@ import {
   type AccountStatus,
   type BackupMeta,
   type ClientFrame,
+  type DeviceHello,
   type ErrorCode,
   type IceServer,
   type OneTimePreKeyPublic,
@@ -129,10 +132,28 @@ interface Connection {
   ip: string;
   nonce: string;
   userId: string | null;
+  /** The computer this account signed in from (Settings → «Устройства»). */
+  deviceId?: string;
+  /** An anonymous connection taking part in a bridge room (account transfer). */
+  bridge?: BridgeRoom;
   alive: boolean;
   lookups: Bucket;
   sends: Bucket;
 }
+
+interface BridgeRoom {
+  room: string;
+  host: Connection;
+  guest?: Connection;
+  bytes: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const MAX_DEVICES = 10;
+const MAX_REVOKED = 50;
+const BRIDGE_TTL_MS = 30 * 60 * 1000;
+const BRIDGE_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const BRIDGE_JOINS_PER_WINDOW = 30;
 
 class Bucket {
   private count = 0;
@@ -200,13 +221,15 @@ const statusPage = (name: string) => `<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${name}</title>
 <style>
-  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#e8eaf0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-  .card{max-width:520px;padding:40px;border-radius:24px;background:#141824;border:1px solid #ffffff12;box-shadow:0 30px 80px #0008}
-  h1{margin:0 0 8px;font-size:26px;background:linear-gradient(135deg,#a48bff,#5b8cff);-webkit-background-clip:text;color:transparent}
-  .ok{display:inline-flex;gap:8px;align-items:center;color:#5be3a5;font-weight:600}
-  .dot{width:10px;height:10px;border-radius:50%;background:#5be3a5;box-shadow:0 0 12px #5be3a5}
-  p{color:#a3a9bb} code{background:#ffffff10;padding:2px 8px;border-radius:6px}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0c0a09;color:#f4efe9;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  .card{max-width:520px;padding:40px;border-radius:24px;background:#151210;border:1px solid #2e2723}
+  .mark{width:56px;height:56px;margin-bottom:16px}
+  h1{margin:0 0 8px;font-size:26px;color:#f4efe9}
+  .ok{display:inline-flex;gap:8px;align-items:center;color:#3ddc97;font-weight:600}
+  .dot{width:10px;height:10px;border-radius:50%;background:#3ddc97}
+  p{color:#c9c0b6} code{background:#1d1916;padding:2px 8px;border-radius:6px}
 </style></head><body><div class="card">
+<svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="10.56" fill="#1a1411"/><g transform="translate(7.2 7.2) scale(0.7)"><path d="M7 9 Q19 10 24 39 Q11 29 7 9 Z" fill="#ff7a45"/><path d="M41 9 Q29 10 24 39 Q37 29 41 9 Z" fill="#3ddc97" opacity="0.92"/><circle cx="24" cy="14" r="4.2" fill="#f4efe9"/></g></svg>
 <h1>${name}</h1><div class="ok"><span class="dot"></span>Сервер работает</div>
 <p>Это ретранслятор мессенджера Veil. Он пересылает только зашифрованные сообщения и не может их прочитать.</p>
 <p>Укажите адрес этой страницы в приложении Veil в поле «Сервер».</p>
@@ -228,6 +251,69 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
   const recoverPending = new Map<string, PendingCode>(); // by username
   const recoveryTokens = new Map<string, { username: string; expires: number }>();
   const mailBuckets = new Map<string, Bucket>();
+
+  const bridgeRooms = new Map<string, BridgeRoom>();
+  const bridgeBuckets = new Map<string, Bucket>();
+
+  /** Records the computer a sign-in comes from; refuses computers the owner unlinked. */
+  const checkDevice = (conn: Connection, user: UserRecord, device: DeviceHello | undefined) => {
+    if (!device || typeof device.id !== 'string' || !DEVICE_ID_RE.test(device.id)) return;
+    if (user.revoked?.includes(device.id)) fail('device_revoked', 'Этот компьютер отвязан от аккаунта');
+    const label = typeof device.label === 'string' && device.label.length <= 512 ? device.label : undefined;
+    const now = Date.now();
+    const list = (user.devices ?? []).filter((d) => d.id !== device.id);
+    const previous = user.devices?.find((d) => d.id === device.id);
+    user.devices = [{ id: device.id, ...(label ? { label } : {}), first: previous?.first ?? now, last: now }, ...list].slice(0, MAX_DEVICES);
+    conn.deviceId = device.id;
+    store.touch();
+  };
+
+  const closeBridge = (room: BridgeRoom, reason: Connection | null) => {
+    if (bridgeRooms.get(room.room) !== room) return;
+    bridgeRooms.delete(room.room);
+    clearTimeout(room.timer);
+    for (const side of [room.host, room.guest]) {
+      if (!side) continue;
+      side.bridge = undefined;
+      if (side !== reason) send(side, { type: 'bridge_closed' });
+    }
+  };
+
+  /** Anonymous: two computers meet in a room and the relay pipes encrypted frames between them. */
+  const handleBridge = (conn: Connection, frame: Extract<ClientFrame, { type: 'bridge_open' | 'bridge_join' | 'bridge_data' }>, body: Uint8Array) => {
+    if (frame.type === 'bridge_data') {
+      const room = conn.bridge;
+      const peer = room && (room.host === conn ? room.guest : room.host);
+      if (!room || !peer) fail('not_found', 'Второй компьютер не подключён');
+      room!.bytes += body.length;
+      if (room!.bytes > BRIDGE_MAX_BYTES) {
+        closeBridge(room!, null);
+        fail('too_large', 'Слишком большой перенос через сервер');
+      }
+      send(peer!, { type: 'bridge_data' }, body);
+      return;
+    }
+    const bucket = bridgeBuckets.get(conn.ip) ?? new Bucket(BRIDGE_JOINS_PER_WINDOW, 10 * 60 * 1000);
+    bridgeBuckets.set(conn.ip, bucket);
+    if (!bucket.take()) fail('rate_limited', 'Слишком много попыток, подождите');
+    const name = String(frame.room ?? '').toUpperCase();
+    if (!BRIDGE_ROOM_RE.test(name) || conn.bridge) fail('bad_request', 'Неверная комната');
+    if (frame.type === 'bridge_open') {
+      if (bridgeRooms.has(name)) fail('bad_request', 'Комната занята');
+      const room: BridgeRoom = { room: name, host: conn, bytes: 0, timer: setTimeout(() => closeBridge(room, null), BRIDGE_TTL_MS) };
+      bridgeRooms.set(name, room);
+      conn.bridge = room;
+      send(conn, { type: 'result', reqId: frame.reqId, data: { room: name } });
+      return;
+    }
+    const room = bridgeRooms.get(name);
+    if (!room || room.guest) fail('not_found', 'Компьютер с таким кодом не найден');
+    room!.guest = conn;
+    conn.bridge = room;
+    send(conn, { type: 'result', reqId: frame.reqId, data: { room: name } });
+    send(room!.host, { type: 'bridge_peer' });
+    send(conn, { type: 'bridge_peer' });
+  };
 
   const emailHash = (email: string) => createHmac('sha256', store.pepper).update(email.trim().toLowerCase()).digest('base64url');
   const newCode = () => String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -366,18 +452,22 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       ...(previous?.emailHash ? { emailHash: previous.emailHash } : {}),
       ...(previous?.totp ? { totp: previous.totp, totpLast: previous.totpLast } : {}),
       ...(previous?.backup ? { backup: previous.backup } : {}),
+      ...(previous?.userId === frame.userId && previous.devices ? { devices: previous.devices } : {}),
+      ...(previous?.userId === frame.userId && previous.revoked ? { revoked: previous.revoked } : {}),
     };
+    checkDevice(conn, user, frame.device);
     store.addUser(user);
     log(`registered @${username}`);
     await goOnline(conn, user);
   };
 
-  const handleAuth = async (conn: Connection, frame: { userId: string; sig: string }) => {
+  const handleAuth = async (conn: Connection, frame: { userId: string; sig: string; device?: DeviceHello }) => {
     const signKey = unb64Len(frame.userId, 32);
     if (!signKey) fail('bad_request', 'Неверный идентификатор');
     const user = store.users.get(frame.userId);
     if (!user) fail('unknown_user', 'Аккаунт не найден на сервере');
     if (!verifySig(frame.sig, authStatement(conn.nonce, 'auth'), signKey!)) fail('unauthorized', 'Неверная подпись');
+    checkDevice(conn, user!, frame.device);
     await goOnline(conn, user!);
   };
 
@@ -573,6 +663,25 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         conn.ws.close(4002, 'deleted');
         return;
       }
+      case 'devices': {
+        const user = store.users.get(userId)!;
+        const live = new Set([...(online.get(userId) ?? [])].map((c) => c.deviceId));
+        const devices = (user.devices ?? []).map((d) => ({ ...d, online: live.has(d.id) }));
+        send(conn, { type: 'result', reqId: frame.reqId, data: { devices, current: conn.deviceId ?? null } });
+        return;
+      }
+      case 'device_revoke': {
+        const user = store.users.get(userId)!;
+        const id = String(frame.id ?? '');
+        if (!DEVICE_ID_RE.test(id)) fail('bad_request', 'Неверное устройство');
+        if (id === conn.deviceId) fail('bad_request', 'Этот компьютер отвязать нельзя — отвязывайте с другого');
+        user.devices = (user.devices ?? []).filter((d) => d.id !== id);
+        user.revoked = [id, ...(user.revoked ?? []).filter((r) => r !== id)].slice(0, MAX_REVOKED);
+        store.touch();
+        for (const other of online.get(userId) ?? []) if (other.deviceId === id) other.ws.close(4003, 'revoked');
+        send(conn, { type: 'result', reqId: frame.reqId, data: { revoked: true } });
+        return;
+      }
       default:
         fail('bad_request', 'Неизвестный тип запроса');
     }
@@ -607,6 +716,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
             if (header.type === 'register') await handleRegister(conn, header);
             else if (header.type === 'auth') await handleAuth(conn, header);
             else if (header.type === 'recover_start' || header.type === 'recover_finish') await handleRecovery(conn, header);
+            else if (header.type === 'bridge_open' || header.type === 'bridge_join' || header.type === 'bridge_data') handleBridge(conn, header, body);
             else if (header.type === 'ping') send(conn, { type: 'pong' });
             else fail('unauthorized', 'Требуется вход');
             return;
@@ -624,7 +734,13 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
 
     ws.on('close', () => {
       connections.delete(ws);
+      if (conn.bridge) closeBridge(conn.bridge, conn);
       if (!conn.userId) return;
+      const device = conn.deviceId ? store.users.get(conn.userId)?.devices?.find((d) => d.id === conn.deviceId) : undefined;
+      if (device) {
+        device.last = Date.now();
+        store.touch();
+      }
       const set = online.get(conn.userId);
       set?.delete(conn);
       if (set && set.size === 0) online.delete(conn.userId);

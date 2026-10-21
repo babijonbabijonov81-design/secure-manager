@@ -13,6 +13,7 @@ const listen = <T>(channel: string, callback: (value: T) => void) => {
 const bridge: VeilBridge = {
   platform: process.platform as VeilBridge['platform'],
   version: ipcRenderer.sendSync('app:version') as string,
+  deviceName: ipcRenderer.sendSync('app:device-name') as string,
   storage: {
     get: (key) => ipcRenderer.invoke('storage:get', key),
     set: (key, value) => ipcRenderer.invoke('storage:set', key, value),
@@ -52,6 +53,17 @@ const bridge: VeilBridge = {
   onSystemLock: (callback) => listen('system-lock', callback),
   systemLockSupported: () => ipcRenderer.invoke('system:lock-supported'),
   onHidden: (callback) => listen('window-hidden', callback),
+  lan: {
+    host: () => ipcRenderer.invoke('bridge:host'),
+    discover: () => ipcRenderer.invoke('bridge:discover'),
+    connect: (host, port) => ipcRenderer.invoke('bridge:connect', host, port),
+    send: (data) => ipcRenderer.send('bridge:send', data),
+    drop: () => ipcRenderer.send('bridge:drop'),
+    stop: () => ipcRenderer.send('bridge:stop'),
+    onPeer: (callback) => listen('bridge:peer', callback),
+    onData: (callback) => listen<Uint8Array>('bridge:data', callback),
+    onClosed: (callback) => listen('bridge:closed', callback),
+  },
   toggleFullscreen: () => ipcRenderer.send('fullscreen:toggle'),
   onFullscreen: (callback) => listen('fullscreen', callback),
   openExternal: (url) => ipcRenderer.send('open-external', url),

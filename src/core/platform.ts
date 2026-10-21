@@ -41,6 +41,8 @@ export interface QuickUnlockStatus {
 export interface VeilBridge {
   platform: 'darwin' | 'win32' | 'linux';
   version: string;
+  /** "DESKTOP-1A2B · Windows": shown (encrypted) in Settings → «Устройства». */
+  deviceName: string;
   storage: {
     get(key: string): Promise<Uint8Array | null>;
     set(key: string, value: Uint8Array): Promise<void>;
@@ -95,6 +97,19 @@ export interface VeilBridge {
   systemLockSupported(): Promise<boolean>;
   /** The window was hidden to the tray. */
   onHidden(callback: () => void): () => void;
+  /** «Мост» over the local network (TCP + mDNS); frames are encrypted by the renderer. */
+  lan: {
+    host(): Promise<{ port: number; addresses: string[]; name: string }>;
+    discover(): Promise<{ name: string; host: string; port: number }[]>;
+    connect(host: string, port: number): Promise<void>;
+    send(data: Uint8Array): void;
+    /** Drop the current peer, keep listening. */
+    drop(): void;
+    stop(): void;
+    onPeer(callback: () => void): () => void;
+    onData(callback: (data: Uint8Array) => void): () => void;
+    onClosed(callback: () => void): () => void;
+  };
   toggleFullscreen(): void;
   onFullscreen(callback: (fullscreen: boolean) => void): () => void;
   update: {

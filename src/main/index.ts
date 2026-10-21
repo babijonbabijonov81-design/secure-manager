@@ -23,10 +23,11 @@ import {
   type Rectangle,
 } from 'electron';
 import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
-import { networkInterfaces } from 'node:os';
+import { hostname, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
 import { SecretClipboard } from '../core/secret-clipboard.ts';
+import { discoverBridges, LanBridge } from './bridge.ts';
 import {
   disableQuickUnlock,
   enableFingerprint,
@@ -69,6 +70,8 @@ let relay: RelayHandle | null = null;
 let relayError: string | undefined;
 let lastBadge = 0;
 let systemLock: Promise<boolean> = Promise.resolve(false);
+// «Мост» over the local network: only encrypted frames pass through here.
+const lanBridge = new LanBridge((channel, value) => mainWindow?.webContents.send(channel, value));
 
 const userData = () => app.getPath('userData');
 const vaultDir = () => join(userData(), 'vault');
@@ -339,6 +342,18 @@ function registerIpc(): void {
   ipcMain.on('app:version', (event) => {
     event.returnValue = app.getVersion();
   });
+  ipcMain.on('app:device-name', (event) => {
+    const os = isWindows ? 'Windows' : isMac ? 'macOS' : 'Linux';
+    event.returnValue = `${hostname()} · ${os}`.slice(0, 80);
+  });
+
+  // «Мост» over the local network: only encrypted frames pass through here.
+  handle('bridge:host', () => lanBridge.host());
+  handle('bridge:discover', () => discoverBridges());
+  handle('bridge:connect', (host: string, port: number) => lanBridge.connect(String(host), Number(port)));
+  ipcMain.on('bridge:send', (event, data: Uint8Array) => trusted(event) && data instanceof Uint8Array && lanBridge.send(data));
+  ipcMain.on('bridge:drop', (event) => trusted(event) && lanBridge.drop());
+  ipcMain.on('bridge:stop', (event) => trusted(event) && lanBridge.stop());
 
   handle('storage:get', async (key: string) => {
     try {
@@ -553,6 +568,7 @@ app.on('second-instance', showWindow);
 app.on('activate', showWindow);
 app.on('before-quit', () => {
   quitting = true;
+  lanBridge.stop();
   closeAllCards();
   void secretClipboard.clear();
 });

@@ -3,6 +3,7 @@
 import {
   authStatement,
   type AuthFrame,
+  type DeviceHello,
   type ErrorCode,
   type RegisterFrame,
   type RequestFrame,
@@ -37,6 +38,8 @@ export interface RelayClientOptions {
   onPrekeysLow(count: number): void;
   /** Errors that stop reconnecting, e.g. a taken username or another device took over. */
   onFatal(code: string, message: string): void;
+  /** This computer, for Settings → «Устройства» (only when the feature is on). */
+  device?(): DeviceHello | undefined;
 }
 
 /** Accepts "host:port", "https://host", "wss://host/ws"… and returns the WebSocket URL. */
@@ -135,7 +138,7 @@ export function anonymousRequest<T>(
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const PING_INTERVAL_MS = 25_000;
-const FATAL_CODES = new Set(['username_taken', 'replaced', 'deleted']);
+const FATAL_CODES = new Set(['username_taken', 'replaced', 'deleted', 'device_revoked']);
 
 export class RelayClient {
   status: ConnectionStatus = 'offline';
@@ -227,6 +230,12 @@ export class RelayClient {
         this.options.onFatal('replaced', 'Аккаунт открыт на другом устройстве');
         return;
       }
+      if (event.code === 4003) {
+        this.closed = true;
+        this.setStatus('offline');
+        this.options.onFatal('device_revoked', 'Этот компьютер отвязан от аккаунта');
+        return;
+      }
       if (event.code === 4002) {
         this.closed = true;
         this.setStatus('offline');
@@ -250,6 +259,7 @@ export class RelayClient {
               type: 'auth',
               userId: this.options.userId,
               sig: b64(sign(authStatement(frame.nonce, 'auth'), this.options.signPriv)),
+              ...(this.options.device?.() ? { device: this.options.device()! } : {}),
             } satisfies AuthFrame);
         this.ws?.send(pack(message));
         return;

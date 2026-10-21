@@ -51,6 +51,7 @@ export interface RegisterFrame {
   sig: string;
   /** Proof of email (+2FA) recovery: lets new keys take over an existing username. */
   recoveryToken?: string;
+  device?: DeviceHello;
 }
 
 /**
@@ -81,7 +82,26 @@ export interface AuthFrame {
   type: 'auth';
   userId: string;
   sig: string;
+  device?: DeviceHello;
 }
+
+/** A computer of this account (Settings → «Устройства»). The label is encrypted by the client. */
+export interface DeviceHello {
+  /** Random per installation, base64url. */
+  id: string;
+  /** Computer name encrypted with a key only the account knows; the relay cannot read it. */
+  label?: string;
+}
+
+export interface DeviceRecord extends DeviceHello {
+  first: number;
+  last: number;
+  online?: boolean;
+}
+
+export const DEVICE_ID_RE = /^[A-Za-z0-9_-]{16,32}$/;
+/** Bridge rooms on the relay: a transfer between two computers without a common network. */
+export const BRIDGE_ROOM_RE = /^[0-9A-Z]{4}$/;
 
 export type RequestFrame =
   | { type: 'lookup'; reqId: string; username: string }
@@ -96,13 +116,22 @@ export type RequestFrame =
   | { type: 'email_remove'; reqId: string; totp?: string }
   | { type: 'totp_set'; reqId: string; secret: string; code: string }
   | { type: 'totp_disable'; reqId: string; code: string }
-  | { type: 'backup_put'; reqId: string; meta: BackupMeta };
+  | { type: 'backup_put'; reqId: string; meta: BackupMeta }
+  | { type: 'devices'; reqId: string }
+  | { type: 'device_revoke'; reqId: string; id: string };
+
+/** Anonymous frames of a bridge room: the relay only pipes the (encrypted) bytes between two sides. */
+export type BridgeFrame =
+  | { type: 'bridge_open'; reqId: string; room: string }
+  | { type: 'bridge_join'; reqId: string; room: string }
+  | { type: 'bridge_data' };
 
 export type ClientFrame =
   | RegisterFrame
   | AuthFrame
   | RecoveryFrame
   | RequestFrame
+  | BridgeFrame
   | { type: 'ack'; ids: string[] }
   | { type: 'ping' };
 
@@ -120,7 +149,10 @@ export type ServerFrame =
   | { type: 'result'; reqId: string; data?: unknown }
   | { type: 'msg'; id: string; ts: number }
   | { type: 'prekeys_low'; count: number }
-  | { type: 'pong' };
+  | { type: 'pong' }
+  | { type: 'bridge_peer' }
+  | { type: 'bridge_data' }
+  | { type: 'bridge_closed' };
 
 export type ErrorCode =
   | 'bad_request'
@@ -136,6 +168,7 @@ export type ErrorCode =
   | 'bad_code'
   | 'totp_required'
   | 'bad_totp'
+  | 'device_revoked'
   | 'server_error';
 
 // ---- Signed statements -------------------------------------------------------------

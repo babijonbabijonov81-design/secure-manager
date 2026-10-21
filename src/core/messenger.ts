@@ -6,6 +6,8 @@ import {
   USERNAME_RE,
   type AccountStatus,
   type BackupMeta,
+  type DeviceHello,
+  type DeviceRecord,
   type IceServer,
   type PreKeyBundle,
   type RegisterFrame,
@@ -17,7 +19,7 @@ import { b64, concat, fromUtf8, pack, randomId, unb64, unpack, utf8 } from '../.
 import { compress, decompress } from './compress.ts';
 import { safetyNumber } from './crypto/fingerprint.ts';
 import { newContentKey, openContent, sealContent } from './crypto/media.ts';
-import { generateDH, keyPairFromJSON, keyPairToJSON, random, sign } from './crypto/primitives.ts';
+import { aeadOpen, aeadSeal, generateDH, kdf, keyPairFromJSON, keyPairToJSON, random, sign } from './crypto/primitives.ts';
 import { openEnvelope, sealEnvelope, type SenderInfo } from './crypto/sealed.ts';
 import {
   createInitiatorSession,
@@ -43,6 +45,7 @@ import {
 import { generateIdentity, signPreKey, verifyDhKey, type IdentityKeys } from './crypto/x3dh.ts';
 import { anonymousRequest, RelayClient, RelayRequestError, type ConnectionStatus } from './relay-client.ts';
 import { readVaultMeta, SecureStore, writeVaultMeta, type StorageBackend } from './storage.ts';
+import type { RecordSource } from './bridge.ts';
 import {
   attachmentsOf,
   DEFAULT_SETTINGS,
@@ -203,6 +206,24 @@ const cleanEmoji = (value: unknown) => (typeof value === 'string' ? [...value].s
 const cleanUsername = (username: string) => username.trim().toLowerCase().replace(/^@/, '');
 const IMAGE_MIME = /^image\/(png|jpe?g|gif|webp|avif|bmp)$/;
 
+let thisDevice: { id: string; name: string } | null = null;
+/** Set once at start-up by the app: this installation's random id and the computer's name. */
+export function setThisDevice(device: { id: string; name: string }): void {
+  thisDevice = device;
+}
+
+/** A computer of this account in Settings → «Устройства». */
+export interface DeviceInfo {
+  id: string;
+  name: string;
+  first: number;
+  last: number;
+  online: boolean;
+  current: boolean;
+}
+
+const DEVICE_AD = utf8('veil-device-v1');
+
 export const hasAccount = async (storage: StorageBackend) => !!(await readVaultMeta(storage));
 
 /** Register on the relay and create a fresh encrypted vault. */
@@ -271,6 +292,26 @@ export async function unlockWithKey(storage: StorageBackend, dataKey: Uint8Array
   const meta = await readVaultMeta(storage);
   if (!meta) throw new MessengerError('no_account', 'Аккаунт не найден');
   return openVault(storage, meta, dataKey.slice(), events);
+}
+
+/**
+ * «Мост», new computer: the records received from the old one become a vault protected by the
+ * password chosen here, then the account opens and goes online from this computer.
+ */
+export async function importAccount(
+  options: { storage: StorageBackend; password: string; records: Map<string, Uint8Array>; kdf?: { N: number; r: number; p: number } },
+  events: MessengerEvents = {},
+): Promise<Messenger> {
+  if (await readVaultMeta(options.storage)) throw new MessengerError('exists', 'На этом компьютере уже есть аккаунт Veil');
+  const { meta, dataKey } = await createVault(options.password, options.kdf);
+  const store = new SecureStore(options.storage, dataKey);
+  for (const [name, bytes] of options.records) {
+    if (!/^[\w.:-]{1,200}$/.test(name)) continue;
+    await store.putBytes(name, bytes);
+  }
+  if (!(await store.getJSON<AccountRecord>('account'))) throw new MessengerError('corrupt', 'Перенос неполный: нет аккаунта');
+  await writeVaultMeta(options.storage, meta);
+  return openVault(options.storage, meta, dataKey.slice(), events);
 }
 
 async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint8Array, events: MessengerEvents): Promise<Messenger> {
@@ -559,7 +600,7 @@ export class Messenger {
   }
 
   connect(register = false, hooks?: { ready(): void; fatal(code: string, message: string): void }): void {
-    if (this.locked) return;
+    if (this.locked || this.bridgePaused) return;
     this.relay?.close();
     this.fatal = undefined;
     let pendingHooks = hooks;
@@ -586,6 +627,7 @@ export class Messenger {
         void this.drainInbox();
       },
       onPrekeysLow: (count) => void this.refillPreKeys(count),
+      device: () => this.deviceHello(),
       onFatal: (code, message) => {
         if (pendingHooks) {
           pendingHooks.fatal(code, message);
@@ -766,6 +808,7 @@ export class Messenger {
         .map(([id, kp]) => ({ id: Number(id), pub: kp.pub })),
       sig: b64(sign(authStatement(nonce, 'register', registerExtra(frame)), this.identity.sign.priv)),
       ...(this.recoveryToken ? { recoveryToken: this.recoveryToken } : {}),
+      ...(this.deviceHello() ? { device: this.deviceHello()! } : {}),
       ...frame,
     };
   }
@@ -2003,6 +2046,75 @@ export class Messenger {
 
   reconnect(): void {
     this.connect();
+  }
+
+  // ---- «Устройства» -------------------------------------------------------------------------
+
+  /** Key for computer names on the relay: only this account can read them. */
+  private deviceKey(): Uint8Array {
+    return kdf(this.identity.sign.priv, new Uint8Array(32), 'veil-device-label-v1', 32);
+  }
+
+  /** This computer for the relay, only while «Мост» (features.bridge) is on. */
+  private deviceHello(): DeviceHello | undefined {
+    if (!thisDevice || this.settings?.features?.bridge === false) return undefined;
+    const { nonce, ct } = aeadSeal(this.deviceKey(), utf8(thisDevice.name.slice(0, 120)), DEVICE_AD);
+    return { id: thisDevice.id, label: b64(concat(nonce, ct)) };
+  }
+
+  async listDevices(): Promise<DeviceInfo[]> {
+    if (!this.relay) throw new RelayRequestError('offline', 'Нет соединения с сервером');
+    const { devices, current } = await this.relay.request<{ devices: DeviceRecord[]; current: string | null }>({ type: 'devices' });
+    const key = this.deviceKey();
+    return devices.map((d) => {
+      let name = 'Компьютер';
+      try {
+        const raw = unb64(d.label ?? '');
+        name = fromUtf8(aeadOpen(key, raw.subarray(0, 24), raw.subarray(24), DEVICE_AD));
+      } catch {
+        // label missing or from an older version
+      }
+      return { id: d.id, name, first: d.first, last: d.last, online: !!d.online || d.id === current, current: d.id === current };
+    });
+  }
+
+  /** «Отвязать»: the relay stops accepting sign-ins from that computer. */
+  async revokeDevice(id: string): Promise<void> {
+    if (!this.relay) throw new RelayRequestError('offline', 'Нет соединения с сервером');
+    await this.relay.request({ type: 'device_revoke', id });
+  }
+
+  // ---- «Мост»: moving the account to another computer ------------------------------------
+
+  private bridgePaused = false;
+
+  /**
+   * Stops talking to the relay (so no message is consumed here during the move), saves
+   * everything and gives read access to every record of the vault.
+   */
+  async bridgeSource(): Promise<RecordSource> {
+    this.bridgePaused = true;
+    this.announcePresence('off');
+    this.relay?.close();
+    this.relay = null;
+    this.status = 'offline';
+    this.changed();
+    await this.flushNow();
+    return { names: () => this.store.names(), get: (name) => this.store.getBytes(name) };
+  }
+
+  /** The move was cancelled: back online. */
+  resumeAfterBridge(): void {
+    if (!this.bridgePaused) return;
+    this.bridgePaused = false;
+    this.connect();
+  }
+
+  /** The new computer has everything: wipe this one. */
+  async wipeAfterBridge(): Promise<void> {
+    this.bridgePaused = false;
+    await this.lock();
+    await this.storage.clear();
   }
 
   /** Checks the vault password without changing anything (e.g. before turning on quick unlock). */

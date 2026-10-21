@@ -4,7 +4,7 @@
 import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import type { BackupMeta, OneTimePreKeyPublic, SignedPreKeyPublic } from './shared/protocol.ts';
+import type { BackupMeta, DeviceRecord, OneTimePreKeyPublic, SignedPreKeyPublic } from './shared/protocol.ts';
 import { unb64 } from './shared/wire.ts';
 
 export interface UserRecord {
@@ -22,6 +22,10 @@ export interface UserRecord {
   /** Last accepted TOTP time step, so a code cannot be replayed. */
   totpLast?: number;
   backup?: BackupMeta & { size: number };
+  /** Computers that signed in (up to 10), with encrypted names. */
+  devices?: DeviceRecord[];
+  /** Device ids the owner unlinked: sign-in from them is refused. */
+  revoked?: string[];
 }
 
 export interface QueuedEnvelope {

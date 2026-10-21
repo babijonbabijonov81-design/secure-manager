@@ -1,4 +1,5 @@
 import {
+  ArrowRightLeft,
   DownloadCloud,
   Info,
   KeyRound,
@@ -7,6 +8,7 @@ import {
   Maximize,
   Mic,
   Monitor,
+  MonitorSmartphone,
   Moon,
   Palette,
   RefreshCw,
@@ -21,9 +23,9 @@ import {
   Volume2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { WrongPasswordError } from '../../../core/crypto/vault.ts';
-import type { Messenger } from '../../../core/messenger.ts';
+import type { DeviceInfo, Messenger } from '../../../core/messenger.ts';
 import type { AccountStatus } from '../../../../server/src/shared/protocol.ts';
 import { bridge, type EmbeddedServerStatus, type UpdateState } from '../../../core/platform.ts';
 import { probeServer } from '../../../core/relay-client.ts';
@@ -33,10 +35,11 @@ import { formatDay, formatTime } from '../lib/format.ts';
 import { feature } from '../lib/hooks.ts';
 import { isOwnServer } from '../lib/shield.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
+import { BridgeHostDialog } from './BridgeFlows.tsx';
 import { QuickUnlockSection } from './QuickUnlock.tsx';
 import { CodeInput, RecoveryEmailDialog, TotpDisableDialog, TotpSetupDialog } from './SecurityDialogs.tsx';
 
-export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'features' | 'about';
+export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'devices' | 'features' | 'about';
 
 const TABS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: 'profile', label: 'Профиль', icon: <UserRound size={18} /> },
@@ -45,6 +48,7 @@ const TABS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: 'audio', label: 'Аудио', icon: <Mic size={18} /> },
   { id: 'server', label: 'Сервер', icon: <Server size={18} /> },
   { id: 'security', label: 'Безопасность', icon: <KeyRound size={18} /> },
+  { id: 'devices', label: 'Устройства', icon: <MonitorSmartphone size={18} /> },
   { id: 'features', label: 'Функции', icon: <ToggleRight size={18} /> },
   { id: 'about', label: 'О Veil', icon: <Info size={18} /> },
 ];
@@ -70,7 +74,7 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
       <div className="modal settings-modal" role="dialog" aria-modal="true">
         <nav className="settings-nav">
           <h3>Настройки</h3>
-          {TABS.map((t) => (
+          {TABS.filter((t) => t.id !== 'devices' || feature(s, 'bridge')).map((t) => (
             <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>
               {t.icon}
               {t.label}
@@ -261,6 +265,7 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
             {tab === 'audio' && <AudioTab messenger={messenger} snapshot={snapshot} />}
             {tab === 'server' && <ServerTab messenger={messenger} snapshot={snapshot} />}
             {tab === 'security' && <SecurityTab messenger={messenger} snapshot={snapshot} onDeleted={onDeleted} />}
+            {tab === 'devices' && <DevicesTab messenger={messenger} snapshot={snapshot} onMoved={onDeleted} />}
             {tab === 'features' && <FeaturesTab snapshot={snapshot} set={set} />}
             {tab === 'about' && <AboutTab />}
           </div>
@@ -838,6 +843,83 @@ function UpdatesSection() {
         )}
       </div>
     </div>
+  );
+}
+
+/** «Устройства»: computers that signed in to this account, and «Мост» to move to another one. */
+function DevicesTab({ messenger, snapshot, onMoved }: { messenger: Messenger; snapshot: MessengerSnapshot; onMoved(): void }) {
+  const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
+  const [error, setError] = useState('');
+  const [revoke, setRevoke] = useState<DeviceInfo | null>(null);
+  const [moving, setMoving] = useState(false);
+  const online = snapshot.status === 'online';
+  const load = useCallback(() => {
+    setError('');
+    messenger
+      .listDevices()
+      .then(setDevices)
+      .catch((e: Error) => setError(e.message));
+  }, [messenger]);
+  useEffect(() => {
+    if (online) load();
+  }, [online, load]);
+
+  return (
+    <>
+      <div className="section bridge-card">
+        <div className="section-title">
+          <ArrowRightLeft size={16} /> Мост: перенести на другой ПК
+        </div>
+        <p>Аккаунт, чаты, «Избранное» и файлы переедут на другой компьютер, например с Windows на Linux, напрямую по локальной сети.</p>
+        <button className="btn btn-primary btn-sm" onClick={() => setMoving(true)} data-testid="bridge-start">
+          Перенести на другой ПК
+        </button>
+      </div>
+      <div className="section">
+        <div className="section-title">
+          <MonitorSmartphone size={16} /> Компьютеры с этим аккаунтом
+        </div>
+        {!online && <p>Нужно подключение к серверу.</p>}
+        {error && <span className="field-error">{error}</span>}
+        {devices?.map((d) => (
+          <div className="device-row" key={d.id} data-testid="device-row">
+            <MonitorSmartphone size={20} />
+            <div className="grow">
+              <b>
+                {d.name}
+                {d.current && <span className="chip success">Этот ПК</span>}
+              </b>
+              <span>
+                {d.online ? 'в сети' : `был в сети ${formatDay(d.last).toLowerCase()} в ${formatTime(d.last)}`} · с {formatDay(d.first).toLowerCase()}
+              </span>
+            </div>
+            {!d.current && (
+              <button className="btn btn-secondary btn-sm" onClick={() => setRevoke(d)}>
+                Отвязать
+              </button>
+            )}
+          </div>
+        ))}
+        <p>
+          Названия компьютеров зашифрованы: сервер хранит их, но прочитать не может. «Отвязать» запрещает серверу принимать вход с этого ПК — так
+          забытый или проданный компьютер перестанет получать ваши сообщения.
+        </p>
+      </div>
+      {revoke && (
+        <ConfirmDialog
+          title="Отвязать компьютер?"
+          text={`«${revoke.name}» больше не сможет войти в этот аккаунт. Если вы думаете, что пароль и ключи украдены, этого мало — смените пароль и заведите новый аккаунт.`}
+          confirm="Отвязать"
+          danger
+          onClose={() => setRevoke(null)}
+          onConfirm={async () => {
+            await messenger.revokeDevice(revoke.id);
+            load();
+          }}
+        />
+      )}
+      {moving && <BridgeHostDialog messenger={messenger} onClose={() => setMoving(false)} onMoved={onMoved} />}
+    </>
   );
 }
 

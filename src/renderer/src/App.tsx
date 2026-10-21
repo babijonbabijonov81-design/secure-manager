@@ -1,5 +1,5 @@
 import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { hasAccount, type Messenger, type MessengerEvents } from '../../core/messenger.ts';
+import { hasAccount, setThisDevice, type Messenger, type MessengerEvents } from '../../core/messenger.ts';
 import { bridge } from '../../core/platform.ts';
 import { defaultStorage } from '../../core/storage.ts';
 import type { Contact, Message, Theme } from '../../core/types.ts';
@@ -49,6 +49,21 @@ export function useAppearance(theme: Theme | null): void {
     return () => media.removeEventListener('change', onChange);
   }, [theme]);
 }
+
+/** A random id for this installation (Settings → «Устройства»); it never leaves with «Мост». */
+function deviceId(): string {
+  try {
+    let id = localStorage.getItem('veil.device');
+    if (!id) {
+      id = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      localStorage.setItem('veil.device', id);
+    }
+    return id;
+  } catch {
+    return 'browser-without-storage';
+  }
+}
+setThisDevice({ id: deviceId(), name: bridge?.deviceName ?? `Браузер · ${navigator.platform || 'веб'}` });
 
 if (bridge) {
   document.documentElement.dataset.desktop = '';

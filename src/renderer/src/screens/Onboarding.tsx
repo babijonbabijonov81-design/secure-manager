@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  ArrowRightLeft,
   AtSign,
   CheckCircle2,
   EyeOff,
@@ -20,6 +21,7 @@ import { USERNAME_RE } from '../../../../server/src/shared/protocol.ts';
 import { createAccount, MessengerError, type Messenger, type MessengerEvents } from '../../../core/messenger.ts';
 import { bridge, type EmbeddedServerStatus } from '../../../core/platform.ts';
 import { probeServer } from '../../../core/relay-client.ts';
+import { BridgeGuestFlow } from '../components/BridgeFlows.tsx';
 import type { StorageBackend } from '../../../core/storage.ts';
 import { passwordStrength } from '../lib/format.ts';
 import { Backdrop, Logo, Toggle } from '../lib/ui.tsx';
@@ -53,6 +55,7 @@ export function Onboarding({
   const [error, setError] = useState<{ field?: 'username' | 'password' | 'server'; text: string } | null>(null);
   const [progress, setProgress] = useState({ text: '', value: 0 });
   const [recovering, setRecovering] = useState(false);
+  const [transferring, setTransferring] = useState(false);
 
   useEffect(() => {
     if (!bridge) {
@@ -152,7 +155,9 @@ export function Onboarding({
       <Backdrop />
       {bridge && <div className="titlebar" style={{ background: 'transparent', borderBottom: 0, position: 'fixed', inset: '0 0 auto 0' }} />}
       <div className="center-stage">
-        {recovering ? (
+        {transferring ? (
+          <BridgeGuestFlow storage={storage} events={events} onBack={() => setTransferring(false)} onDone={onDone} />
+        ) : recovering ? (
           <RecoveryFlow storage={storage} events={events} initialServer={server} onBack={() => setRecovering(false)} onDone={onDone} />
         ) : (
         <div className="glass-card" key={step}>
@@ -198,6 +203,9 @@ export function Onboarding({
               </div>
               <button className="btn btn-primary btn-lg btn-block" onClick={() => setStep('server')}>
                 Создать аккаунт <ArrowRight size={18} />
+              </button>
+              <button className="btn btn-secondary btn-block" style={{ marginTop: 10 }} onClick={() => setTransferring(true)}>
+                <ArrowRightLeft size={17} /> Перенести с другого ПК
               </button>
               <div style={{ textAlign: 'center', marginTop: 14 }}>
                 <button className="link-btn" onClick={() => setRecovering(true)}>
