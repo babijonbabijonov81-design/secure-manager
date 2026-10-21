@@ -48,6 +48,8 @@ export interface RelayOptions {
   mailer?: Mailer | null;
   /** STUN/TURN servers handed to clients for calls. */
   ice?: IceOptions;
+  /** Tests: every WebSocket frame exactly as the relay sees it, in both directions. */
+  tap?: (direction: 'in' | 'out', bytes: Uint8Array) => void;
 }
 
 export interface IceOptions {
@@ -283,7 +285,10 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
   const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: MAX_FRAME_BYTES });
 
   const send = (conn: Connection, frame: ServerFrame, body?: Uint8Array) => {
-    if (conn.ws.readyState === conn.ws.OPEN) conn.ws.send(pack(frame, body));
+    if (conn.ws.readyState !== conn.ws.OPEN) return;
+    const bytes = pack(frame, body);
+    options.tap?.('out', bytes);
+    conn.ws.send(bytes);
   };
 
   const sendError = (conn: Connection, code: ErrorCode, message: string, reqId?: string) =>
@@ -595,6 +600,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         try {
           if (!isBinary) fail('bad_request', 'Ожидается бинарный кадр');
           const bytes = raw instanceof Buffer ? new Uint8Array(raw) : new Uint8Array(raw as ArrayBuffer);
+          options.tap?.('in', bytes);
           const { header, body } = unpack<ClientFrame>(bytes);
           reqId = typeof (header as { reqId?: unknown }).reqId === 'string' ? (header as { reqId: string }).reqId : undefined;
           if (!conn.userId) {

@@ -283,6 +283,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
   });
 
   const status = typing ? null : presenceText(contact, online);
+  const held = messenger.isHeld(contact.id);
   const shield = !saved && feature(snapshot.settings, 'shield') ? chatShield(contact, snapshot, messenger.iceServers.hasTurn) : null;
   const ShieldIcon = shield?.level === 'alert' ? ShieldAlert : shield?.level === 'ok' ? ShieldCheck : Shield;
 
@@ -400,7 +401,22 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
         </div>
       </div>
 
-      {!contact.blocked && (
+      {contact.keyWarning && !saved && feature(snapshot.settings, 'keyGuard') && (
+        <div className={`key-banner${held ? ' held' : ''}`} role="alert" data-testid="key-banner">
+          <ShieldAlert size={18} />
+          <span className="grow">
+            <b>Ключ контакта «{contact.displayName}» изменился.</b>{' '}
+            {held ? 'Сообщения не отправятся, пока вы не сверите код безопасности.' : 'Сверьте код безопасности заново.'}
+          </span>
+          <button className="btn btn-sm btn-danger" onClick={onShowSafety}>
+            Сверить код
+          </button>
+          <button className="btn btn-sm btn-ghost" onClick={() => messenger.acceptKeyChange(contact.id)}>
+            Принять без сверки
+          </button>
+        </div>
+      )}
+      {!contact.blocked && !held && (
         <Composer
           messenger={messenger}
           contact={contact}

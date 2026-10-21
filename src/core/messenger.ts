@@ -82,6 +82,8 @@ const BACKUP_MESSAGES_PER_CHAT = 3000;
 export interface MessengerEvents {
   /** A new incoming message the UI may want to notify about. */
   onIncoming?(contact: Contact, message: Message): void;
+  /** A contact's identity key changed (the chat was kept, the verified mark removed). */
+  onKeyChange?(contact: Contact): void;
 }
 
 /** Receives call signals; returns false if it knows nothing about that call. */
@@ -802,13 +804,57 @@ export class Messenger {
       if (existing.archived) this.updateContact(existing.id, { archived: false });
       return this.contacts[info.userId];
     }
-    const contact = this.createContact(info, info.username);
-    // Someone else used to have this username: make the change visible.
-    const clash = Object.values(this.contacts).find((c) => c.username === info.username && c.id !== info.userId);
-    if (clash) {
-      contact.keyWarning = true;
-      this.addSystem(contact.id, { kind: 'keychange' });
-    }
+    // The username now belongs to a different key (account reset, or someone in the middle).
+    const previous = Object.values(this.contacts).find((c) => c.username === info.username && c.id !== info.userId && !isSavedChat(c.id));
+    if (previous) return this.replaceIdentity(previous, info);
+    return this.createContact(info, info.username);
+  }
+
+  /**
+   * A known username came back with a new identity key. The chat stays where it was, but the
+   * "verified" mark is gone, a red line explains why, and old sessions are dropped.
+   */
+  private replaceIdentity(previous: Contact, info: Pick<UserInfo, 'userId' | 'username' | 'dhKey' | 'dhSig'>): Contact {
+    const now = Date.now();
+    const contact: Contact = {
+      ...previous,
+      id: info.userId,
+      username: info.username,
+      dhKey: info.dhKey,
+      dhSig: info.dhSig,
+      verified: false,
+      verifiedAt: undefined,
+      keyWarning: true,
+      lastActivity: now,
+    };
+    delete this.contacts[previous.id];
+    delete this.sessions[previous.id];
+    delete this.online[previous.id];
+    delete this.typing[previous.id];
+    this.contacts[contact.id] = contact;
+    this.conversations.set(contact.id, this.conversations.get(previous.id) ?? []);
+    this.conversations.delete(previous.id);
+    // Anything still queued was encrypted for the old key and can never be read by the new one.
+    const stale = this.outbox.filter((item) => item.to === previous.id).flatMap((item) => item.msgIds);
+    this.outbox = this.outbox.filter((item) => item.to !== previous.id);
+    this.markDirty('contacts', 'sessions', 'outbox', `conv.${previous.id}`, `conv.${contact.id}`);
+    this.setStatus(contact.id, stale, 'failed', true);
+    this.addSystem(contact.id, { kind: 'keychange' });
+    this.events.onKeyChange?.(contact);
+    this.changed();
+    return contact;
+  }
+
+  /** «Не отправлять, пока не сверю»: true while sending to this contact is on hold. */
+  isHeld(contactId: string): boolean {
+    const contact = this.contacts[contactId];
+    return !!contact?.keyWarning && this.settings.holdUntilVerified && this.settings.features.keyGuard !== false;
+  }
+
+  private requireSendable(contactId: string): Contact {
+    const contact = this.requireContact(contactId);
+    if (this.isHeld(contactId))
+      throw new MessengerError('key_changed', 'Ключ собеседника изменился. Сверьте код безопасности, чтобы отправить сообщение');
     return contact;
   }
 
@@ -1004,7 +1050,7 @@ export class Messenger {
   async sendText(contactId: string, text: string, options: SendOptions = {}): Promise<void> {
     const body = text.trim();
     if (!body) return;
-    const contact = this.requireContact(contactId);
+    const contact = this.requireSendable(contactId);
     const message = this.newOutgoing(contact, { text: body }, options.replyTo);
     this.addMessage(contactId, message);
     this.updateContact(contactId, { lastActivity: message.ts, draft: undefined });
@@ -1016,7 +1062,7 @@ export class Messenger {
    * the size or count limit is split into several messages.
    */
   async sendMedia(contactId: string, files: OutgoingFile[], options: SendOptions & { caption?: string } = {}): Promise<void> {
-    const contact = this.requireContact(contactId);
+    const contact = this.requireSendable(contactId);
     for (const file of files) {
       if (file.data.length > MAX_ATTACHMENT_BYTES) throw new MessengerError('too_large', `«${file.name}» больше 20 МБ`);
     }
@@ -1179,7 +1225,7 @@ export class Messenger {
   }
 
   async retryMessage(contactId: string, messageId: string): Promise<void> {
-    const contact = this.requireContact(contactId);
+    const contact = this.requireSendable(contactId);
     const message = this.conversations.get(contactId)?.find((m) => m.id === messageId);
     if (!message || message.status !== 'failed') return;
     this.setStatus(contactId, [messageId], 'pending', true);
@@ -1315,7 +1361,7 @@ export class Messenger {
 
   /** Toggles my reaction: the same emoji again removes it. */
   async react(contactId: string, messageId: string, emoji: string): Promise<void> {
-    const contact = this.requireContact(contactId);
+    const contact = this.requireSendable(contactId);
     const message = this.conversations.get(contactId)?.find((m) => m.id === messageId);
     if (!message || message.dir === 'system' || message.call) return;
     const next = message.reactions?.me === emoji ? '' : cleanEmoji(emoji);
@@ -1374,7 +1420,7 @@ export class Messenger {
    * still leaves a missed call behind.
    */
   async sendCallSignal(contactId: string, signal: CallSignal): Promise<'delivered' | 'offline' | 'queued'> {
-    const contact = this.requireContact(contactId);
+    const contact = signal.k === 'offer' ? this.requireSendable(contactId) : this.requireContact(contactId);
     if (isSavedChat(contactId)) throw new MessengerError('saved', 'В «Избранное» позвонить нельзя');
     if (contact.blocked) throw new MessengerError('blocked', 'Пользователь заблокирован');
     if (!this.relay || this.relay.status !== 'online') throw new MessengerError('offline', 'Нет соединения с сервером');
@@ -1574,10 +1620,13 @@ export class Messenger {
     let contact = this.contacts[contactId];
     if (!contact) {
       const info = await this.resolveContact(contactId);
-      contact = this.createContact(
-        { userId: contactId, username: info?.username ?? '', dhKey: sender.fd, dhSig: sender.fs },
-        content.t === 'msg' && content.p?.n ? content.p.n : (info?.username ?? 'Неизвестный'),
-      );
+      const fresh = { userId: contactId, username: info?.username ?? '', dhKey: sender.fd, dhSig: sender.fs };
+      const previous = info?.username
+        ? Object.values(this.contacts).find((c) => c.username === info.username && c.id !== contactId && !isSavedChat(c.id))
+        : undefined;
+      contact = previous
+        ? this.replaceIdentity(previous, fresh)
+        : this.createContact(fresh, content.t === 'msg' && content.p?.n ? content.p.n : (info?.username ?? 'Неизвестный'));
     } else if (contact.dhKey !== sender.fd) {
       contact = this.updateContact(contactId, { dhKey: sender.fd, dhSig: sender.fs })!;
     }

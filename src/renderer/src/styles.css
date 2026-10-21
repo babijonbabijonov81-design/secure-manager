@@ -1460,8 +1460,9 @@ button:disabled {
   text-align: center;
 }
 .sys-msg.warn {
-  color: var(--warning);
-  background: rgba(var(--amber-rgb), 0.1);
+  color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.12);
+  font-weight: 600;
 }
 
 .msg-row {
@@ -3692,4 +3693,33 @@ button:disabled {
 }
 .call-item .call-kind.missed {
   color: var(--danger);
+}
+
+/* ---- key change (P0-3) ---- */
+.key-banner {
+  position: relative;
+  z-index: 2;
+  margin: 0 auto 8px;
+  width: min(760px, calc(100% - 32px));
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--r-lg);
+  border: 1px solid rgba(var(--danger-rgb), 0.45);
+  background: rgba(var(--danger-rgb), 0.1);
+  color: var(--text);
+  font-size: 13px;
+}
+.key-banner > svg {
+  color: var(--danger);
+  flex-shrink: 0;
+}
+.key-banner .grow {
+  flex: 1;
+  min-width: 200px;
+}
+.key-banner.held {
+  margin-bottom: 18px;
 }

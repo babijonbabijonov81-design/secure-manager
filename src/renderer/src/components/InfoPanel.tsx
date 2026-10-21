@@ -191,6 +191,11 @@ export function InfoPanel({
           >
             {contact.verified ? 'Снять отметку' : 'Коды совпадают — отметить как проверенный'}
           </button>
+          {contact.keyWarning && (
+            <button className="btn btn-sm btn-ghost" onClick={() => messenger.acceptKeyChange(contact.id)}>
+              Принять новый ключ без сверки
+            </button>
+          )}
         </div>
 
         <div className="section" id="shield-timer">
