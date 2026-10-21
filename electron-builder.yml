@@ -11,6 +11,11 @@ files:
   - '!**/*.map'
 asar: true
 artifactName: Veil-${version}-${os}-${arch}.${ext}
+# veil:// invite links. Linux: MimeType=x-scheme-handler/veil in the .desktop file (deb, rpm,
+# Flatpak); Windows: registered by the app itself for the current user (installer and portable).
+protocols:
+  - name: Veil invite
+    schemes: [veil]
 
 mac:
   category: public.app-category.social-networking
@@ -27,6 +32,7 @@ mac:
   extendInfo:
     NSHumanReadableCopyright: Veil — end-to-end encrypted messenger
     NSMicrophoneUsageDescription: Veil records voice messages only when you press the microphone button.
+    NSCameraUsageDescription: Veil uses the camera only to scan a veil:// invite QR code.
 dmg:
   title: Veil ${version}
   artifactName: Veil-${version}-mac-${arch}.${ext}

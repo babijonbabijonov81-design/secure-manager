@@ -137,6 +137,13 @@ try {
   await page.getByText('Добро пожаловать').waitFor({ timeout: 30_000 });
   console.log('quick unlock with PIN ok');
 
+  // A veil:// link opened by the system while Veil runs (a second copy is started with it).
+  const link = `veil://add/smoke_friend?k=${'A'.repeat(43)}`;
+  await app.evaluate(({ app: a }, url) => a.emit('second-instance', {}, ['veil', url], {}), link);
+  await page.getByTestId('open-invite').getByText('@smoke_friend').waitFor({ timeout: 10_000 });
+  await page.keyboard.press('Escape');
+  console.log('veil:// link ok');
+
   const maximized = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isMaximized()));
   console.log('maximized on first launch:', maximized);
   if (process.argv[2]) {

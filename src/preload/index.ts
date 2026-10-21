@@ -68,6 +68,8 @@ const bridge: VeilBridge = {
   onFullscreen: (callback) => listen('fullscreen', callback),
   openExternal: (url) => ipcRenderer.send('open-external', url),
   linkPreview: (url) => ipcRenderer.invoke('preview:fetch', url),
+  takeInvite: () => ipcRenderer.invoke('invite:take'),
+  onInvite: (callback) => listen('invite', callback),
   saveFile: (name, data) => ipcRenderer.invoke('save-file', name, data),
   server: {
     start: (port) => ipcRenderer.invoke('server:start', port),

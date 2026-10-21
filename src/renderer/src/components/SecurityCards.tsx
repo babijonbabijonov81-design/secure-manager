@@ -230,6 +230,7 @@ const EVENT_TEXT: Record<SecurityEventKind, (detail?: string) => string> = {
   duress_off: () => 'Аварийный пароль выключен',
   backup_export: () => 'Сохранена резервная копия .veil',
   backup_import: () => 'Аккаунт восстановлен из файла .veil',
+  invite_mismatch: (d) => `Ключ ${d ?? 'контакта'} не совпал с приглашением — контакт не добавлен`,
 };
 
 /** Events someone else could have caused: they get «Это не я». */

@@ -47,6 +47,7 @@
     "electron-builder": "^26.15.3",
     "electron-vite": "^6.0.0",
     "fflate": "^0.8.2",
+    "jsqr": "^1.4.0",
     "lucide-react": "^1.60.0",
     "nodemailer": "^10.1.7",
     "pdf-lib": "^1.17.1",

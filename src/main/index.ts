@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
 import { SecretClipboard } from '../core/secret-clipboard.ts';
 import { discoverBridges, LanBridge } from './bridge.ts';
+import { findInvite, registerInviteProtocol } from './invite.ts';
 import { fetchLinkPreview } from './preview.ts';
 import {
   disableQuickUnlock,
@@ -350,6 +351,11 @@ function registerIpc(): void {
 
   // «Мост» over the local network: only encrypted frames pass through here.
   handle('preview:fetch', (url: string) => fetchLinkPreview(String(url)));
+  handle('invite:take', () => {
+    const invite = pendingInvite;
+    pendingInvite = null;
+    return invite;
+  });
   handle('bridge:host', () => lanBridge.host());
   handle('bridge:discover', () => discoverBridges());
   handle('bridge:connect', (host: string, port: number) => lanBridge.connect(String(host), Number(port)));
@@ -566,7 +572,16 @@ async function startEmbeddedRelay(port = DEFAULT_PORT) {
 
 // ---- lifecycle ---------------------------------------------------------------------------
 
-app.on('second-instance', showWindow);
+// A veil:// link opened while Veil runs (Windows and Linux start a second copy with it).
+let pendingInvite: string | null = findInvite(process.argv);
+app.on('second-instance', (_event, argv) => {
+  const invite = findInvite(argv);
+  if (invite) {
+    pendingInvite = invite;
+    mainWindow?.webContents.send('invite');
+  }
+  showWindow();
+});
 app.on('activate', showWindow);
 app.on('before-quit', () => {
   quitting = true;
@@ -586,12 +601,12 @@ app.on('window-all-closed', () => {
 });
 
 app.whenReady().then(async () => {
-  // Only what the app uses: notifications, clipboard writes and the microphone (voice
-  // messages and calls, audio only). No camera, location, screen capture etc.
+  // Only what the app uses: notifications, clipboard writes, the microphone (voice messages and
+  // calls) and the camera (scanning a veil:// QR code). No location, MIDI, USB etc.
   const allowed = (permission: string, mediaTypes?: string[]) =>
     permission === 'notifications' ||
     permission === 'clipboard-sanitized-write' ||
-    (permission === 'media' && (!mediaTypes || mediaTypes.every((t) => t === 'audio')));
+    (permission === 'media' && (!mediaTypes || mediaTypes.every((t) => t === 'audio' || t === 'video')));
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) =>
     callback(allowed(permission, (details as { mediaTypes?: string[] }).mediaTypes)),
   );
@@ -609,6 +624,7 @@ app.whenReady().then(async () => {
   }
 
   registerIpc();
+  void registerInviteProtocol();
   createMenu();
   systemLock = watchSystemLock(() => mainWindow?.webContents.send('system-lock'));
   setupNotificationCards(

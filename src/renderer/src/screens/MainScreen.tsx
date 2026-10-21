@@ -9,6 +9,7 @@ import { CallsList } from '../components/CallsList.tsx';
 import { ChatList } from '../components/ChatList.tsx';
 import { ChatView } from '../components/ChatView.tsx';
 import { InfoPanel } from '../components/InfoPanel.tsx';
+import { OpenInviteDialog } from '../components/Invites.tsx';
 import { NewChatModal } from '../components/NewChatModal.tsx';
 import { SettingsModal, type SettingsTab } from '../components/SettingsModal.tsx';
 import { VaultView } from '../components/VaultView.tsx';
@@ -247,6 +248,20 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
       offHidden();
     };
   }, [messenger, calls, onLock]);
+
+  // A veil:// link the system opened Veil with (kept by the main process while Veil was locked).
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
+  useEffect(() => {
+    if (!bridge) return;
+    const take = () =>
+      void bridge!.takeInvite().then((link) => {
+        if (!link) return;
+        if (feature(messenger.getSnapshot().settings, 'invites')) setInviteLink(link);
+        else toast('Приглашения veil:// выключены в настройках', 'info');
+      });
+    take();
+    return bridge.onInvite(take);
+  }, [messenger, toast]);
 
   // Auto-lock after inactivity.
   const lockAfter = settings.autoLockMinutes;
@@ -539,6 +554,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
         />
       )}
       {modal?.kind === 'new' && <NewChatModal messenger={messenger} onClose={() => setModal(null)} onOpen={select} />}
+      {inviteLink && <OpenInviteDialog messenger={messenger} link={inviteLink} onClose={() => setInviteLink(null)} onOpen={select} />}
       {modal?.kind === 'settings' && (
         <SettingsModal messenger={messenger} snapshot={snapshot} initialTab={modal.tab} onClose={() => setModal(null)} onDeleted={onDeleted} />
       )}

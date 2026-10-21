@@ -17,11 +17,10 @@ import { authStatement, registerExtra } from '../../server/src/shared/protocol.t
 import { base32Encode, otpauthUrl, verifyTotp } from '../../server/src/shared/totp.ts';
 import { b64, concat, fromUtf8, pack, randomId, unb64, unpack, utf8 } from '../../server/src/shared/wire.ts';
 import { BACKUP_SKIPPED, createBackupFile, openBackupFile } from './backup-file.ts';
-import { cleanPreview } from './link-preview.ts';
 import { compress, decompress } from './compress.ts';
 import { safetyNumber } from './crypto/fingerprint.ts';
 import { newContentKey, openContent, sealContent } from './crypto/media.ts';
-import { aeadOpen, aeadSeal, generateDH, kdf, keyPairFromJSON, keyPairToJSON, random, sign } from './crypto/primitives.ts';
+import { aeadOpen, aeadSeal, equalBytes, generateDH, kdf, keyPairFromJSON, keyPairToJSON, random, sign } from './crypto/primitives.ts';
 import { openEnvelope, sealEnvelope, type SenderInfo } from './crypto/sealed.ts';
 import {
   createInitiatorSession,
@@ -49,6 +48,8 @@ import {
   type VaultMeta,
 } from './crypto/vault.ts';
 import { generateIdentity, signPreKey, verifyDhKey, type IdentityKeys } from './crypto/x3dh.ts';
+import { INVITE_DAYS, inviteLink, MAX_INVITES, newInviteToken, parseInvite, serverKey } from './invite.ts';
+import { cleanPreview } from './link-preview.ts';
 import { anonymousRequest, RelayClient, RelayRequestError, type ConnectionStatus } from './relay-client.ts';
 import { readVaultMeta, SecureStore, writeVaultMeta, type StorageBackend } from './storage.ts';
 import type { RecordSource } from './bridge.ts';
@@ -987,6 +988,10 @@ export class Messenger {
       await new Promise((r) => setTimeout(r, 300 + Math.random() * 400));
       throw new MessengerError('not_found', `Пользователь @${username} не найден`);
     }
+    return this.addFromInfo(await this.lookupUser(username));
+  }
+
+  private async lookupUser(username: string): Promise<UserInfo> {
     if (!this.relay) throw new MessengerError('offline', 'Нет соединения с сервером');
     let info: UserInfo;
     try {
@@ -997,6 +1002,10 @@ export class Messenger {
       throw error;
     }
     this.checkUserInfo(info);
+    return info;
+  }
+
+  private addFromInfo(info: UserInfo): Contact {
     const existing = this.contacts[info.userId];
     if (existing) {
       if (existing.archived) this.updateContact(existing.id, { archived: false });
@@ -1111,6 +1120,66 @@ export class Messenger {
     if (match) this.updateContact(contactId, { verified: true, keyWarning: false, verifiedAt: Date.now(), verifiedBy: 'call' });
     else this.updateContact(contactId, { verified: false, verifiedAt: undefined, verifiedBy: undefined });
     this.addSystem(contactId, { kind: 'callwords', match });
+  }
+
+  // ---- veil:// invites (features.invites) -------------------------------------------------
+
+  /** A new invite link with my identity key and a one-time token (valid 7 days). */
+  createInvite(): string {
+    if (this.settings.features.invites === false) throw new MessengerError('disabled', 'Приглашения выключены в настройках');
+    const now = Date.now();
+    const token = newInviteToken();
+    const active = (this.account.invites ?? []).filter((i) => i.exp > now);
+    this.account.invites = [...active, { t: token, exp: now + INVITE_DAYS * DAY_MS }].slice(-MAX_INVITES);
+    this.markDirty('account');
+    return inviteLink({ username: this.account.username, userId: this.account.userId, server: this.account.serverUrl, token });
+  }
+
+  /**
+   * Opens someone's invite: the key the server returns must be the key in the link, otherwise
+   * the contact is not added (the server or someone in the middle swapped it).
+   */
+  async acceptInvite(link: string): Promise<Contact> {
+    if (this.settings.features.invites === false) throw new MessengerError('disabled', 'Приглашения выключены в настройках');
+    const invite = parseInvite(link);
+    if (!invite) throw new MessengerError('bad_invite', 'Это не приглашение Veil или ссылка повреждена');
+    if (invite.userId === this.account.userId) throw new MessengerError('own_invite', 'Это ваше собственное приглашение');
+    if (invite.server && serverKey(invite.server) !== serverKey(this.account.serverUrl))
+      throw new MessengerError('other_server', `Приглашение для сервера ${invite.server}, а ваш аккаунт — на ${serverKey(this.account.serverUrl)}`);
+    if (this.decoy) return this.addContact(invite.username);
+    // Compared before anything is stored: a swapped key must not replace a known contact's key.
+    const info = await this.lookupUser(invite.username);
+    if (info.userId !== invite.userId) {
+      this.logSecurity('invite_mismatch', `@${invite.username}`);
+      throw new MessengerError(
+        'invite_mismatch',
+        'Ключ не совпадает с приглашением. Возможно, его подменили по дороге — не пишите туда ничего важного и сверьте код безопасности при встрече',
+      );
+    }
+    const contact = this.addFromInfo(info);
+    if (!contact.verified || contact.verifiedBy !== 'invite') this.markInvited(contact.id, 'me');
+    // My name (as with a first message) and the token: the inviter sees who came and verifies me.
+    await this.sendControl(this.contacts[contact.id], { t: 'prof', n: this.account.displayName });
+    if (invite.token) await this.sendControl(this.contacts[contact.id], { t: 'inv', tok: invite.token });
+    return this.contacts[contact.id];
+  }
+
+  private markInvited(contactId: string, by: 'me' | 'them'): void {
+    this.updateContact(contactId, { verified: true, keyWarning: false, verifiedAt: Date.now(), verifiedBy: 'invite' });
+    this.addSystem(contactId, { kind: 'invite', by });
+  }
+
+  /** My invite came back: the token is used up and this contact counts as verified. */
+  private redeemInvite(contact: Contact, token: unknown): void {
+    if (typeof token !== 'string' || this.settings.features.invites === false) return;
+    const now = Date.now();
+    const invites = this.account.invites ?? [];
+    const match = invites.find((i) => i.exp > now && equalBytes(utf8(i.t), utf8(token)));
+    this.account.invites = invites.filter((i) => i !== match && i.exp > now);
+    this.markDirty('account');
+    if (!match || isSavedChat(contact.id)) return;
+    this.markInvited(contact.id, 'them');
+    void this.sendControl(contact, { t: 'prof', n: this.account.displayName });
   }
 
   private shares(contactId: string, kind: PresenceKind): boolean {
@@ -2158,6 +2227,9 @@ export class Messenger {
         if (updated && updated.capsule!.at <= Date.now() + 5 * 60_000) this.openCapsule(contact.id, updated);
         return;
       }
+      case 'inv':
+        this.redeemInvite(contact, content.tok);
+        return;
       case 'viewed': {
         if (typeof content.id !== 'string') return;
         const mine = this.conversations.get(contact.id)?.find((m) => m.id === content.id && m.dir === 'out' && m.once);

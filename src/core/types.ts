@@ -166,6 +166,8 @@ export interface AccountRecord {
   knownDevices?: string[];
   /** Hidden chats: scrypt hashes of the secret phrase and the PIN (never the values themselves). */
   hiddenChats?: { salt: string; phrase: string; pin: string };
+  /** veil:// invites not used yet: one-time tokens and when they expire (features.invites). */
+  invites?: { t: string; exp: number }[];
 }
 
 /** «Избранное»: a chat with yourself that never leaves this device. */
@@ -244,7 +246,9 @@ export type SystemEvent =
   | { kind: 'keychange' }
   | { kind: 'reset' }
   /** The two words in a call matched (no one in the middle) or did not. */
-  | { kind: 'callwords'; match: boolean };
+  | { kind: 'callwords'; match: boolean }
+  /** Added through a veil:// invite: by me opening their link, or by them opening mine. */
+  | { kind: 'invite'; by: 'me' | 'them' };
 
 /** A call as shown in the chat; kept only on this device. */
 export interface CallRecord {
@@ -359,6 +363,8 @@ export type Content =
   | { t: 'viewed'; id: string }
   /** The time capsule's date came: its key. */
   | { t: 'capkey'; id: string; k: string }
+  /** The one-time token of a veil:// invite, back to the inviter. */
+  | { t: 'inv'; tok: string }
   | { t: 'react'; id: string; e: string }
   /** Presence: online, going offline, or hidden ("recently"); `ask` requests a reply. */
   | { t: 'pres'; s: 'on' | 'off' | 'hidden'; ask?: 1 }
@@ -398,7 +404,8 @@ export type SecurityEventKind =
   | 'duress_on'
   | 'duress_off'
   | 'backup_export'
-  | 'backup_import';
+  | 'backup_import'
+  | 'invite_mismatch';
 
 export interface SecurityEvent {
   id: string;
