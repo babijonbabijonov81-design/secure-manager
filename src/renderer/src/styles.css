@@ -4597,3 +4597,22 @@ button:disabled {
   height: 40px;
   font-size: 12.5px;
 }
+
+/* ---- hidden chats (P1-7) ---- */
+.hidden-banner {
+  margin: 0 16px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.hidden-banner button {
+  margin-left: auto;
+  min-height: 32px;
+  font-weight: 600;
+  color: var(--accent);
+}

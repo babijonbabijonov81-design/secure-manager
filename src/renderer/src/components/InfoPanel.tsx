@@ -231,6 +231,19 @@ export function InfoPanel({
             {contact.muted ? <Bell size={18} /> : <BellOff size={18} />}
             <span className="grow">{contact.muted ? 'Включить уведомления' : 'Без звука'}</span>
           </button>
+          {feature(settings, 'hiddenChats') && (
+            <button
+              className="action-item"
+              onClick={() => {
+                if (!snapshot.security.hiddenChats) return onOpenSettings('privacy');
+                messenger.setHidden(contact.id, !contact.hidden);
+                toast(contact.hidden ? 'Чат вернулся в список' : 'Чат скрыт. Откройте его секретной фразой в поиске', 'success');
+              }}
+            >
+              <EyeOff size={18} />
+              <span className="grow">{contact.hidden ? 'Вернуть в список' : snapshot.security.hiddenChats ? 'Скрыть чат' : 'Скрыть чат — сначала настройте PIN'}</span>
+            </button>
+          )}
           <button className="action-item" onClick={() => setConfirm('reset')}>
             <RotateCcw size={18} />
             <span className="grow">Сбросить сеанс шифрования</span>

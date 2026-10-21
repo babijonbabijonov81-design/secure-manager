@@ -768,6 +768,7 @@ export class Messenger {
           recoveryEmail: this.account.recovery?.email,
           lastBackupAt: this.account.recovery?.lastBackupAt || undefined,
           ...(this.account.duress ? { duress: { wipe: this.account.duress.wipe } } : {}),
+          hiddenChats: !!this.account.hiddenChats,
         },
         ...(this.decoy ? { decoy: true } : {}),
         settings: this.settings,
@@ -2320,6 +2321,50 @@ export class Messenger {
     } catch {
       return false;
     }
+  }
+
+  // ---- hidden chats ---------------------------------------------------------------------------
+
+  private async secretHash(value: string, salt: string): Promise<string> {
+    const { scryptAsync } = await import('@noble/hashes/scrypt.js');
+    return b64(await scryptAsync(utf8(value.normalize('NFKC')), unb64(salt), { N: 2 ** 14, r: 8, p: 1, dkLen: 32 }));
+  }
+
+  /** Sets (or changes) the secret phrase and the PIN for hidden chats. */
+  async setupHiddenChats(phrase: string, pin: string): Promise<void> {
+    if (phrase.trim().length < 4) throw new MessengerError('short', 'Секретная фраза — не короче 4 символов');
+    if (!/^\d{4,8}$/.test(pin)) throw new MessengerError('pin', 'PIN — от 4 до 8 цифр');
+    const salt = b64(random(16));
+    this.account.hiddenChats = { salt, phrase: await this.secretHash(phrase.trim().toLowerCase(), salt), pin: await this.secretHash(pin, salt) };
+    this.markDirty('account');
+    await this.flushNow();
+    this.changed();
+  }
+
+  /** Typed into the search: is it the secret phrase? (Nothing else about hidden chats leaks.) */
+  async isHiddenPhrase(text: string): Promise<boolean> {
+    const config = this.account.hiddenChats;
+    if (!config || text.trim().length < 4) return false;
+    return (await this.secretHash(text.trim().toLowerCase(), config.salt)) === config.phrase;
+  }
+
+  async checkHiddenPin(pin: string): Promise<boolean> {
+    const config = this.account.hiddenChats;
+    return !!config && (await this.secretHash(pin, config.salt)) === config.pin;
+  }
+
+  setHidden(contactId: string, hidden: boolean): void {
+    if (isSavedChat(contactId) || (hidden && !this.account.hiddenChats)) return;
+    this.updateContact(contactId, { hidden: hidden || undefined, pinned: hidden ? false : this.contacts[contactId]?.pinned });
+  }
+
+  /** Turning hidden chats off brings every hidden chat back into the list. */
+  async disableHiddenChats(): Promise<void> {
+    for (const contact of Object.values(this.contacts)) if (contact.hidden) this.updateContact(contact.id, { hidden: undefined });
+    delete this.account.hiddenChats;
+    this.markDirty('account');
+    await this.flushNow();
+    this.changed();
   }
 
   // ---- duress password ----------------------------------------------------------------------

@@ -162,6 +162,8 @@ export interface AccountRecord {
   recovery?: RecoverySettings;
   /** The duress password is set; with `wipe` it erases the real vault when typed. */
   duress?: { wipe: boolean; at: number };
+  /** Hidden chats: scrypt hashes of the secret phrase and the PIN (never the values themselves). */
+  hiddenChats?: { salt: string; phrase: string; pin: string };
 }
 
 /** «Избранное»: a chat with yourself that never leaves this device. */
@@ -199,6 +201,8 @@ export interface Contact {
   veil?: boolean;
   /** What this contact sees of me, overriding the global settings (features.presence). */
   privacy?: Partial<Record<PresenceKind, boolean>>;
+  /** Hidden chat: not in the list, opened with the secret phrase in search and a PIN. */
+  hidden?: boolean;
 }
 
 export type PresenceKind = 'online' | 'read' | 'typing';
@@ -367,7 +371,7 @@ export interface MessengerSnapshot {
   statusError?: string;
   fatal?: string;
   me: { userId: string; username: string; displayName: string; serverUrl: string };
-  security: { totp: boolean; recoveryEmail?: string; lastBackupAt?: number; duress?: { wipe: boolean } };
+  security: { totp: boolean; recoveryEmail?: string; lastBackupAt?: number; duress?: { wipe: boolean }; hiddenChats: boolean };
   /** This is the empty Veil opened by the duress password (never shown in the interface). */
   decoy?: boolean;
   settings: Settings;

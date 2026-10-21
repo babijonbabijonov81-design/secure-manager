@@ -8,6 +8,7 @@ import {
   CheckCheck,
   Clock,
   Eraser,
+  EyeOff,
   MailOpen,
   MessageSquarePlus,
   MoreVertical,
@@ -32,10 +33,15 @@ interface Props {
   onSelect(id: string): void;
   onNewChat(): void;
   onDeleted(id: string): void;
+  /** Enter in the search: the secret phrase of hidden chats opens them (returns true). */
+  onSecret?(query: string): Promise<boolean>;
+  /** Hidden chats are shown right now. */
+  hiddenOpen?: boolean;
+  onCloseHidden?(): void;
 }
 
 export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
-  { messenger, snapshot, activeId, onSelect, onNewChat, onDeleted },
+  { messenger, snapshot, activeId, onSelect, onNewChat, onDeleted, onSecret, hiddenOpen, onCloseHidden },
   searchRef,
 ) {
   const [query, setQuery] = useState('');
@@ -114,11 +120,24 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') setQuery('');
-              if (e.key === 'Enter' && contacts[0]) onSelect(contacts[0].id);
+              if (e.key !== 'Enter') return;
+              const typed = query;
+              if (onSecret && typed.trim().length >= 4)
+                void onSecret(typed).then((secret) => {
+                  if (secret) setQuery('');
+                  else if (contacts[0]) onSelect(contacts[0].id);
+                });
+              else if (contacts[0]) onSelect(contacts[0].id);
             }}
           />
         </div>
       </div>
+      {hiddenOpen && (
+        <div className="hidden-banner" role="status">
+          <EyeOff size={15} /> Скрытые чаты открыты
+          <button onClick={onCloseHidden}>Спрятать</button>
+        </div>
+      )}
       <div className="chat-list" role="list">
         {!showArchive && !query && archived.length > 0 && (
           <button className="chat-item archive-row" onClick={() => setShowArchive(true)}>
@@ -257,7 +276,8 @@ function ChatItem({
           <span className="name">
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{contact.displayName}</span>
             {contact.verified && !saved && <ShieldCheck size={14} style={{ color: 'var(--success)' }} />}
-            {contact.keyWarning && <TriangleAlert size={14} style={{ color: 'var(--warning)' }} />}
+            {contact.keyWarning && <TriangleAlert size={14} style={{ color: 'var(--danger)' }} />}
+            {contact.hidden && <EyeOff size={13} aria-label="Скрытый чат" style={{ color: 'var(--text-3)' }} />}
           </span>
           {last && <span className="time">{formatListTime(last.ts)}</span>}
         </div>

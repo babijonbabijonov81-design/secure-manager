@@ -36,6 +36,7 @@ import { feature } from '../lib/hooks.ts';
 import { isOwnServer } from '../lib/shield.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
 import { BridgeHostDialog } from './BridgeFlows.tsx';
+import { HiddenChatsSettings } from './HiddenChats.tsx';
 import { QuickUnlockSection } from './QuickUnlock.tsx';
 import { BridgeCard, DuressSection, ProtectionBar, SafetyCodeCard } from './SecurityCards.tsx';
 import { CodeInput, RecoveryEmailDialog, TotpDisableDialog, TotpSetupDialog } from './SecurityDialogs.tsx';
@@ -166,6 +167,7 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
                     {s.veilScope === 'selected' && <span className="field-hint">Включите Вуаль для нужного чата в его Щите.</span>}
                   </div>
                 )}
+                {feature(s, 'hiddenChats') && <HiddenChatsSettings messenger={messenger} snapshot={snapshot} />}
                 {feature(s, 'stripMeta') && (
                   <Row title="Удалять метаданные" text="Перед шифрованием из фото убираются геометка и данные камеры, из PDF и Office — автор и программа.">
                     <Toggle label="Удалять метаданные" on={s.stripMetadata} onChange={(v) => set({ stripMetadata: v })} />

@@ -1,5 +1,5 @@
 import { Bookmark, DownloadCloud, Eye, EyeOff, Lock, LockKeyhole, Maximize2, MessageCircle, MessageSquarePlus, Minimize2, Phone, Settings, ShieldCheck, Timer, WifiOff, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
 import { bridge, type NotificationCardData, type UpdateState } from '../../../core/platform.ts';
 import { SAVED_ID, type Contact, type Message } from '../../../core/types.ts';
@@ -12,6 +12,7 @@ import { InfoPanel } from '../components/InfoPanel.tsx';
 import { NewChatModal } from '../components/NewChatModal.tsx';
 import { SettingsModal, type SettingsTab } from '../components/SettingsModal.tsx';
 import { VaultView } from '../components/VaultView.tsx';
+import { HiddenPinDialog } from '../components/HiddenChats.tsx';
 import { revokeAttachmentUrls } from '../lib/attachments.ts';
 import { CallManager } from '../lib/calls.ts';
 import { snippetOf } from '../../../core/messenger.ts';
@@ -56,8 +57,16 @@ const readShieldPreference = () => {
 };
 
 export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDeleted }: Props) {
-  const snapshot = useSyncExternalStore(messenger.subscribe, messenger.getSnapshot);
-  const settings = snapshot.settings;
+  const full = useSyncExternalStore(messenger.subscribe, messenger.getSnapshot);
+  const settings = full.settings;
+  // Hidden chats stay out of every list until the secret phrase and the PIN open them.
+  const [hiddenOpen, setHiddenOpen] = useState(false);
+  const [hiddenAsk, setHiddenAsk] = useState(false);
+  const hiddenFeature = feature(settings, 'hiddenChats') && full.security.hiddenChats;
+  const snapshot = useMemo(
+    () => (hiddenOpen && hiddenFeature ? full : { ...full, contacts: full.contacts.filter((c) => !c.hidden) }),
+    [full, hiddenOpen, hiddenFeature],
+  );
   const [view, setView] = useState<View>('chats');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [modal, setModal] = useState<{ kind: 'settings'; tab?: SettingsTab } | { kind: 'new' } | null>(null);
@@ -110,6 +119,13 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
       const current = messenger.getSnapshot().settings;
       if (current.sounds) playChime();
       if (current.notifications && !focused) {
+        if (contact.hidden) {
+          // A hidden chat: no name, no text — just that something came.
+          const body = 'Новое сообщение';
+          if (bridge && current.notificationStyle === 'veil') bridge.notify({ title: 'Veil', body, tag: 'hidden', card: { ...cardData(contact, body), title: 'Veil', initials: 'V', gradient: '#e2582a' } });
+          else showNotification('Veil', body, 'hidden', () => {});
+          return;
+        }
         const preview = current.notificationPreview && !veiledFor(current, contact);
         const body = preview ? snippetOf(message) || 'Сообщение' : 'Новое зашифрованное сообщение';
         if (bridge && current.notificationStyle === 'veil') bridge.notify({ title: contact.displayName, body, tag: contact.id, card: cardData(contact, body) });
@@ -402,6 +418,20 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
             onDeleted={(id) => {
               if (id === activeId) setActiveId(null);
             }}
+            onSecret={
+              hiddenFeature
+                ? async (query) => {
+                    if (!(await messenger.isHiddenPhrase(query))) return false;
+                    setHiddenAsk(true);
+                    return true;
+                  }
+                : undefined
+            }
+            hiddenOpen={hiddenOpen && hiddenFeature}
+            onCloseHidden={() => {
+              setHiddenOpen(false);
+              setActiveId(null);
+            }}
           />
         )}
 
@@ -465,6 +495,16 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
         )}
       </div>
 
+      {hiddenAsk && (
+        <HiddenPinDialog
+          messenger={messenger}
+          onClose={() => setHiddenAsk(false)}
+          onOpen={() => {
+            setHiddenAsk(false);
+            setHiddenOpen(true);
+          }}
+        />
+      )}
       {modal?.kind === 'new' && <NewChatModal messenger={messenger} onClose={() => setModal(null)} onOpen={select} />}
       {modal?.kind === 'settings' && (
         <SettingsModal messenger={messenger} snapshot={snapshot} initialTab={modal.tab} onClose={() => setModal(null)} onDeleted={onDeleted} />
