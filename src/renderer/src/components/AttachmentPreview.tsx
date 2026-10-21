@@ -1,6 +1,7 @@
-import { FileText, ImagePlus, SendHorizontal, X } from 'lucide-react';
+import { FileText, ImagePlus, SendHorizontal, ShieldCheck, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { canSendOnce } from '../../../core/messenger.ts';
+import { isStrippable } from '../../../core/metadata.ts';
 import { MAX_ALBUM_ITEMS } from '../../../core/types.ts';
 import { formatSize } from '../lib/format.ts';
 import { Modal, Toggle } from '../lib/ui.tsx';
@@ -9,6 +10,8 @@ interface Props {
   files: File[];
   /** View-once sending is available (feature on, not «Избранное»). */
   allowOnce?: boolean;
+  /** Metadata will be removed before sending: say so. */
+  stripMetadata?: boolean;
   onAdd(files: File[]): void;
   onRemove(index: number): void;
   onClose(): void;
@@ -16,7 +19,7 @@ interface Props {
 }
 
 /** Telegram-style "send files" dialog: thumbnails, caption and photo compression. */
-export function AttachmentPreview({ files, allowOnce, onAdd, onRemove, onClose, onSend }: Props) {
+export function AttachmentPreview({ files, allowOnce, stripMetadata, onAdd, onRemove, onClose, onSend }: Props) {
   const [caption, setCaption] = useState('');
   const [compress, setCompress] = useState(true);
   const [onceChosen, setOnce] = useState(false);
@@ -30,6 +33,7 @@ export function AttachmentPreview({ files, allowOnce, onAdd, onRemove, onClose, 
     return () => created.forEach((u) => u && URL.revokeObjectURL(u));
   }, [files]);
   const images = files.filter((f) => f.type.startsWith('image/')).length;
+  const documents = files.some((f) => !f.type.startsWith('image/') && isStrippable(f.type, f.name));
   const total = files.reduce((sum, f) => sum + f.size, 0);
   const title = images === files.length ? (images === 1 ? 'Отправить фото' : `Отправить ${images} фото`) : `Отправить файлы: ${files.length}`;
 
@@ -101,6 +105,12 @@ export function AttachmentPreview({ files, allowOnce, onAdd, onRemove, onClose, 
               <span>Быстрее отправляется. Выключите, чтобы отправить в исходном качестве.</span>
             </div>
             <Toggle label="Сжать фото" on={compress} onChange={setCompress} />
+          </div>
+        )}
+        {stripMetadata && (images > 0 || documents) && (
+          <div className="meta-note" data-testid="metadata-note">
+            <ShieldCheck size={15} />
+            {[images > 0 && 'Геометка и данные камеры удалены', documents && 'Автор и программа удалены из документов'].filter(Boolean).join(' · ')}
           </div>
         )}
         <div className="form-actions" style={{ marginTop: 0 }}>

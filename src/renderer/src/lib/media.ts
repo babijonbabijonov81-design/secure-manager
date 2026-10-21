@@ -1,5 +1,6 @@
 // Image, clipboard and audio helpers for the UI.
 
+import { stripMetadata } from '../../../core/metadata.ts';
 import { bridge } from '../../../core/platform.ts';
 
 async function loadBitmap(blob: Blob): Promise<ImageBitmap> {
@@ -24,23 +25,30 @@ export interface PreparedFile {
   h?: number;
 }
 
+/** Removes EXIF/GPS, document authors etc. when `strip` is on; otherwise returns the bytes as they are. */
+async function cleaned(data: Uint8Array, mime: string, name: string, strip: boolean): Promise<Uint8Array> {
+  return strip ? (await stripMetadata(data, mime, name)).data : data;
+}
+
 /**
  * Photos are scaled down to 2560 px and re-encoded (JPEG, or WebP to keep transparency)
- * unless the user chose to send originals. GIFs and other files stay untouched.
+ * unless the user chose to send originals. GIFs and other files keep their content; with
+ * `strip` their metadata (geotag, camera, author, program) is removed first.
  */
-export async function prepareFile(file: File, compressImages: boolean): Promise<PreparedFile> {
+export async function prepareFile(file: File, compressImages: boolean, strip = false): Promise<PreparedFile> {
   const isImage = /^image\/(png|jpe?g|webp|bmp|avif|gif)$/.test(file.type);
-  if (!isImage) return { name: file.name || 'file', mime: file.type || 'application/octet-stream', data: new Uint8Array(await file.arrayBuffer()) };
+  const original = async (mime = file.type || 'application/octet-stream') => cleaned(new Uint8Array(await file.arrayBuffer()), mime, file.name, strip);
+  if (!isImage) return { name: file.name || 'file', mime: file.type || 'application/octet-stream', data: await original() };
   let bitmap: ImageBitmap;
   try {
     bitmap = await loadBitmap(file);
   } catch {
-    return { name: file.name || 'file', mime: 'application/octet-stream', data: new Uint8Array(await file.arrayBuffer()) };
+    return { name: file.name || 'file', mime: 'application/octet-stream', data: await original() };
   }
   const { width, height } = bitmap;
   if (!compressImages || file.type === 'image/gif') {
     bitmap.close();
-    return { name: file.name, mime: file.type, data: new Uint8Array(await file.arrayBuffer()), w: width, h: height };
+    return { name: file.name, mime: file.type, data: await original(), w: width, h: height };
   }
   const scale = Math.min(1, 2560 / Math.max(width, height));
   const w = Math.round(width * scale);
@@ -53,7 +61,7 @@ export async function prepareFile(file: File, compressImages: boolean): Promise<
   const blob = await toBlob(canvas, type, 0.86);
   // Re-encoding a small, already-compressed file can make it bigger: keep the original then.
   if (blob.size >= file.size && scale === 1) {
-    return { name: file.name, mime: file.type, data: new Uint8Array(await file.arrayBuffer()), w, h };
+    return { name: file.name, mime: file.type, data: await original(), w, h };
   }
   const name = file.name.replace(/\.[^.]+$/, '') + (type === 'image/webp' ? '.webp' : '.jpg');
   return { name, mime: type, data: new Uint8Array(await blob.arrayBuffer()), w, h };
