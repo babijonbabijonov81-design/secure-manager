@@ -15,6 +15,7 @@ test('two accounts on one device', async ({ browser }) => {
 
   // The second account, with its own password.
   await expect(page.getByTestId('add-account')).toBeVisible();
+  await shot(page, 'accounts-add');
   await page.getByRole('button', { name: 'Создать новый аккаунт' }).click();
   await page.getByLabel('Адрес сервера').fill(SERVER);
   await page.getByRole('button', { name: 'Продолжить' }).click();
@@ -29,6 +30,7 @@ test('two accounts on one device', async ({ browser }) => {
   await page.getByRole('button', { name: 'Настройки' }).click();
   await page.getByRole('button', { name: 'Аккаунты' }).click();
   await expect(tab).toContainText('2 из 2');
+  await shot(page, 'accounts-tab');
   await tab.getByRole('button', { name: 'Переключиться' }).click();
   const picker = page.getByRole('tablist', { name: 'Аккаунт' });
   await expect(picker.getByRole('tab', { selected: true })).toContainText('Первая');
@@ -49,6 +51,7 @@ test('two accounts on one device', async ({ browser }) => {
   await dialog.getByLabel('Пароль Veil').fill('Very-Secret-42');
   await expect(dialog.getByRole('button', { name: 'Выйти', exact: true })).toBeDisabled();
   await dialog.getByLabel('Понимаю, переписка будет потеряна').check();
+  await shot(page, 'accounts-signout');
   await dialog.getByRole('button', { name: 'Выйти', exact: true }).click();
 
   // Only the second account is left, on its lock screen.
