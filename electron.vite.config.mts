@@ -27,6 +27,8 @@ export const cspPlugin = (): Plugin => ({
 
 export default defineConfig({
   main: {
+    // Not a secret: desktop apps sign in without one (PKCE). Empty means the feature is not offered.
+    define: { __VEIL_MS_CLIENT_ID__: JSON.stringify(process.env.VEIL_MS_CLIENT_ID ?? '') },
     build: {
       // noble is ESM-only: bundle it into the CommonJS main process instead of requiring it.
       externalizeDeps: { exclude: ['@noble/curves', '@noble/hashes', '@noble/ciphers'] },

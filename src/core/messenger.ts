@@ -16,7 +16,7 @@ import {
 import { authStatement, registerExtra } from '../../server/src/shared/protocol.ts';
 import { base32Encode, otpauthUrl, verifyTotp } from '../../server/src/shared/totp.ts';
 import { b64, concat, fromUtf8, pack, randomId, unb64, unpack, utf8 } from '../../server/src/shared/wire.ts';
-import { BACKUP_SKIPPED, createBackupFile, openBackupFile } from './backup-file.ts';
+import { BACKUP_SKIPPED, backupKey, createBackupFile, openBackupFile, sealBackupFile, type BackupHeader } from './backup-file.ts';
 import { compress, decompress } from './compress.ts';
 import { safetyNumber } from './crypto/fingerprint.ts';
 import { newContentKey, openContent, sealContent } from './crypto/media.ts';
@@ -56,6 +56,7 @@ import { searchMessages, type SearchFilter, type SearchHit } from './search.ts';
 import { anonymousRequest, RelayClient, RelayRequestError, type ConnectionStatus } from './relay-client.ts';
 import { readVaultMeta, SecureStore, writeVaultMeta, type StorageBackend } from './storage.ts';
 import type { RecordSource } from './bridge.ts';
+import type { CloudApi } from './platform.ts';
 import {
   attachmentsOf,
   DEFAULT_SETTINGS,
@@ -227,6 +228,34 @@ let thisDevice: { id: string; name: string } | null = null;
 export function setThisDevice(device: { id: string; name: string }): void {
   thisDevice = device;
 }
+
+/** «Копия в OneDrive» (the desktop app's main process; absent in the browser version). */
+export type CloudTransport = Pick<CloudApi, 'signIn' | 'upload' | 'remove' | 'forget'>;
+let cloudTransport: CloudTransport | null = null;
+export function setCloudTransport(transport: CloudTransport | null): void {
+  cloudTransport = transport;
+}
+
+/** Kept in the vault only, never in a .veil file or the server backup. */
+interface CloudRecord {
+  v: 1;
+  /** Microsoft refresh token: lets Veil write to its own OneDrive folder. */
+  refresh: string;
+  /** veil-<random>.veil: says nothing about the account. */
+  file: string;
+  /** Key of the copy, derived from the copy password (which Veil does not keep). */
+  key: string;
+  kdf: BackupHeader['kdf'];
+  lastAt?: number;
+  size?: number;
+  error?: string;
+}
+
+const randomName = () => [...random(12)].map((b) => 'abcdefghijklmnopqrstuvwxyz234567'[b & 31]).join('');
+
+const CLOUD_EVERY_MS = 24 * 60 * 60 * 1000;
+const CLOUD_RETRY_MS = 60 * 60 * 1000;
+export const CLOUD_PASSWORD_MIN = 10;
 
 /** A computer of this account in Settings → «Устройства». */
 export interface DeviceInfo {
@@ -408,6 +437,7 @@ async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint
     // v1.0 left "message deleted" placeholders behind; deleted messages now vanish completely.
     if (messages) messenger.conversations.set(id, messages.filter((m) => !m.deleted));
   }
+  if (!messenger.decoy) await messenger.loadCloud();
   messenger.sweepExpired();
   messenger.helloPending = hello;
   if (account.totp) messenger.needsTotp = true;
@@ -619,6 +649,9 @@ export class Messenger {
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private backupTimer: ReturnType<typeof setTimeout> | null = null;
   private backingUp = false;
+  private cloud: CloudRecord | null = null;
+  private cloudBusy = false;
+  private cloudTriedAt = 0;
   private resolvingContacts = new Map<string, Promise<UserInfo | null>>();
   private pendingTotpSecret: string | null = null;
   private pendingRecovery: { email: string; key: Uint8Array; kdf: { N: number; r: number; p: number; salt: string } } | null = null;
@@ -841,6 +874,9 @@ export class Messenger {
           hiddenChats: !!this.account.hiddenChats,
         },
         ...(this.decoy ? { decoy: true } : {}),
+        ...(this.cloud
+          ? { cloud: { lastAt: this.cloud.lastAt, size: this.cloud.size, error: this.cloud.error, ...(this.cloudBusy ? { busy: true } : {}) } }
+          : {}),
         settings: this.settings,
         contacts,
         conversations: Object.fromEntries(this.conversations),
@@ -890,6 +926,10 @@ export class Messenger {
         else if (name === 'stickers') await this.store.putJSON(name, this.stickers);
         else if (name === 'seclog') await this.store.putJSON(name, this.seclog);
         else if (name === 'gkeys') await this.store.putJSON(name, this.gkeys);
+        else if (name === 'cloud') {
+          if (this.cloud) await this.store.putJSON(name, this.cloud);
+          else await this.store.delete(name);
+        }
         else if (name.startsWith('conv.')) {
           const messages = this.conversations.get(name.slice(5));
           if (messages) await this.store.putJSON(name, messages);
@@ -905,6 +945,9 @@ export class Messenger {
   private tick(): void {
     this.sweepExpired();
     const now = Date.now();
+    if (this.cloud && !this.cloudBusy && now - (this.cloud.lastAt ?? 0) > CLOUD_EVERY_MS && now - this.cloudTriedAt > CLOUD_RETRY_MS) {
+      void this.cloudUploadNow().catch(() => {});
+    }
     this.remindNotes(now);
     this.processTimed(now);
     for (const [id, state] of Object.entries(this.online)) {
@@ -2923,6 +2966,95 @@ export class Messenger {
     return file;
   }
 
+  // ---- «Копия в OneDrive» ---------------------------------------------------------------------
+  //
+  // The same .veil file as above, written to Veil's own folder in the user's OneDrive once a day.
+  // It is encrypted here with a key derived from a separate copy password before it leaves; the
+  // password is not kept. Microsoft sees an encrypted file, its size and when it changes.
+
+  /** Called when the vault opens. */
+  async loadCloud(): Promise<void> {
+    this.cloud = await this.store.getJSON<CloudRecord>('cloud');
+  }
+
+  private requireCloud(): CloudTransport {
+    if (!cloudTransport) throw new MessengerError('no_cloud', 'Копия в OneDrive есть только в приложении для компьютера');
+    if (this.decoy) throw new MessengerError('no_cloud', 'Сейчас недоступно');
+    return cloudTransport;
+  }
+
+  /** Step 1: Microsoft's sign-in page in the browser. Resolves to the refresh token for step 2. */
+  cloudSignIn(): Promise<string> {
+    return this.requireCloud().signIn();
+  }
+
+  /**
+   * Step 2: the copy password (not the Veil password, not kept), then the first upload. `file` keeps
+   * the name of a copy this account was restored from.
+   */
+  async enableCloud(refresh: string, password: string, options: { file?: string; kdf?: { N: number; r: number; p: number } } = {}): Promise<void> {
+    this.requireCloud();
+    if (password.normalize('NFKC').length < CLOUD_PASSWORD_MIN)
+      throw new MessengerError('short', `Пароль копии — не короче ${CLOUD_PASSWORD_MIN} символов`);
+    const { key, kdf } = await backupKey(password, options.kdf);
+    const file = options.file && /^veil-[a-z0-9]{6,40}\.veil$/.test(options.file) ? options.file : `veil-${randomName()}.veil`;
+    this.cloud = { v: 1, refresh, file, key: b64(key), kdf };
+    key.fill(0);
+    this.markDirty('cloud');
+    await this.flushNow();
+    this.logSecurity('cloud_on');
+    this.changed();
+    await this.cloudUploadNow();
+  }
+
+  /** Writes the copy now. Failures are kept for the settings («Не получилось: …») and thrown. */
+  async cloudUploadNow(): Promise<void> {
+    const cloud = this.cloud;
+    if (!cloud || this.cloudBusy || this.closed || this.decoy) return;
+    const transport = this.requireCloud();
+    this.cloudBusy = true;
+    this.cloudTriedAt = Date.now();
+    this.changed();
+    try {
+      await this.flushNow();
+      const records = new Map<string, Uint8Array>();
+      for (const name of await this.store.names()) {
+        if (BACKUP_SKIPPED.has(name)) continue;
+        const bytes = await this.store.getBytes(name);
+        if (bytes) records.set(name, bytes);
+      }
+      const key = unb64(cloud.key);
+      const data = await sealBackupFile(records, key, cloud.kdf);
+      key.fill(0);
+      const { refresh } = await transport.upload(cloud.refresh, cloud.file, data);
+      if (this.cloud !== cloud) return;
+      this.cloud = { ...cloud, refresh, lastAt: Date.now(), size: data.length, error: undefined };
+    } catch (error) {
+      if (this.cloud === cloud) this.cloud = { ...cloud, error: (error as Error).message || 'Не получилось' };
+      throw error;
+    } finally {
+      this.cloudBusy = false;
+      if (!this.closed) {
+        this.markDirty('cloud');
+        this.changed();
+      }
+    }
+  }
+
+  /** Stops the daily copy; with `removeCopy` the file in OneDrive is deleted too. */
+  async disableCloud(removeCopy: boolean): Promise<void> {
+    const cloud = this.cloud;
+    if (!cloud) return;
+    const transport = this.requireCloud();
+    if (removeCopy) await transport.remove(cloud.refresh, cloud.file);
+    void transport.forget(cloud.refresh);
+    this.cloud = null;
+    this.markDirty('cloud');
+    await this.flushNow();
+    this.logSecurity('cloud_off');
+    this.changed();
+  }
+
   // ---- «Журнал безопасности» -------------------------------------------------------------------
 
   /** Adds an event to the local, encrypted security log (features.securityLog). */
@@ -3232,6 +3364,7 @@ export class Messenger {
     if (this.decoy) throw new MessengerError('offline', 'Сервер не отвечает. Попробуйте позже');
     if (this.relay?.status === 'online') {
       if (this.account.recovery) await this.backupNow().catch(() => {});
+      if (this.cloud) await this.cloudUploadNow().catch(() => {});
       try {
         await this.relay.request({ type: 'device_signout' });
       } catch {

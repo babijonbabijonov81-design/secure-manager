@@ -30,6 +30,7 @@ import { SecretClipboard } from '../core/secret-clipboard.ts';
 import { discoverBridges, LanBridge } from './bridge.ts';
 import { findInvite, registerInviteProtocol } from './invite.ts';
 import { cancelModelDownload, deleteModel, downloadModel, modelStatus, registerModelScheme, serveModels } from './models.ts';
+import { CloudError, OneDrive } from './onedrive.ts';
 import { fetchLinkPreview } from './preview.ts';
 import { chooseScreenSource, listScreenSources, setupScreenShare, usesPortal } from './screen-share.ts';
 import {
@@ -79,6 +80,14 @@ let lastBadge = 0;
 let systemLock: Promise<boolean> = Promise.resolve(false);
 // «Мост» over the local network: only encrypted frames pass through here.
 const lanBridge = new LanBridge((channel, value) => mainWindow?.webContents.send(channel, value));
+
+// Development builds may point at a fake Microsoft (tests); packaged ones always use the real one.
+const oneDrive = new OneDrive({
+  clientId: (!app.isPackaged && process.env.VEIL_MS_CLIENT_ID) || __VEIL_MS_CLIENT_ID__,
+  openBrowser: (url) => void shell.openExternal(url),
+  ...(!app.isPackaged && process.env.VEIL_MS_LOGIN ? { loginBase: process.env.VEIL_MS_LOGIN } : {}),
+  ...(!app.isPackaged && process.env.VEIL_MS_GRAPH ? { graphBase: process.env.VEIL_MS_GRAPH } : {}),
+});
 
 const userData = () => app.getPath('userData');
 const vaultDir = () => join(userData(), 'vault');
@@ -433,6 +442,31 @@ function registerIpc(): void {
   });
   // Locked: no message text may stay on screen in notification cards.
   ipcMain.on('notify:close-all', (event) => trusted(event) && closeAllCards());
+
+  // «Копия в OneDrive»: only files Veil has already encrypted pass through here.
+  const cloud = <T>(task: () => Promise<T>) =>
+    Promise.resolve()
+      .then(task)
+      .then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({
+        ok: false as const,
+        code: error instanceof CloudError ? error.code : 'failed',
+        message: error instanceof Error ? error.message : 'Не получилось',
+      }),
+    );
+  const bytes = (data: unknown) => {
+    if (!(data instanceof Uint8Array)) throw new CloudError('failed', 'Нет данных');
+    return data;
+  };
+  handle('cloud:status', () => ({ configured: oneDrive.configured }));
+  handle('cloud:signin', () => cloud(() => oneDrive.signIn()));
+  handle('cloud:cancel', () => oneDrive.cancel());
+  handle('cloud:list', (refresh: string) => cloud(() => oneDrive.list(String(refresh))));
+  handle('cloud:upload', (refresh: string, name: string, data: Uint8Array) => cloud(() => oneDrive.upload(String(refresh), String(name), bytes(data))));
+  handle('cloud:download', (refresh: string, name: string) => cloud(() => oneDrive.download(String(refresh), String(name))));
+  handle('cloud:remove', (refresh: string, name: string) => cloud(() => oneDrive.remove(String(refresh), String(name))));
+  handle('cloud:forget', (refresh: string) => oneDrive.forget(String(refresh)));
 
   handle('quick:status', (slot: number) => quickUnlockStatus(quickSlot(slot)));
   handle('quick:enable-pin', (slot: number, blob: string) => enablePin(quickSlot(slot), blob));

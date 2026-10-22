@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Check, HardDriveDownload, KeyRound, LogOut, Mail, MonitorSmartphone, ShieldCheck, TriangleAlert, UserPlus } from 'lucide-react';
+import { ArrowLeftRight, Check, Cloud, HardDriveDownload, KeyRound, LogOut, Mail, MonitorSmartphone, ShieldCheck, TriangleAlert, UserPlus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { accountTitle, MAX_ACCOUNTS } from '../../../core/accounts.ts';
 import type { DeviceInfo, Messenger } from '../../../core/messenger.ts';
@@ -134,6 +134,16 @@ function SignOutDialog({
     { on: others > 0, icon: <MonitorSmartphone size={16} />, title: '«Мост» с другого устройства', text: others > 0 ? `Устройств с этим аккаунтом: ${others}` : 'Других устройств нет' },
     { on: !!email, icon: <Mail size={16} />, title: 'Код из письма', text: email ? `На ${email}. Чаты вернутся из зашифрованной копии на сервере` : 'Почта для восстановления не указана' },
     { on: !!fileAt, icon: <HardDriveDownload size={16} />, title: 'Файл .veil', text: fileAt ? `Копия от ${formatDay(fileAt).toLowerCase()}` : 'Копий ещё не было' },
+    ...(snapshot.cloud
+      ? [
+          {
+            on: !!snapshot.cloud.lastAt,
+            icon: <Cloud size={16} />,
+            title: 'Копия в OneDrive',
+            text: snapshot.cloud.lastAt ? `Обновится перед выходом. Для входа нужен пароль копии` : 'Копия ещё не сохранялась',
+          },
+        ]
+      : []),
   ];
   const noWay = devices !== null && !ways.some((w) => w.on);
 
@@ -180,7 +190,7 @@ function SignOutDialog({
             <TriangleAlert size={16} />
             <div>
               <b>Ключи этого аккаунта есть только здесь.</b> После выхода войти в него не сможет никто, даже вы: сервер ваших ключей не хранит.
-              Сохраните копию .veil или включите восстановление по почте.
+              Сохраните копию .veil, включите копию в OneDrive или восстановление по почте.
               <label className="check-row">
                 <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} /> Понимаю, переписка будет потеряна
               </label>

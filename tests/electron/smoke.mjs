@@ -11,7 +11,7 @@ const home = mkdtempSync(join(tmpdir(), 'veil-smoke-'));
 const packaged = process.env.SMOKE_EXECUTABLE;
 const app = await electron.launch({
   ...(packaged ? { executablePath: packaged, args: ['--no-sandbox'] } : { args: ['.', '--no-sandbox'] }),
-  env: { ...process.env, VEIL_PROFILE: `smoke${process.pid}`, HOME: home, XDG_CONFIG_HOME: home, APPDATA: home, VEIL_TEST_KEYCHAIN: '1' },
+  env: { ...process.env, VEIL_PROFILE: `smoke${process.pid}`, HOME: home, XDG_CONFIG_HOME: home, APPDATA: home, VEIL_TEST_KEYCHAIN: '1', VEIL_MS_CLIENT_ID: '11111111-2222-3333-4444-555555555555' },
 });
 try {
   const page = await app.firstWindow();
@@ -141,6 +141,19 @@ try {
   await page.getByText('Добро пожаловать').waitFor({ timeout: 30_000 });
   console.log('quick unlock with PIN ok');
   } else console.log('quick unlock skipped: no system keychain here');
+
+  // «Копия в OneDrive»: offered in Settings → Безопасность when the build has a client ID (here
+  // through VEIL_MS_CLIENT_ID; a packaged build without one says so instead).
+  const cloud = await page.evaluate(() => window.veil.cloud.status());
+  await page.getByRole('button', { name: 'Настройки' }).click();
+  await page.getByRole('button', { name: 'Безопасность' }).click();
+  const cloudSection = page.getByTestId('cloud-backup');
+  await cloudSection.getByText(cloud.configured ? 'Подключить OneDrive' : 'вход через Microsoft не настроен').waitFor({ timeout: 10_000 });
+  // An upload never goes out without a sign-in: a bad token is refused before any file is read.
+  const refused = await page.evaluate(() => window.veil.cloud.upload('x', '../evil.veil', new Uint8Array(4)).then((r) => (r.ok ? 'sent' : r.code)));
+  if (refused !== 'failed') throw new Error(`cloud upload with a bad name: ${refused}`);
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).first().click();
+  console.log('onedrive section ok:', cloud.configured ? 'configured' : 'not configured');
 
   // «Показ экрана»: Veil's picker lists the screens (X11 here; Wayland would use the portal).
   const screens = await page.evaluate(() => window.veil.screen.sources());

@@ -438,6 +438,8 @@ export type SecurityEventKind =
   | 'duress_off'
   | 'backup_export'
   | 'backup_import'
+  | 'cloud_on'
+  | 'cloud_off'
   | 'invite_mismatch'
   | 'username_change';
 
@@ -456,6 +458,8 @@ export interface MessengerSnapshot {
   security: { totp: boolean; recoveryEmail?: string; lastBackupAt?: number; duress?: { wipe: boolean }; hiddenChats: boolean };
   /** This is the empty Veil opened by the duress password (never shown in the interface). */
   decoy?: boolean;
+  /** «Копия в OneDrive», when connected: no tokens or keys here, just how it is going. */
+  cloud?: { lastAt?: number; size?: number; error?: string; busy?: boolean };
   settings: Settings;
   contacts: Contact[];
   conversations: Record<string, Message[]>;

@@ -43,6 +43,15 @@ export interface QuickUnlockStatus {
   hello: false;
 }
 
+export interface CloudFile {
+  name: string;
+  size: number;
+  modified: number;
+}
+
+export type CloudErrorCode = 'not_configured' | 'cancelled' | 'auth' | 'network' | 'not_found' | 'quota' | 'failed';
+export type CloudResult<T> = { ok: true; value: T } | { ok: false; code: CloudErrorCode; message: string };
+
 export interface VeilBridge {
   platform: 'darwin' | 'win32' | 'linux';
   version: string;
@@ -146,6 +155,22 @@ export interface VeilBridge {
     /** The next getDisplayMedia() shares this source (null: cancel). */
     choose(id: string | null): Promise<void>;
   };
+  /**
+   * «Копия в OneDrive»: Microsoft sign-in in the system browser and the app's own OneDrive folder.
+   * Every call takes the refresh token (kept in the encrypted vault) and returns the one to keep,
+   * since Microsoft may replace it. Results come as data (an error's code would not survive the
+   * context bridge): use `cloudApi` below.
+   */
+  cloud: {
+    status(): Promise<{ configured: boolean }>;
+    signIn(): Promise<CloudResult<string>>;
+    cancel(): Promise<void>;
+    list(refresh: string): Promise<CloudResult<{ refresh: string; files: CloudFile[] }>>;
+    upload(refresh: string, name: string, data: Uint8Array): Promise<CloudResult<{ refresh: string }>>;
+    download(refresh: string, name: string): Promise<CloudResult<{ refresh: string; data: Uint8Array }>>;
+    remove(refresh: string, name: string): Promise<CloudResult<{ refresh: string }>>;
+    forget(refresh: string): Promise<void>;
+  };
   /** A veil:// link the system opened Veil with, once (then null). */
   takeInvite(): Promise<string | null>;
   /** A veil:// link arrived while Veil was running: call takeInvite(). */
@@ -162,3 +187,34 @@ export interface VeilBridge {
 export const bridge: VeilBridge | undefined = (globalThis as { veil?: VeilBridge }).veil;
 export const isDesktop = !!bridge;
 export const platform = bridge?.platform ?? 'web';
+
+/** The OneDrive calls with errors as exceptions carrying a `code` (CloudErrorCode). */
+export interface CloudApi {
+  status(): Promise<{ configured: boolean }>;
+  signIn(): Promise<string>;
+  cancel(): Promise<void>;
+  list(refresh: string): Promise<{ refresh: string; files: CloudFile[] }>;
+  upload(refresh: string, name: string, data: Uint8Array): Promise<{ refresh: string }>;
+  download(refresh: string, name: string): Promise<{ refresh: string; data: Uint8Array }>;
+  remove(refresh: string, name: string): Promise<{ refresh: string }>;
+  forget(refresh: string): Promise<void>;
+}
+
+async function unwrap<T>(call: Promise<CloudResult<T>>): Promise<T> {
+  const result = await call;
+  if (result.ok) return result.value;
+  throw Object.assign(new Error(result.message), { code: result.code });
+}
+
+export const cloudApi: CloudApi | null = bridge
+  ? {
+      status: () => bridge.cloud.status(),
+      signIn: () => unwrap(bridge.cloud.signIn()),
+      cancel: () => bridge.cloud.cancel(),
+      list: (refresh) => unwrap(bridge.cloud.list(refresh)),
+      upload: (refresh, name, data) => unwrap(bridge.cloud.upload(refresh, name, data)),
+      download: (refresh, name) => unwrap(bridge.cloud.download(refresh, name)),
+      remove: (refresh, name) => unwrap(bridge.cloud.remove(refresh, name)),
+      forget: (refresh) => bridge.cloud.forget(refresh),
+    }
+  : null;

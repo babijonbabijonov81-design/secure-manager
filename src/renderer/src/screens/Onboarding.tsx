@@ -22,6 +22,7 @@ import { createAccount, MessengerError, type Messenger, type MessengerEvents } f
 import { bridge, type EmbeddedServerStatus } from '../../../core/platform.ts';
 import { probeServer } from '../../../core/relay-client.ts';
 import { RestoreFileFlow } from '../components/BackupFile.tsx';
+import { CloudRestoreFlow, useCloudAvailable } from '../components/CloudBackup.tsx';
 import { BridgeGuestFlow } from '../components/BridgeFlows.tsx';
 import type { StorageBackend } from '../../../core/storage.ts';
 import { passwordStrength } from '../lib/format.ts';
@@ -61,6 +62,8 @@ export function Onboarding({
   const [recovering, setRecovering] = useState(false);
   const [transferring, setTransferring] = useState(false);
   const [restoringFile, setRestoringFile] = useState(false);
+  const [restoringCloud, setRestoringCloud] = useState(false);
+  const cloudAvailable = useCloudAvailable();
 
   useEffect(() => {
     if (!bridge) {
@@ -160,7 +163,9 @@ export function Onboarding({
       <Backdrop />
       {bridge && <div className="titlebar" style={{ background: 'transparent', borderBottom: 0, position: 'fixed', inset: '0 0 auto 0' }} />}
       <div className="center-stage">
-        {restoringFile ? (
+        {restoringCloud ? (
+          <CloudRestoreFlow storage={storage} events={events} onBack={() => setRestoringCloud(false)} onDone={onDone} />
+        ) : restoringFile ? (
           <RestoreFileFlow storage={storage} events={events} onBack={() => setRestoringFile(false)} onDone={onDone} />
         ) : transferring ? (
           <BridgeGuestFlow storage={storage} events={events} onBack={() => setTransferring(false)} onDone={onDone} />
@@ -245,6 +250,13 @@ export function Onboarding({
                   Восстановить из файла .veil
                 </button>
               </div>
+              {cloudAvailable && (
+                <div style={{ textAlign: 'center', marginTop: 8 }}>
+                  <button className="link-btn" onClick={() => setRestoringCloud(true)}>
+                    Восстановить из OneDrive
+                  </button>
+                </div>
+              )}
               {onCancel && (
                 <div style={{ textAlign: 'center', marginTop: 14 }}>
                   <button className="link-btn" onClick={onCancel}>

@@ -63,6 +63,10 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user -y --noninteractive flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08 org.electronjs.Electron2.BaseApp//24.08
       - run: npm run build
+        env:
+          # «Копия в OneDrive»: the Microsoft Entra application (client) ID, a repository variable
+          # (Settings → Secrets and variables → Actions → Variables). Not a secret; empty = feature hidden.
+          VEIL_MS_CLIENT_ID: ${{ vars.VEIL_MS_CLIENT_ID }}
       - name: Package
         run: npx electron-builder ${{ matrix.target }} --publish never
         env:

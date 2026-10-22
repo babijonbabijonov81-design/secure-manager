@@ -43,6 +43,7 @@ import { AccountsTab } from './AccountsTab.tsx';
 import { isOwnServer } from '../lib/shield.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
 import { BackupFileSection } from './BackupFile.tsx';
+import { CloudBackupSection } from './CloudBackup.tsx';
 import { BridgeHostDialog } from './BridgeFlows.tsx';
 import { HiddenChatsSettings } from './HiddenChats.tsx';
 import { QuickUnlockSection } from './QuickUnlock.tsx';
@@ -750,6 +751,7 @@ function SecurityTab({
       {feature(snapshot.settings, 'duress') && <DuressSection messenger={messenger} snapshot={snapshot} />}
 
       {feature(snapshot.settings, 'backupFile') && <BackupFileSection messenger={messenger} snapshot={snapshot} />}
+      <CloudBackupSection messenger={messenger} snapshot={snapshot} />
 
       {feature(snapshot.settings, 'securityLog') && <SecurityLogSection messenger={messenger} snapshot={snapshot} onDevices={onDevices} />}
 

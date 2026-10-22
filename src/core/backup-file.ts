@@ -27,8 +27,11 @@ export interface BackupHeader {
   records: number;
 }
 
-/** Records that never go into a .veil file: ratchet and sender-key state, delivery bookkeeping. */
-export const BACKUP_SKIPPED = new Set(['sessions', 'outbox', 'seen', 'gkeys']);
+/**
+ * Records that never go into a .veil file: ratchet and sender-key state, delivery bookkeeping, and
+ * the OneDrive sign-in with its copy key.
+ */
+export const BACKUP_SKIPPED = new Set(['sessions', 'outbox', 'seen', 'gkeys', 'cloud']);
 
 const key = (password: string, kdf: BackupHeader['kdf']) =>
   scryptAsync(utf8(password.normalize('NFKC')), unb64(kdf.salt), { N: kdf.N, r: kdf.r, p: kdf.p, dkLen: 32, maxmem: 2 ** 30 });
@@ -65,8 +68,26 @@ function unpackRecords(data: Uint8Array): Map<string, Uint8Array> {
 }
 
 export async function createBackupFile(records: Map<string, Uint8Array>, password: string, kdfParams = KDF): Promise<Uint8Array> {
-  const header: BackupHeader = { v: 1, kdf: { ...kdfParams, salt: b64(random(16)) }, createdAt: Date.now(), records: records.size };
-  const k = await key(password, header.kdf);
+  const { key: k, kdf } = await backupKey(password, kdfParams);
+  try {
+    return await sealBackupFile(records, k, kdf);
+  } finally {
+    wipe(k);
+  }
+}
+
+/**
+ * The key of a .veil file, derived once (for «Копия в OneDrive», which is written every day
+ * without asking for the password again; the key stays inside the encrypted vault).
+ */
+export async function backupKey(password: string, kdfParams = KDF): Promise<{ key: Uint8Array; kdf: BackupHeader['kdf'] }> {
+  const kdf = { ...kdfParams, salt: b64(random(16)) };
+  return { key: await key(password, kdf), kdf };
+}
+
+/** The same file as createBackupFile, opened with the same password; every chunk has a fresh random nonce. */
+export async function sealBackupFile(records: Map<string, Uint8Array>, k: Uint8Array, kdf: BackupHeader['kdf']): Promise<Uint8Array> {
+  const header: BackupHeader = { v: 1, kdf, createdAt: Date.now(), records: records.size };
   const body = await compress(packRecords(records));
   const chunks: Uint8Array[] = [];
   const count = Math.max(1, Math.ceil(body.length / CHUNK));
@@ -77,7 +98,6 @@ export async function createBackupFile(records: Map<string, Uint8Array>, passwor
     new DataView(length.buffer).setUint32(0, ct.length);
     chunks.push(nonce, length, ct);
   }
-  wipe(k);
   return concat(utf8(MAGIC), utf8(JSON.stringify(header)), utf8('\n'), ...chunks);
 }
 

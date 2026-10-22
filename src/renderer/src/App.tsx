@@ -12,8 +12,8 @@ import {
   type DeviceAccount,
   type Slot,
 } from '../../core/accounts.ts';
-import { setThisDevice, type Messenger, type MessengerEvents } from '../../core/messenger.ts';
-import { bridge } from '../../core/platform.ts';
+import { setCloudTransport, setThisDevice, type Messenger, type MessengerEvents } from '../../core/messenger.ts';
+import { bridge, cloudApi } from '../../core/platform.ts';
 import { defaultStorage } from '../../core/storage.ts';
 import type { Contact, Message, Theme } from '../../core/types.ts';
 import { AccountsContext, type AccountsApi } from './lib/accounts.tsx';
@@ -77,6 +77,7 @@ function deviceId(): string {
     return 'browser-without-storage';
   }
 }
+setCloudTransport(cloudApi);
 setThisDevice({ id: deviceId(), name: bridge?.deviceName ?? `Браузер · ${navigator.platform || 'веб'}` });
 
 if (bridge) {
