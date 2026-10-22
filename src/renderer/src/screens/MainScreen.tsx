@@ -17,6 +17,7 @@ import { HiddenPinDialog } from '../components/HiddenChats.tsx';
 import { revokeAttachmentUrls } from '../lib/attachments.ts';
 import { CallManager } from '../lib/calls.ts';
 import { snippetOf } from '../../../core/messenger.ts';
+import { isLanServer } from '../../../core/invite.ts';
 import { avatarColor, initials } from '../lib/format.ts';
 import { feature, useMediaQuery, veiledFor } from '../lib/hooks.ts';
 import { playChime, setBadge, showNotification } from '../lib/notify.ts';
@@ -258,6 +259,27 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
   const unread = snapshot.contacts.reduce((sum, c) => sum + (c.muted ? 0 : c.unread), 0);
   useEffect(() => setBadge(unread), [unread]);
   useEffect(() => () => setBadge(0), []);
+
+  // «Свой сервер» on another computer of this Wi-Fi got a new address (the router hands them out):
+  // offline for a while → look for the same server (by its id) on the network and switch to it.
+  // Only for a server on the local network: someone on the same Wi-Fi must not be able to lure
+  // a user of an internet server (Render, a VPS) away by announcing its id.
+  const offline = snapshot.status === 'offline';
+  const serverId = isLanServer(snapshot.me.serverUrl) ? snapshot.me.serverId : undefined;
+  useEffect(() => {
+    if (!bridge || !offline || !serverId) return;
+    let alive = true;
+    const timer = setTimeout(async () => {
+      const found = (await bridge!.server.discover().catch(() => [])).find((r) => r.id === serverId);
+      if (!alive || !found || found.address === messenger.getSnapshot().me.serverUrl) return;
+      messenger.setServerUrl(found.address);
+      toast(`Сервер «${found.name}» теперь по адресу ${found.address} — переподключились`, 'info');
+    }, 15_000);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [offline, serverId, messenger, toast]);
 
   // Locking together with the system's lock screen, and when hidden to the tray.
   useEffect(() => {

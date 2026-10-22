@@ -148,7 +148,7 @@ export interface IceServer {
 }
 
 export type ServerFrame =
-  | { type: 'hello'; nonce: string; version: number; name: string }
+  | { type: 'hello'; nonce: string; version: number; name: string; /** Stable server id (older servers: absent). */ id?: string }
   | { type: 'ready'; userId: string; username: string; opkCount: number; spkId: number | null; queued: number; ice?: IceServer[] }
   | { type: 'error'; reqId?: string; code: ErrorCode; message: string }
   | { type: 'result'; reqId: string; data?: unknown }

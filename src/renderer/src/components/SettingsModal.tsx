@@ -24,6 +24,7 @@ import {
   UserRound,
   UsersRound,
   Volume2,
+  Wifi,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
@@ -501,11 +502,19 @@ function ServerTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Me
   const [embedded, setEmbedded] = useState<EmbeddedServerStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [nearby, setNearby] = useState<{ name: string; address: string }[] | null>(null);
+  const [searching, setSearching] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
     void bridge?.server.status().then(setEmbedded);
   }, []);
+
+  const search = async () => {
+    setSearching(true);
+    setNearby(await bridge!.server.discover().catch(() => []));
+    setSearching(false);
+  };
 
   const statusText = { online: 'Подключено', connecting: 'Подключение…', offline: 'Нет соединения' }[snapshot.status];
 
@@ -540,6 +549,23 @@ function ServerTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Me
           </button>
         </div>
         <span className="field-hint">На новом сервере вы зарегистрируетесь заново с теми же ключами. Собеседники тоже должны перейти на него.</span>
+        {bridge && (
+          <div className="nearby-servers" style={{ marginTop: 8 }}>
+            <button className="btn btn-secondary btn-sm" style={{ justifySelf: 'start' }} disabled={searching} onClick={() => void search()}>
+              {searching ? <span className="spinner" /> : <Wifi size={15} />} Найти сервер в этой сети
+            </button>
+            {nearby?.length === 0 && <span className="field-hint">В этой сети других серверов Veil не видно.</span>}
+            {nearby?.map((n) => (
+              <button key={n.address} type="button" className={`option-card${url === n.address ? ' on' : ''}`} onClick={() => setUrl(n.address)}>
+                <div className="grow">
+                  <b>{n.name}</b>
+                  <span>{n.address}</span>
+                </div>
+                <span className="chip">Выбрать</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {bridge && (
         <div className="section">
@@ -1054,7 +1080,7 @@ function AboutTab() {
         <h1 style={{ fontSize: 24 }}>
           <span className="gradient-text">Veil</span>
         </h1>
-        <p>Версия {bridge?.version ?? '2.2.1'} · открытый исходный код</p>
+        <p>Версия {bridge?.version ?? '2.2.2'} · открытый исходный код</p>
       </div>
       <UpdatesSection />
       <div className="section">

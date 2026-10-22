@@ -60,7 +60,7 @@ export function normalizeServerUrl(input: string): string {
 }
 
 /** Opens a connection just long enough to read the server greeting. */
-export function probeServer(input: string, timeoutMs = 6000): Promise<{ name: string; version: number }> {
+export function probeServer(input: string, timeoutMs = 6000): Promise<{ name: string; version: number; id?: string }> {
   return new Promise((resolve, reject) => {
     let url: string;
     try {
@@ -80,7 +80,7 @@ export function probeServer(input: string, timeoutMs = 6000): Promise<{ name: st
       try {
         const { header } = unpack<ServerFrame>(new Uint8Array(event.data as ArrayBuffer));
         if (header.type !== 'hello') throw new Error('Это не сервер Veil');
-        resolve({ name: header.name, version: header.version });
+        resolve({ name: header.name, version: header.version, ...(header.id ? { id: header.id } : {}) });
       } catch (error) {
         reject(error);
       } finally {
@@ -142,6 +142,8 @@ const FATAL_CODES = new Set(['username_taken', 'replaced', 'deleted', 'device_re
 
 export class RelayClient {
   status: ConnectionStatus = 'offline';
+  /** The server's stable id from its hello (absent on older servers). */
+  serverId: string | undefined;
   private ws: WebSocket | null = null;
   private readonly options: RelayClientOptions;
   private register: boolean;
@@ -253,6 +255,7 @@ export class RelayClient {
     switch (frame.type) {
       case 'hello': {
         this.nonce = frame.nonce;
+        this.serverId = frame.id;
         const message = this.register
           ? await this.options.buildRegistration(frame.nonce)
           : ({

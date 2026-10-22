@@ -100,7 +100,7 @@ export function UsernameTab({ messenger, snapshot }: { messenger: Messenger; sna
             autoComplete="off"
             spellCheck={false}
             aria-describedby="username-hint"
-            onChange={(e) => setValue(e.target.value.replace(/\s/g, ''))}
+            onChange={(e) => setValue(e.target.value.replace(/\s/g, '').toLowerCase())}
           />
         </div>
         <span id="username-hint" className={`username-hint ${check}`} role="status" aria-live="polite">
@@ -118,6 +118,7 @@ export function UsernameTab({ messenger, snapshot }: { messenger: Messenger; sna
           <li>По имени пользователя вас находят через «Новый чат». Переписка, ключи шифрования и контакты при смене не меняются.</li>
           <li>Собеседники увидят новое имя сами: Veil узнаёт его у сервера, а не из сообщения, поэтому подделать его нельзя.</li>
           <li>Старое имя сразу освобождается, и его может занять кто-то другой. Veil не перепутает: у каждого человека свой ключ.</li>
+          <li>Большие и маленькие буквы не различаются: @Anna и @anna — одно имя.</li>
           <li>Менять имя можно до трёх раз в сутки.</li>
         </ul>
       </div>

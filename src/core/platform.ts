@@ -3,6 +3,8 @@
 
 export interface EmbeddedServerStatus {
   running: boolean;
+  /** The server's stable id (same as in its hello). */
+  id?: string;
   port: number;
   addresses: string[];
   error?: string;
@@ -177,6 +179,8 @@ export interface VeilBridge {
   onInvite(callback: () => void): () => void;
   saveFile(name: string, data: Uint8Array): Promise<boolean>;
   server: {
+    /** Other computers' Veil servers announced on this network (mDNS), with their ids. */
+    discover(): Promise<{ name: string; address: string; id?: string }[]>;
     start(port?: number): Promise<EmbeddedServerStatus>;
     stop(): Promise<EmbeddedServerStatus>;
     status(): Promise<EmbeddedServerStatus>;

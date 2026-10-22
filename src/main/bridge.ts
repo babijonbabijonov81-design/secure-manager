@@ -143,3 +143,49 @@ export async function discoverBridges(ms = 2500): Promise<{ name: string; host: 
   }
   return [...found.values()];
 }
+
+// ---- the embedded relay on the local network ----------------------------------------------
+//
+// «Свой сервер на этом компьютере» announces itself as `_veil-relay._tcp` with its public id, so
+// other computers on the same Wi-Fi find it instead of starting a server of their own, and find
+// it again after its address changes.
+
+const RELAY_SERVICE = 'veil-relay';
+let relayAnnouncer: Bonjour | null = null;
+
+export function announceRelay(port: number, id: string): void {
+  stopAnnouncingRelay();
+  try {
+    relayAnnouncer = new Bonjour();
+    relayAnnouncer.publish({ name: `Veil Relay · ${hostname()}`.slice(0, 60), type: RELAY_SERVICE, port, txt: { v: '1', id }, disableIPv6: true });
+  } catch {
+    // no multicast on this network: the address can still be typed
+  }
+}
+
+export function stopAnnouncingRelay(): void {
+  relayAnnouncer?.unpublishAll();
+  relayAnnouncer?.destroy();
+  relayAnnouncer = null;
+}
+
+export async function discoverRelays(ms = 2000): Promise<{ name: string; address: string; id?: string }[]> {
+  const found = new Map<string, { name: string; address: string; id?: string }>();
+  let finder: Bonjour | null = null;
+  try {
+    finder = new Bonjour();
+    const browser = finder.find({ type: RELAY_SERVICE }, (service) => {
+      const host = service.referer?.address ?? service.addresses?.find((a) => a.includes('.'));
+      if (!host || !service.port) return;
+      const id = typeof service.txt?.id === 'string' && /^[A-Za-z0-9_-]{16}$/.test(service.txt.id) ? service.txt.id : undefined;
+      found.set(`${host}:${service.port}`, { name: service.name.replace(/^Veil Relay · /, ''), address: `${host}:${service.port}`, ...(id ? { id } : {}) });
+    });
+    await new Promise((r) => setTimeout(r, ms));
+    browser.stop();
+  } catch {
+    // multicast unavailable
+  } finally {
+    finder?.destroy();
+  }
+  return [...found.values()];
+}

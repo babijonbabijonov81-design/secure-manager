@@ -781,6 +781,12 @@ export class Messenger {
       },
       onReady: (frame) => {
         this.relayIce = Array.isArray(frame.ice) ? frame.ice : undefined;
+        const serverId = this.relay?.serverId;
+        if (serverId && serverId !== this.account.serverId) {
+          this.account.serverId = serverId;
+          this.markDirty('account');
+          this.snapshot = null;
+        }
         pendingHooks?.ready();
         pendingHooks = undefined;
         void this.afterReady(frame.opkCount, frame.spkId);
@@ -864,6 +870,7 @@ export class Messenger {
           username: this.account.username,
           displayName: this.account.displayName,
           serverUrl: this.account.serverUrl,
+          ...(this.account.serverId ? { serverId: this.account.serverId } : {}),
           createdAt: this.account.createdAt,
         },
         security: {
@@ -1603,7 +1610,7 @@ export class Messenger {
     const active = (this.account.invites ?? []).filter((i) => i.exp > now);
     this.account.invites = [...active, { t: token, exp: now + INVITE_DAYS * DAY_MS }].slice(-MAX_INVITES);
     this.markDirty('account');
-    return inviteLink({ username: this.account.username, userId: this.account.userId, server: this.account.serverUrl, token });
+    return inviteLink({ username: this.account.username, userId: this.account.userId, server: this.account.serverUrl, serverId: this.account.serverId, token });
   }
 
   /**
@@ -1615,11 +1622,22 @@ export class Messenger {
     const invite = parseInvite(link);
     if (!invite) throw new MessengerError('bad_invite', 'Это не приглашение Veil или ссылка повреждена');
     if (invite.userId === this.account.userId) throw new MessengerError('own_invite', 'Это ваше собственное приглашение');
-    if (invite.server && serverKey(invite.server) !== serverKey(this.account.serverUrl))
-      throw new MessengerError('other_server', `Приглашение для сервера ${invite.server}, а ваш аккаунт — на ${serverKey(this.account.serverUrl)}`);
+    // One server has many addresses (localhost on its own computer, 192.168.… for the others):
+    // its id says whether it is the same one. Without ids, a different address is only a guess.
+    const sameId = !!invite.serverId && invite.serverId === this.account.serverId;
+    const otherAddress = !!invite.server && serverKey(invite.server) !== serverKey(this.account.serverUrl);
+    const otherServer = () =>
+      new MessengerError('other_server', `Приглашение для сервера ${invite.server}, а ваш аккаунт — на ${serverKey(this.account.serverUrl)}`);
+    if (otherAddress && !sameId && invite.serverId && this.account.serverId) throw otherServer();
     if (this.decoy) return this.addContact(invite.username);
     // Compared before anything is stored: a swapped key must not replace a known contact's key.
-    const info = await this.lookupUser(invite.username);
+    let info: UserInfo;
+    try {
+      info = await this.lookupUser(invite.username);
+    } catch (error) {
+      if (otherAddress && !sameId && (error as MessengerError).code === 'not_found') throw otherServer();
+      throw error;
+    }
     if (info.userId !== invite.userId) {
       this.logSecurity('invite_mismatch', `@${invite.username}`);
       throw new MessengerError(

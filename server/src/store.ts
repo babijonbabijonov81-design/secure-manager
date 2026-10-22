@@ -3,7 +3,7 @@
 
 import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { BackupMeta, DeviceRecord, OneTimePreKeyPublic, SignedPreKeyPublic } from './shared/protocol.ts';
 import { unb64 } from './shared/wire.ts';
 
@@ -70,6 +70,14 @@ export class RelayStore {
   /** Server secret mixed into email hashes. */
   pepper: Uint8Array = randomBytes(32);
 
+  /**
+   * This server's public id (from its secret, so it survives restarts with the same data folder):
+   * tells clients that «localhost:8787» and «192.168.1.5:8787» are the same server.
+   */
+  get serverId(): string {
+    return createHash('sha256').update('veil-server-id-v1').update(this.pepper).digest('base64url').slice(0, 16);
+  }
+
   constructor(dataDir: string | null, limits: Partial<StoreLimits> = {}) {
     this.dataDir = dataDir;
     this.limits = { ...DEFAULT_LIMITS, ...limits };
@@ -87,6 +95,9 @@ export class RelayStore {
     try {
       const raw = JSON.parse(await readFile(join(this.dataDir, 'users.json'), 'utf8')) as { users: UserRecord[] };
       for (const user of raw.users ?? []) {
+        // Usernames are case-insensitive: «Anna» and «anna» are one name, kept in lower case.
+        user.username = user.username.toLowerCase();
+        if (this.usernames.has(user.username)) continue;
         this.users.set(user.userId, user);
         this.usernames.set(user.username, user.userId);
       }

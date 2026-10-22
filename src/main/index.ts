@@ -27,7 +27,7 @@ import { hostname, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
 import { SecretClipboard } from '../core/secret-clipboard.ts';
-import { discoverBridges, LanBridge } from './bridge.ts';
+import { announceRelay, discoverBridges, discoverRelays, LanBridge, stopAnnouncingRelay } from './bridge.ts';
 import { findInvite, registerInviteProtocol } from './invite.ts';
 import { cancelModelDownload, deleteModel, downloadModel, modelStatus, registerModelScheme, serveModels } from './models.ts';
 import { CloudError, OneDrive } from './onedrive.ts';
@@ -550,7 +550,13 @@ function registerIpc(): void {
   });
 
   handle('server:start', (port?: number) => startEmbeddedRelay(port));
+  handle('server:discover', async () => {
+    // Other computers' servers only: this one's own announcement comes back too.
+    const own = relay?.store.serverId;
+    return (await discoverRelays()).filter((r) => !own || r.id !== own);
+  });
   handle('server:stop', async () => {
+    stopAnnouncingRelay();
     await relay?.close();
     relay = null;
     relayError = undefined;
@@ -606,6 +612,7 @@ function lanAddresses(port: number): string[] {
 function relayStatus() {
   return {
     running: !!relay,
+    ...(relay ? { id: relay.store.serverId } : {}),
     port: relay?.port ?? DEFAULT_PORT,
     addresses: relay ? lanAddresses(relay.port) : [],
     ...(relayError ? { error: relayError } : {}),
@@ -617,6 +624,7 @@ async function startEmbeddedRelay(port = DEFAULT_PORT) {
   try {
     relay = await startRelay({ port, dataDir: join(userData(), 'relay'), name: 'Veil Relay (встроенный)' });
     relayError = undefined;
+    announceRelay(relay.port, relay.store.serverId);
   } catch (error) {
     relay = null;
     relayError =
@@ -650,6 +658,7 @@ app.on('activate', showWindow);
 app.on('before-quit', () => {
   quitting = true;
   lanBridge.stop();
+  stopAnnouncingRelay();
   closeAllCards();
   void secretClipboard.clear();
 });

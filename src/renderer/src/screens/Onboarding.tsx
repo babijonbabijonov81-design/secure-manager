@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Timer,
   UserRound,
+  Wifi,
   XCircle,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
@@ -51,6 +52,8 @@ export function Onboarding({
   const [probe, setProbe] = useState<{ state: 'idle' | 'checking' | 'ok' | 'error'; text?: string }>({ state: 'idle' });
   const [embedded, setEmbedded] = useState<EmbeddedServerStatus | null>(null);
   const [embeddedBusy, setEmbeddedBusy] = useState(false);
+  // Servers other computers run on this Wi-Fi («Свой сервер» there), found over mDNS.
+  const [nearby, setNearby] = useState<{ name: string; address: string; id?: string }[] | null>(null);
 
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
@@ -74,6 +77,7 @@ export function Onboarding({
       setEmbedded(status);
       if (status.running) setServer(`localhost:${status.port}`);
     });
+    void bridge.server.discover().then(setNearby, () => setNearby([]));
   }, []);
 
   const toggleEmbedded = async (on: boolean) => {
@@ -274,6 +278,37 @@ export function Onboarding({
                 <h2>Подключение к серверу</h2>
                 <p>Сервер только пересылает зашифрованные конверты. Прочитать их он не может.</p>
               </div>
+              {nearby && nearby.length > 0 && (
+                <div className="nearby-servers" data-testid="nearby-servers">
+                  <span className="field-label">Серверы Veil в этой сети</span>
+                  {nearby.map((n) => (
+                    <button
+                      key={n.address}
+                      type="button"
+                      className={`option-card${server === n.address ? ' on' : ''}`}
+                      onClick={() => {
+                        setServer(n.address);
+                        setProbe({ state: 'idle' });
+                      }}
+                    >
+                      <div className="feature-icon">
+                        <Wifi size={20} />
+                      </div>
+                      <div className="grow">
+                        <b>{n.name}</b>
+                        <span>{n.address}</span>
+                      </div>
+                      {server === n.address ? <CheckCircle2 size={18} /> : <span className="chip">Выбрать</span>}
+                    </button>
+                  ))}
+                  {embedded?.running && (
+                    <span className="field-hint warn">
+                      <AlertTriangle size={14} /> На этом компьютере тоже включён свой сервер. Люди с сервера «{nearby[0].name}» на нём не появятся —
+                      выберите его выше, чтобы переписываться с ними.
+                    </span>
+                  )}
+                </div>
+              )}
               {bridge && (
                 <div className={`option-card${embedded?.running ? ' on' : ''}`}>
                   <div className="feature-icon">
@@ -281,7 +316,11 @@ export function Onboarding({
                   </div>
                   <div className="grow">
                     <b>Свой сервер на этом компьютере</b>
-                    <span>Для общения в одной сети Wi-Fi или для проверки.</span>
+                    <span>
+                      Для общения в одной сети Wi-Fi. Включайте только на одном компьютере — остальные подключаются к нему: Veil найдёт его сам или
+                      введите адрес, показанный здесь.
+                      {bridge.platform === 'win32' && ' Если Windows спросит про брандмауэр, разрешите Veil доступ в частных сетях.'}
+                    </span>
                     {embedded?.running && embedded.addresses.length > 0 && (
                       <div className="addresses">
                         {embedded.addresses.map((a) => (
@@ -375,13 +414,13 @@ export function Onboarding({
                     placeholder="username"
                     value={username}
                     maxLength={33}
-                    onChange={(e) => setUsername(e.target.value.replace(/\s/g, ''))}
+                    onChange={(e) => setUsername(e.target.value.replace(/\s/g, '').toLowerCase())}
                   />
                 </div>
                 {error?.field === 'username' ? (
                   <span className="field-error">{error.text}</span>
                 ) : (
-                  <span className="field-hint">По нему вас найдут. Латиница, цифры и «_».</span>
+                  <span className="field-hint">По нему вас найдут. Латиница, цифры и «_»; большие и маленькие буквы не различаются.</span>
                 )}
               </div>
               <div className="field">

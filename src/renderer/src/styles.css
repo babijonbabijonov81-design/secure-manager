@@ -5604,3 +5604,27 @@ button:disabled {
 .callout .check-row {
   margin-top: 8px;
 }
+
+/* ---- Veil servers found on this Wi-Fi ---- */
+.nearby-servers {
+  display: grid;
+  gap: 8px;
+}
+.nearby-servers .option-card {
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+}
+.nearby-servers .option-card > svg:last-child {
+  color: var(--success);
+}
+.field-hint.warn {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  color: var(--warning);
+}
+.field-hint.warn > svg {
+  flex: none;
+  margin-top: 2px;
+}

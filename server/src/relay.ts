@@ -784,7 +784,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       if (set && set.size === 0) online.delete(conn.userId);
     });
 
-    send(conn, { type: 'hello', nonce: conn.nonce, version: PROTOCOL_VERSION, name });
+    send(conn, { type: 'hello', nonce: conn.nonce, version: PROTOCOL_VERSION, name, id: store.serverId });
   });
 
   const heartbeat = setInterval(() => {

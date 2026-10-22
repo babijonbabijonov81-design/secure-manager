@@ -1,6 +1,6 @@
 // «Приглашение veil://»: a link (or its QR code) with the inviter's identity key inside.
 //
-//   veil://add/<username>?k=<identity key>&s=<server>&t=<one-time token>   (keys in base64url)
+//   veil://add/<username>?k=<identity key>&s=<server>&i=<server id>&t=<one-time token>   (keys in base64url)
 //
 // The identity key is the account id itself (the Ed25519 public key), so nothing new is
 // computed: whoever opens the link compares the key the server returns with the one in the
@@ -21,6 +21,8 @@ export interface Invite {
   userId: string;
   /** The inviter's relay, as typed in their settings. */
   server?: string;
+  /** The relay's stable id: the same server under another address (localhost / 192.168.…) still matches. */
+  serverId?: string;
   token?: string;
 }
 
@@ -37,9 +39,24 @@ export const serverKey = (url: string) =>
     .replace(/^(wss?|https?):\/\//, '')
     .replace(/\/+$/, '');
 
+/** localhost, 10.x, 172.16–31.x, 192.168.x, 169.254.x, *.local — an address only this Wi-Fi knows. */
+export function isLanServer(url: string): boolean {
+  const host = url.trim().replace(/^(wss?|https?):\/\//i, '').replace(/[:/].*$/, '').toLowerCase();
+  return (
+    host === 'localhost' ||
+    host.endsWith('.local') ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+  );
+}
+
 export function inviteLink(invite: Invite): string {
   const query = new URLSearchParams({ k: invite.userId });
   if (invite.server) query.set('s', serverKey(invite.server));
+  if (invite.serverId) query.set('i', invite.serverId);
   if (invite.token) query.set('t', invite.token);
   return `veil://add/${encodeURIComponent(invite.username)}?${query.toString()}`;
 }
@@ -55,10 +72,12 @@ export function parseInvite(text: string): Invite | null {
     if (!USERNAME_RE.test(username) || !/^[A-Za-z0-9_-]{43}$/.test(userId) || unb64(userId).length !== 32) return null;
     const server = url.searchParams.get('s') ?? undefined;
     const token = url.searchParams.get('t') ?? undefined;
+    const serverId = url.searchParams.get('i') ?? undefined;
     return {
       username,
       userId,
       ...(server && server.length <= 200 ? { server } : {}),
+      ...(serverId && /^[A-Za-z0-9_-]{16}$/.test(serverId) ? { serverId } : {}),
       ...(token && /^[A-Za-z0-9_-]{22}$/.test(token) ? { token } : {}),
     };
   } catch {

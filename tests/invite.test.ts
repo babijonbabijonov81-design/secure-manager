@@ -85,9 +85,14 @@ describe('inviting', () => {
     const alice = await makeUser(t.url, 'alice');
     const bob = await makeUser(t.url, 'bob');
     await expect(alice.messenger.acceptInvite(alice.messenger.createInvite())).rejects.toMatchObject({ code: 'own_invite' });
-    await expect(bob.messenger.acceptInvite(inviteLink({ username: alice.username, userId: alice.id, server: 'other.example' }))).rejects.toMatchObject({
-      code: 'other_server',
-    });
+    // Someone who is not on this server, from a link for another one: «другой сервер».
+    await expect(
+      bob.messenger.acceptInvite(inviteLink({ username: 'nobody_here_42', userId: alice.id, server: 'other.example' })),
+    ).rejects.toMatchObject({ code: 'other_server' });
+    // A link with ids of two different servers is refused before asking anyone.
+    await expect(
+      bob.messenger.acceptInvite(inviteLink({ username: alice.username, userId: alice.id, server: 'other.example', serverId: 'ZZZZZZZZZZZZZZZZ' })),
+    ).rejects.toMatchObject({ code: 'other_server' });
     await expect(bob.messenger.acceptInvite('veil://add/x')).rejects.toMatchObject({ code: 'bad_invite' });
 
     const link = alice.messenger.createInvite();

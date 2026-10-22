@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BridgeGuest, BridgeHost, type BridgeChannel } from '../src/core/bridge.ts';
-import { discoverBridges, LanBridge, type Notify } from '../src/main/bridge.ts';
+import { announceRelay, discoverBridges, discoverRelays, LanBridge, stopAnnouncingRelay, type Notify } from '../src/main/bridge.ts';
 import { waitFor } from './helpers.ts';
 
 /** A bridge channel over a LanBridge, the way the renderer sees it through IPC. */
@@ -59,5 +59,13 @@ describe('«Мост» over TCP on the local network', () => {
     // Containers without multicast find nothing; when found, the port must match.
     for (const f of found) expect(typeof f.host).toBe('string');
     if (found.length) expect(found.some((f) => f.port === port)).toBe(true);
+  });
+
+  it('announces the embedded server with its id, so other computers find it', async () => {
+    announceRelay(8799, 'AbCdEfGhIjKlMnOp');
+    const found = await discoverRelays(2000);
+    stopAnnouncingRelay();
+    // Containers without multicast find nothing; when found, address and id must match.
+    if (found.length) expect(found.some((f) => f.id === 'AbCdEfGhIjKlMnOp' && f.address.endsWith(':8799'))).toBe(true);
   });
 });

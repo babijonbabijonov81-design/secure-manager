@@ -100,6 +100,7 @@ const bridge: VeilBridge = {
   onInvite: (callback) => listen('invite', callback),
   saveFile: (name, data) => ipcRenderer.invoke('save-file', name, data),
   server: {
+    discover: () => ipcRenderer.invoke('server:discover'),
     start: (port) => ipcRenderer.invoke('server:start', port),
     stop: () => ipcRenderer.invoke('server:stop'),
     status: () => ipcRenderer.invoke('server:status'),
