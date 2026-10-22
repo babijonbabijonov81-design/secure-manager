@@ -1,20 +1,22 @@
-import { ArrowLeft, AtSign, Copy, QrCode, ScanLine, Search, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, AtSign, Copy, QrCode, ScanLine, Search, ShieldCheck, Users } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { parseInvite } from '../../../core/invite.ts';
 import type { Messenger } from '../../../core/messenger.ts';
 import { feature } from '../lib/hooks.ts';
 import { Modal, useToast } from '../lib/ui.tsx';
+import { GroupCreate } from './GroupPanel.tsx';
 import { InvitePanel, ScanPanel } from './Invites.tsx';
 
 export function NewChatModal({ messenger, onClose, onOpen }: { messenger: Messenger; onClose(): void; onOpen(id: string): void }) {
   const [username, setUsername] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [mode, setMode] = useState<'find' | 'invite' | 'scan'>('find');
+  const [mode, setMode] = useState<'find' | 'invite' | 'scan' | 'group'>('find');
   const toast = useToast();
   const snapshot = messenger.getSnapshot();
   const me = snapshot.me;
   const invites = feature(snapshot.settings, 'invites');
+  const groups = feature(snapshot.settings, 'groups') && !snapshot.decoy;
   const isInvite = invites && !!parseInvite(username);
 
   const open = async (value: string) => {
@@ -44,7 +46,7 @@ export function NewChatModal({ messenger, onClose, onOpen }: { messenger: Messen
       <button type="button" className="icon-btn sm" onClick={() => setMode('find')} aria-label="Назад">
         <ArrowLeft size={18} />
       </button>
-      {mode === 'invite' ? 'Пригласить лично' : 'Сканировать QR-код'}
+      {mode === 'invite' ? 'Пригласить лично' : mode === 'group' ? 'Новая группа' : 'Сканировать QR-код'}
     </span>
   );
 
@@ -52,6 +54,16 @@ export function NewChatModal({ messenger, onClose, onOpen }: { messenger: Messen
     <Modal title={mode === 'find' ? 'Новый чат' : back} onClose={onClose}>
       {mode === 'invite' && <InvitePanel messenger={messenger} />}
       {mode === 'scan' && <ScanPanel onFound={(link) => void open(link)} />}
+      {mode === 'group' && (
+        <GroupCreate
+          messenger={messenger}
+          snapshot={snapshot}
+          onDone={(id) => {
+            onOpen(id);
+            onClose();
+          }}
+        />
+      )}
       {mode === 'find' && (
         <form className="modal-body" onSubmit={submit}>
           <p>
@@ -84,6 +96,11 @@ export function NewChatModal({ messenger, onClose, onOpen }: { messenger: Messen
               </>
             )}
           </button>
+          {groups && (
+            <button type="button" className="btn btn-secondary btn-block" onClick={() => setMode('group')}>
+              <Users size={16} /> Новая группа
+            </button>
+          )}
           {invites && (
             <div className="invite-actions">
               <button type="button" className="btn btn-secondary" onClick={() => setMode('invite')}>

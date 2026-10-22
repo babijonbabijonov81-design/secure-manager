@@ -26,7 +26,8 @@ export default defineConfig({
   webServer: [
     {
       command: 'node server/src/index.ts',
-      env: { PORT: '8790', DATA_DIR: 'memory', MAIL_LOG: MAIL_FILE },
+      // Every spec registers new accounts from 127.0.0.1.
+      env: { PORT: '8790', DATA_DIR: 'memory', MAIL_LOG: MAIL_FILE, REGISTRATIONS_PER_HOUR: '500' },
       url: 'http://127.0.0.1:8790/health',
       reuseExistingServer: false,
     },

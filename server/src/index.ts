@@ -30,6 +30,7 @@ const relay = await startRelay({
   log,
   mailer,
   ice,
+  ...(Number(process.env.REGISTRATIONS_PER_HOUR) > 0 ? { registrationsPerHour: Number(process.env.REGISTRATIONS_PER_HOUR) } : {}),
 });
 
 const shutdown = async () => {

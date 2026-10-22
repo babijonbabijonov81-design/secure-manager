@@ -387,7 +387,7 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
               <Clock size={19} />
             </button>
           )}
-          {scheduling && <SchedulePopover onPick={(choice) => send(choice)} onClose={() => setScheduling(false)} />}
+          {scheduling && <SchedulePopover capsule={!contact.group} onPick={(choice) => send(choice)} onClose={() => setScheduling(false)} />}
           {text.trim() ? (
             <button className="send-btn" onClick={() => send()} aria-label="Отправить">
               <SendHorizontal size={19} />

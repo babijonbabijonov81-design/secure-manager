@@ -15,7 +15,7 @@ export interface ShieldItem {
   /** ok counts towards the score; 'na' is shown honestly as unavailable on this platform. */
   state: 'ok' | 'weak' | 'alert' | 'na';
   /** Where the item leads: a section of the panel or a settings tab. */
-  target: { panel: 'safety' | 'timer' | 'about' } | { settings: SettingsTab };
+  target: { panel: 'safety' | 'timer' | 'about' | 'members' } | { settings: SettingsTab };
 }
 
 export interface ChatShield {
@@ -36,10 +36,40 @@ export function isOwnServer(snapshot: MessengerSnapshot): boolean {
   return snapshot.settings.ownServer ?? PRIVATE_HOST.test(serverHost(snapshot.me.serverUrl));
 }
 
+/** Members of a group whose keys I have verified, out of all the others. */
+export function groupVerification(contact: Contact, snapshot: MessengerSnapshot): { verified: number; total: number } {
+  const others = (contact.group?.members ?? []).filter((m) => m.id !== snapshot.me.userId);
+  const verified = others.filter((m) => snapshot.contacts.some((c) => c.id === m.id && c.verified && !c.keyWarning)).length;
+  return { verified, total: others.length };
+}
+
+/** «Щит группы»: encryption, how many members are verified, screenshots, server. */
+function groupShield(contact: Contact, snapshot: MessengerSnapshot, screen: ShieldItem, server: ShieldItem): ChatShield {
+  const { verified, total } = groupVerification(contact, snapshot);
+  const items: ShieldItem[] = [
+    { id: 'e2e', title: 'Сквозное шифрование', value: 'Sender Keys поверх Double Ratchet', state: 'ok', target: { panel: 'about' } },
+    {
+      id: 'code',
+      title: 'Ключи участников',
+      value: total ? `Сверены у ${verified} из ${total}` : 'В группе только вы',
+      state: total && verified === total ? 'ok' : 'weak',
+      target: { panel: 'members' },
+    },
+    screen,
+    server,
+  ];
+  const score = items.filter((i) => i.state === 'ok').length;
+  return { score, total: items.length, level: score === items.length ? 'ok' : 'weak', items };
+}
+
 export function chatShield(contact: Contact, snapshot: MessengerSnapshot, hasTurn: boolean): ChatShield {
   const { settings } = snapshot;
   const host = serverHost(snapshot.me.serverUrl);
   const screenSupported = platform === 'win32' || platform === 'darwin';
+  if (contact.group) {
+    const all = chatShield({ ...contact, group: undefined }, snapshot, hasTurn).items;
+    return groupShield(contact, snapshot, all.find((i) => i.id === 'screen')!, all.find((i) => i.id === 'server')!);
+  }
   const items: ShieldItem[] = [
     { id: 'e2e', title: 'Сквозное шифрование', value: 'Включено · X3DH и Double Ratchet', state: 'ok', target: { panel: 'about' } },
     {

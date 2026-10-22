@@ -53,6 +53,8 @@ export interface RelayOptions {
   ice?: IceOptions;
   /** Tests: every WebSocket frame exactly as the relay sees it, in both directions. */
   tap?: (direction: 'in' | 'out', bytes: Uint8Array) => void;
+  /** New accounts per IP address and hour (default 20). */
+  registrationsPerHour?: number;
 }
 
 export interface IceOptions {
@@ -408,7 +410,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
   };
 
   const handleRegister = async (conn: Connection, frame: RegisterFrame) => {
-    const bucket = registrations.get(conn.ip) ?? new Bucket(REGISTRATIONS_PER_HOUR, 3_600_000);
+    const bucket = registrations.get(conn.ip) ?? new Bucket(options.registrationsPerHour ?? REGISTRATIONS_PER_HOUR, 3_600_000);
     registrations.set(conn.ip, bucket);
     if (!bucket.take()) fail('rate_limited', 'Слишком много регистраций, попробуйте позже');
 

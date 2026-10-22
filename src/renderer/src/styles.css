@@ -5220,3 +5220,164 @@ button:disabled {
 .model-option .grow span {
   color: var(--text-2);
 }
+
+/* ---- Группы ---- */
+.sender-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.group-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+  color: var(--text-2);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.group-avatar {
+  position: relative;
+}
+.group-badge {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--on-accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--surface);
+}
+.member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.member-row {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.member-row:disabled {
+  cursor: default;
+}
+.member-row:not(:disabled):hover,
+.member-row:focus-visible {
+  background: var(--surface-hover);
+  outline: none;
+}
+.member-row .grow,
+.picker-row .grow {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 13.5px;
+}
+.member-row .grow span,
+.picker-row .grow span {
+  color: var(--text-3);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.member-row .ok,
+.picker-row .ok {
+  color: var(--success);
+  flex: none;
+}
+.member-row .muted {
+  color: var(--text-3);
+  flex: none;
+}
+.role-chip {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--surface-3);
+}
+.role-chip.owner {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.contact-picker {
+  display: grid;
+  gap: 8px;
+}
+.picker-list {
+  display: grid;
+  gap: 2px;
+  max-height: min(46vh, 360px);
+  overflow: auto;
+  padding: 2px;
+}
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.picker-row:hover {
+  background: var(--surface-hover);
+}
+.picker-row input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.picker-row:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.picker-check {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--border-strong);
+  color: var(--on-accent);
+}
+.picker-row.on .picker-check {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.composer-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 10px 16px 16px;
+  padding: 14px;
+  border-radius: var(--r);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13.5px;
+  text-align: center;
+}

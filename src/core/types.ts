@@ -1,4 +1,6 @@
 import type { KeyPairJSON } from './crypto/primitives.ts';
+import type { SenderKeyDistribution } from './crypto/sender-keys.ts';
+import type { GroupState } from './groups.ts';
 import type { ConnectionStatus } from './relay-client.ts';
 
 export type Theme = 'dark' | 'light' | 'system';
@@ -215,6 +217,10 @@ export interface Contact {
   privacy?: Partial<Record<PresenceKind, boolean>>;
   /** Hidden chat: not in the list, opened with the secret phrase in search and a PIN. */
   hidden?: boolean;
+  /** A group chat (features.groups): its members and roles; `left` once I am out of it. */
+  group?: GroupState & { left?: boolean };
+  /** Known only as a member of a group: not in the chat list until we talk directly. */
+  groupOnly?: boolean;
 }
 
 export type PresenceKind = 'online' | 'read' | 'typing';
@@ -256,7 +262,9 @@ export type SystemEvent =
   /** The two words in a call matched (no one in the middle) or did not. */
   | { kind: 'callwords'; match: boolean }
   /** Added through a veil:// invite: by me opening their link, or by them opening mine. */
-  | { kind: 'invite'; by: 'me' | 'them' };
+  | { kind: 'invite'; by: 'me' | 'them' }
+  /** A change in a group: who did what to whom (names as they were then). */
+  | { kind: 'group'; what: 'created' | 'joined' | 'added' | 'removed' | 'left' | 'renamed' | 'role'; by?: string; who?: string; value?: string };
 
 /** A call as shown in the chat; kept only on this device. */
 export interface CallRecord {
@@ -327,6 +335,8 @@ export interface Message {
   preview?: LinkPreview;
   /** «Голосовые в текст»: recognised on this device, kept only here (never sent). */
   transcript?: string;
+  /** In a group: who wrote it (their account id). */
+  from?: string;
 }
 
 export type NoteKind = 'note' | 'password' | 'link';
@@ -367,6 +377,8 @@ export type Content =
       cap?: { at: number; ct: string };
       /** Link preview made by the sender. */
       pv?: LinkPreview;
+      /** A group message: the group id. */
+      g?: string;
     }
   | { t: 'rcpt'; k: 'd' | 'r'; ids: string[] }
   | { t: 'typ'; on: boolean }
@@ -376,6 +388,11 @@ export type Content =
   | { t: 'viewed'; id: string }
   /** The time capsule's date came: its key. */
   | { t: 'capkey'; id: string; k: string }
+  /** Groups: my sender key, a request for it, the group as it is now, and leaving. */
+  | ({ t: 'skd'; g: string } & SenderKeyDistribution)
+  | { t: 'skreq'; g: string }
+  | { t: 'gst'; g: GroupState }
+  | { t: 'gleave'; g: string }
   /** The one-time token of a veil:// invite, back to the inviter. */
   | { t: 'inv'; tok: string }
   | { t: 'react'; id: string; e: string }
@@ -391,6 +408,8 @@ export interface OutboxItem {
   to: string;
   env: string;
   msgIds: string[];
+  /** The chat the messages are in, when it is not `to` (a group). */
+  chat?: string;
 }
 
 export interface StickerMeta {

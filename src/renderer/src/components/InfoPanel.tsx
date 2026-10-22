@@ -29,6 +29,7 @@ import { feature } from '../lib/hooks.ts';
 import { chatShield, SHIELD_SUMMARY, type ShieldItem } from '../lib/shield.ts';
 import { presenceText } from '../lib/text.ts';
 import { Avatar, ConfirmDialog, Toggle, useToast } from '../lib/ui.tsx';
+import { GroupDetails } from './GroupPanel.tsx';
 import type { SettingsTab } from './SettingsModal.tsx';
 
 type Confirm = 'clear' | 'delete' | 'block' | 'reset' | null;
@@ -46,6 +47,7 @@ export function InfoPanel({
   onClose,
   onOpenSettings,
   onDeleted,
+  onOpenChat,
 }: {
   messenger: Messenger;
   snapshot: MessengerSnapshot;
@@ -57,11 +59,16 @@ export function InfoPanel({
   onClose(): void;
   onOpenSettings(tab: SettingsTab): void;
   onDeleted(): void;
+  /** Open another chat (a group member's). */
+  onOpenChat?(id: string): void;
 }) {
   const toast = useToast();
   const [confirm, setConfirm] = useState<Confirm>(null);
   const body = useRef<HTMLDivElement>(null);
-  const safety = useMemo(() => (isSavedChat(contact.id) ? [] : formatSafetyNumber(messenger.safetyNumber(contact.id))), [messenger, contact.id]);
+  const safety = useMemo(
+    () => (isSavedChat(contact.id) || contact.group ? [] : formatSafetyNumber(messenger.safetyNumber(contact.id))),
+    [messenger, contact.id, contact.group],
+  );
   if (isSavedChat(contact.id)) return <SavedInfo messenger={messenger} contact={contact} overlay={overlay} onClose={onClose} />;
 
   const { settings } = snapshot;
@@ -139,6 +146,10 @@ export function InfoPanel({
           </div>
         )}
 
+        {contact.group ? (
+          <GroupDetails messenger={messenger} snapshot={snapshot} contact={contact} onOpenChat={onOpenChat} />
+        ) : (
+          <>
         <div className="profile-hero">
           <Avatar name={contact.displayName} seed={contact.id} size={96} />
           <h4>
@@ -217,6 +228,8 @@ export function InfoPanel({
         </div>
 
         {feature(settings, 'presence') && <ContactPrivacy messenger={messenger} snapshot={snapshot} contact={contact} />}
+          </>
+        )}
 
         <div className="section action-list">
           <button className="action-item" onClick={() => messenger.setPinned(contact.id, !contact.pinned)}>
@@ -244,24 +257,28 @@ export function InfoPanel({
               <span className="grow">{contact.hidden ? 'Вернуть в список' : snapshot.security.hiddenChats ? 'Скрыть чат' : 'Скрыть чат — сначала настройте PIN'}</span>
             </button>
           )}
-          <button className="action-item" onClick={() => setConfirm('reset')}>
-            <RotateCcw size={18} />
-            <span className="grow">Сбросить сеанс шифрования</span>
-          </button>
+          {!contact.group && (
+            <button className="action-item" onClick={() => setConfirm('reset')}>
+              <RotateCcw size={18} />
+              <span className="grow">Сбросить сеанс шифрования</span>
+            </button>
+          )}
           <button className="action-item" onClick={() => setConfirm('clear')}>
             <Eraser size={18} />
             <span className="grow">Очистить историю</span>
           </button>
-          <button
-            className="action-item danger"
-            onClick={() => (contact.blocked ? messenger.setBlocked(contact.id, false) : setConfirm('block'))}
-          >
-            <Ban size={18} />
-            <span className="grow">{contact.blocked ? 'Разблокировать' : 'Заблокировать'}</span>
-          </button>
+          {!contact.group && (
+            <button
+              className="action-item danger"
+              onClick={() => (contact.blocked ? messenger.setBlocked(contact.id, false) : setConfirm('block'))}
+            >
+              <Ban size={18} />
+              <span className="grow">{contact.blocked ? 'Разблокировать' : 'Заблокировать'}</span>
+            </button>
+          )}
           <button className="action-item danger" onClick={() => setConfirm('delete')}>
             <Trash2 size={18} />
-            <span className="grow">Удалить чат</span>
+            <span className="grow">{contact.group ? (contact.group.left ? 'Удалить группу' : 'Выйти и удалить группу') : 'Удалить чат'}</span>
           </button>
         </div>
       </div>
@@ -278,8 +295,12 @@ export function InfoPanel({
       )}
       {confirm === 'delete' && (
         <ConfirmDialog
-          title="Удалить чат?"
-          text={`Переписка с ${contact.displayName} и ключи сеанса будут удалены с этого устройства.`}
+          title={contact.group ? 'Удалить группу?' : 'Удалить чат?'}
+          text={
+            contact.group
+              ? `Переписка группы «${contact.displayName}» будет удалена с этого устройства${contact.group.left ? '' : ', а вы выйдете из группы'}.`
+              : `Переписка с ${contact.displayName} и ключи сеанса будут удалены с этого устройства.`
+          }
           confirm="Удалить"
           danger
           onClose={() => setConfirm(null)}

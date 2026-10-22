@@ -19,6 +19,7 @@ import {
   Sticker,
   Trash2,
   TriangleAlert,
+  Users,
   Video,
   X,
 } from 'lucide-react';
@@ -37,7 +38,7 @@ import {
   type TranscribeModel,
 } from '../../../core/types.ts';
 import { attachmentUrl, saveAttachment } from '../lib/attachments.ts';
-import { formatDay, sameDay, systemText, timerChip } from '../lib/format.ts';
+import { formatDay, plural, sameDay, systemText, timerChip } from '../lib/format.ts';
 import { feature } from '../lib/hooks.ts';
 import { chatShield } from '../lib/shield.ts';
 import { copyImage, copyText, prepareFile } from '../lib/media.ts';
@@ -69,6 +70,16 @@ const GROUP_GAP_MS = 3 * 60 * 1000;
 
 export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onToggleInfo, onShowSafety, onCall, onBack, focus }: Props) {
   const saved = isSavedChat(contact.id);
+  const group = contact.group;
+  /** Group members' names: their own (from their messages) over the one in the group list. */
+  const senderOf = useCallback(
+    (id: string | undefined) => {
+      if (!group || !id) return undefined;
+      const known = snapshot.contacts.find((c) => c.id === id);
+      return { name: known?.displayName ?? group.members.find((m) => m.id === id)?.name ?? 'Участник', seed: id };
+    },
+    [group, snapshot.contacts],
+  );
   const messages = snapshot.conversations[contact.id] ?? [];
   const typing = !!snapshot.typing[contact.id];
   const online = !!snapshot.online[contact.id];
@@ -291,10 +302,10 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
       });
     if (m.status === 'failed') items.push({ label: 'Отправить снова', icon: <RotateCcw size={16} />, onClick: () => onRetry(m) });
     items.push({ label: 'Удалить у меня', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, false) });
-    if (!saved && m.dir === 'out' && m.status !== 'failed' && m.status !== 'pending' && m.status !== 'scheduled')
+    if (!saved && !group && m.dir === 'out' && m.status !== 'failed' && m.status !== 'pending' && m.status !== 'scheduled')
       items.push({ label: 'Удалить у всех', icon: <Trash2 size={16} />, danger: true, onClick: () => void messenger.deleteMessage(contact.id, m.id, true) });
     return items;
-  }, [menu, messenger, contact.id, toast, onRetry, copy, snapshot.stickers, onCall, saved]);
+  }, [menu, messenger, contact.id, toast, onRetry, copy, snapshot.stickers, onCall, saved, group]);
 
   const onDragEnter = (e: DragEvent) => {
     if (!e.dataTransfer.types.includes('Files')) return;
@@ -359,6 +370,8 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
         onCallBack={onCallBack}
         onOpenOnce={onOpenOnce}
         onScheduled={onScheduled}
+        sender={senderOf(message.from)}
+        noReactions={!!group}
         transcribe={transcribeOn}
         transcribing={busyVoice === message.id}
         onTranscribe={onTranscribe}
@@ -394,6 +407,11 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
                 <LockKeyhole size={12} className="lock" />
                 только на этом устройстве
               </div>
+            ) : group ? (
+              <div className="sub">
+                <Users size={12} className="lock" />
+                {group.left ? 'вы больше не в группе' : `${group.members.length} ${plural(group.members.length, ['участник', 'участника', 'участников'])}`}
+              </div>
             ) : typing ? (
               <div className="sub typing">
                 печатает
@@ -419,12 +437,12 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
               <Hourglass size={14} /> {timerChip(contact.timer)}
             </span>
           )}
-          {!saved && (
+          {!saved && !group && (
             <button className="icon-btn" onClick={() => onCall(contact.id)} aria-label="Позвонить" title="Аудиозвонок" disabled={contact.blocked}>
               <Phone size={19} />
             </button>
           )}
-          {!saved && feature(snapshot.settings, 'video') && (
+          {!saved && !group && feature(snapshot.settings, 'video') && (
             <button className="icon-btn" onClick={() => onCall(contact.id, true)} aria-label="Видеозвонок" title="Видеозвонок" disabled={contact.blocked}>
               <Video size={20} />
             </button>
@@ -471,9 +489,18 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
                 <LockKeyhole size={20} />
               </div>
               <b>Сквозное шифрование</b>
-              Сообщения и файлы шифруются на вашем устройстве. Прочитать их можете только вы и {contact.displayName} — даже сервер не видит
-              содержимое.
-              <button onClick={onShowSafety}>Проверить код безопасности</button>
+              {group ? (
+                <>
+                  Сообщения шифруются на вашем устройстве для каждого участника группы. Сервер не видит ни текста, ни названия, ни состава группы.
+                  <button onClick={onShowSafety}>Участники и их ключи</button>
+                </>
+              ) : (
+                <>
+                  Сообщения и файлы шифруются на вашем устройстве. Прочитать их можете только вы и {contact.displayName} — даже сервер не видит
+                  содержимое.
+                  <button onClick={onShowSafety}>Проверить код безопасности</button>
+                </>
+              )}
             </div>
           )}
           {rows}
@@ -506,7 +533,13 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
           </button>
         </div>
       )}
-      {!contact.blocked && !held && (
+      {group?.left ? (
+        <div className="composer-note" role="status">
+          <Users size={16} /> Вы больше не участник этой группы. Переписка осталась только на этом устройстве.
+        </div>
+      ) : (
+        !contact.blocked &&
+        !held && (
         <Composer
           messenger={messenger}
           contact={contact}
@@ -516,6 +549,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
           onCancelReply={() => setReplyTo(null)}
           onFiles={queueFiles}
         />
+        )
       )}
 
       {dragging && (
@@ -529,7 +563,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
       {pending.length > 0 && (
         <AttachmentPreview
           files={pending}
-          allowOnce={!saved && feature(snapshot.settings, 'viewOnce')}
+          allowOnce={!saved && !group && feature(snapshot.settings, 'viewOnce')}
           stripMetadata={snapshot.settings.stripMetadata && feature(snapshot.settings, 'stripMeta')}
           onAdd={queueFiles}
           onRemove={(i) => setPending((list) => list.filter((_, j) => j !== i))}
@@ -544,7 +578,8 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
           items={menuItems}
           onClose={() => setMenu(null)}
           header={
-            !menu.message.call && (
+            !menu.message.call &&
+            !group && (
               <div className="menu-reactions">
                 {QUICK_REACTIONS.map((emoji) => (
                   <button

@@ -133,7 +133,12 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           return;
         }
         const preview = current.notificationPreview && !veiledFor(current, contact);
-        const body = preview ? snippetOf(message) || 'Сообщение' : 'Новое зашифрованное сообщение';
+        const author =
+          contact.group && message.from
+            ? (messenger.getSnapshot().contacts.find((c) => c.id === message.from)?.displayName ?? contact.group.members.find((m) => m.id === message.from)?.name)
+            : undefined;
+        const text = snippetOf(message) || 'Сообщение';
+        const body = preview ? (author ? `${author}: ${text}` : text) : 'Новое зашифрованное сообщение';
         if (bridge && current.notificationStyle === 'veil') bridge.notify({ title: contact.displayName, body, tag: contact.id, card: cardData(contact, body) });
         else showNotification(contact.displayName, body, contact.id, () => setActiveId(contact.id));
       }
@@ -557,6 +562,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
             key={`info-${active.id}`}
             messenger={messenger}
             snapshot={snapshot}
+            onOpenChat={select}
             contact={active}
             online={!!snapshot.online[active.id]}
             overlay={!wide}

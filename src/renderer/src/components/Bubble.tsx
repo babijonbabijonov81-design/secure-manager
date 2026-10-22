@@ -29,7 +29,7 @@ import { callTitle, type Messenger } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
 import { attachmentsOf, type Attachment, type Message } from '../../../core/types.ts';
 import { saveAttachment, useAttachmentUrl } from '../lib/attachments.ts';
-import { formatCallDuration, formatDate, formatDay, formatSize, formatTime, formatWhen, isEmojiOnly, remaining } from '../lib/format.ts';
+import { avatarColor, formatCallDuration, formatDate, formatDay, formatSize, formatTime, formatWhen, isEmojiOnly, remaining } from '../lib/format.ts';
 import { ReactionPicker } from './ReactionPicker.tsx';
 import { VoicePlayer } from './VoicePlayer.tsx';
 
@@ -150,6 +150,10 @@ interface BubbleProps {
   onOpenOnce(message: Message): void;
   /** A scheduled message: send it now or cancel it. */
   onScheduled(message: Message, action: 'now' | 'cancel'): void;
+  /** In a group: who wrote this incoming message (shown on the first bubble of a run). */
+  sender?: { name: string; seed: string };
+  /** Reactions are off (groups). */
+  noReactions?: boolean;
   /** «Голосовые в текст» is available here (features.transcribe, desktop app). */
   transcribe?: boolean;
   /** This voice message is being recognised right now. */
@@ -285,9 +289,14 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
           <div
             className={bubbleClass}
             onContextMenu={(e) => props.onContext(e, message)}
-            onDoubleClick={() => react('❤️')}
+            onDoubleClick={() => !props.noReactions && react('❤️')}
             tabIndex={props.veiled && !out ? 0 : undefined}
           >
+            {props.sender && groupStart && !out && (
+              <div className="sender-name" style={{ color: avatarColor(props.sender.seed) }}>
+                {props.sender.name}
+              </div>
+            )}
             {message.fwd && (
               <div className="fwd" title={`${formatDay(message.fwd.ts)}, ${formatTime(message.fwd.ts)}`}>
                 <Forward size={13} /> Переслано от <b>{message.fwd.name}</b>
@@ -295,7 +304,7 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
             )}
             {message.reply && (
               <button className="quote" onClick={() => props.onJump(message.reply!.id)}>
-                <b>{message.reply.out ? 'Вы' : contactName}</b>
+                <b>{message.reply.out ? 'Вы' : props.sender ? 'Сообщение' : contactName}</b>
                 <span>{message.reply.text || 'Сообщение'}</span>
               </button>
             )}
@@ -349,16 +358,18 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
           </div>
 
           <div className="msg-actions">
-            <button
-              className={`icon-btn sm${pickerAnchor ? ' active' : ''}`}
-              title="Реакция"
-              aria-label="Реакция"
-              aria-expanded={!!pickerAnchor}
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => setPickerAnchor(pickerAnchor ? null : e.currentTarget)}
-            >
-              <SmilePlus size={17} />
-            </button>
+            {!props.noReactions && (
+              <button
+                className={`icon-btn sm${pickerAnchor ? ' active' : ''}`}
+                title="Реакция"
+                aria-label="Реакция"
+                aria-expanded={!!pickerAnchor}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => setPickerAnchor(pickerAnchor ? null : e.currentTarget)}
+              >
+                <SmilePlus size={17} />
+              </button>
+            )}
             <button className="icon-btn sm" title="Ответить" aria-label="Ответить" onClick={() => props.onReply(message)}>
               <CornerUpLeft size={17} />
             </button>

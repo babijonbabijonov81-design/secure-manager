@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   Trash2,
   TriangleAlert,
+  Users,
 } from 'lucide-react';
 import { forwardRef, useDeferredValue, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { snippetOf, type Messenger } from '../../../core/messenger.ts';
@@ -63,12 +64,17 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
   const [menu, setMenu] = useState<{ x: number; y: number; contact: Contact } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Contact | null>(null);
 
-  const archived = snapshot.contacts.filter((c) => c.archived);
+  // People known only through a group get a chat in the list once we talk directly.
+  const listed = useMemo(
+    () => snapshot.contacts.filter((c) => !c.groupOnly && (!c.group || feature(snapshot.settings, 'groups'))),
+    [snapshot.contacts, snapshot.settings],
+  );
+  const archived = listed.filter((c) => c.archived);
   const contacts = useMemo(() => {
     const q = query.trim().toLowerCase().replace(/^@/, '');
-    if (q) return snapshot.contacts.filter((c) => c.displayName.toLowerCase().includes(q) || c.username.toLowerCase().includes(q));
-    return snapshot.contacts.filter((c) => !!c.archived === showArchive);
-  }, [snapshot.contacts, query, showArchive]);
+    if (q) return listed.filter((c) => c.displayName.toLowerCase().includes(q) || c.username.toLowerCase().includes(q));
+    return listed.filter((c) => !!c.archived === showArchive);
+  }, [listed, query, showArchive]);
   const archivedUnread = archived.reduce((n, c) => n + c.unread, 0);
 
   // «Поиск по всей переписке»: messages too, from 2 letters or with a filter.
@@ -212,6 +218,7 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
             veiled={veiledFor(snapshot.settings, contact)}
             onClick={() => onSelect(contact.id)}
             onMenu={(e) => openMenu(e, contact)}
+            nameOf={(id) => byId.get(id)?.displayName}
           />
         ))}
         {searching && (
@@ -231,7 +238,7 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
             {!hits.length && <div className="empty-list compact">Ничего не найдено на этом устройстве</div>}
           </>
         )}
-        {snapshot.contacts.length === 0 && (
+        {listed.length === 0 && (
           <div className="empty-list">
             <div className="art">
               <MessageSquarePlus size={34} />
@@ -243,7 +250,7 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
             </button>
           </div>
         )}
-        {!searching && snapshot.contacts.length > 0 && contacts.length === 0 && (
+        {!searching && listed.length > 0 && contacts.length === 0 && (
           <div className="empty-list">
             <span>{query ? 'Ничего не найдено' : showArchive ? 'Архив пуст' : 'Все чаты в архиве'}</span>
           </div>
@@ -331,7 +338,10 @@ function ChatItem({
   veiled,
   onClick,
   onMenu,
+  nameOf,
 }: {
+  /** A group member's current name. */
+  nameOf?(id: string): string | undefined;
   contact: Contact;
   last: Message | undefined;
   typing: boolean;
@@ -350,7 +360,9 @@ function ChatItem({
       ? systemText(last, contact)
       : last.status === 'scheduled'
         ? `Запланировано: ${snippetOf(last)}`
-        : snippetOf(last);
+        : contact.group && last.dir === 'in' && last.from
+          ? `${nameOf?.(last.from) ?? contact.group.members.find((m) => m.id === last.from)?.name ?? 'Участник'}: ${snippetOf(last)}`
+          : snippetOf(last);
   return (
     <div
       className={`chat-item${active ? ' active' : ''}${veiled ? ' veiled' : ''}`}
@@ -370,6 +382,11 @@ function ChatItem({
       <span className="avatar-wrap">
         <Avatar name={contact.displayName} seed={contact.id} size={50} />
         {online && <i className="online-dot" />}
+        {contact.group && (
+          <i className="group-dot" aria-label="Группа">
+            <Users size={11} />
+          </i>
+        )}
       </span>
       <div className="body">
         <div className="row">

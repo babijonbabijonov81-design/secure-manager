@@ -22,6 +22,7 @@ import { safetyNumber } from './crypto/fingerprint.ts';
 import { newContentKey, openContent, sealContent } from './crypto/media.ts';
 import { aeadOpen, aeadSeal, equalBytes, generateDH, kdf, keyPairFromJSON, keyPairToJSON, random, sign } from './crypto/primitives.ts';
 import { openEnvelope, sealEnvelope, type SenderInfo } from './crypto/sealed.ts';
+import { chainFrom, distributionOf, newSenderChain, senderDecrypt, senderEncrypt, type GroupWire, type SenderChain } from './crypto/sender-keys.ts';
 import {
   createInitiatorSession,
   createResponderSession,
@@ -49,6 +50,7 @@ import {
 } from './crypto/vault.ts';
 import { generateIdentity, signPreKey, verifyDhKey, type IdentityKeys } from './crypto/x3dh.ts';
 import { INVITE_DAYS, inviteLink, MAX_INVITES, newInviteToken, parseInvite, serverKey } from './invite.ts';
+import { canApply, describeChange, groupChatId, isGroupChat, MAX_GROUP_MEMBERS, withoutMember, type GroupMember, type GroupRole, type GroupState } from './groups.ts';
 import { cleanPreview } from './link-preview.ts';
 import { searchMessages, type SearchFilter, type SearchHit } from './search.ts';
 import { anonymousRequest, RelayClient, RelayRequestError, type ConnectionStatus } from './relay-client.ts';
@@ -380,7 +382,7 @@ async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint
   if (!messenger.decoy && account.duress && !(await new SecureStore(storage, new Uint8Array(32), DECOY_PREFIX).names()).includes('account')) {
     delete account.duress;
   }
-  const [settings, contacts, sessions, outbox, seen, stickers, seclog] = await Promise.all([
+  const [settings, contacts, sessions, outbox, seen, stickers, seclog, gkeys] = await Promise.all([
     store.getJSON<Settings>('settings'),
     store.getJSON<Record<string, Contact>>('contacts'),
     store.getJSON<Record<string, SessionRecord[]>>('sessions'),
@@ -388,6 +390,7 @@ async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint
     store.getJSON<string[]>('seen'),
     store.getJSON<StickerMeta[]>('stickers'),
     store.getJSON<SecurityEvent[]>('seclog'),
+    store.getJSON<Record<string, GroupKeys>>('gkeys'),
   ]);
   messenger.loadState({
     account,
@@ -398,6 +401,7 @@ async function openVault(storage: StorageBackend, meta: VaultMeta, dataKey: Uint
     seen: seen ?? [],
     stickers: stickers ?? [],
     seclog: seclog ?? [],
+    gkeys: gkeys ?? {},
   });
   for (const id of Object.keys(contacts ?? {})) {
     const messages = await store.getJSON<Message[]>(`conv.${id}`);
@@ -516,6 +520,23 @@ function generateOneTimePreKeys(account: AccountRecord, count: number) {
   return created;
 }
 
+interface GroupKeys {
+  mine?: SenderChain;
+  /** Members who already have my current chain. */
+  sent: string[];
+  /** Each member's chains, newest first (the previous one for messages still on the way). */
+  peers: Record<string, SenderChain[]>;
+  /** Group messages that came before their sender key, kept for a while. */
+  pending?: { from: string; wire: string; at: number }[];
+  /** When I last asked a member for their sender key. */
+  asked?: Record<string, number>;
+}
+
+interface GroupWireHeader extends GroupWire {
+  k: 'grp';
+  g: string;
+}
+
 interface LoadedState {
   account: AccountRecord;
   settings: Settings;
@@ -525,6 +546,7 @@ interface LoadedState {
   seen: string[];
   stickers: StickerMeta[];
   seclog?: SecurityEvent[];
+  gkeys?: Record<string, GroupKeys>;
 }
 
 export interface SendOptions {
@@ -573,6 +595,8 @@ export class Messenger {
   private seenSet = new Set<string>();
   private stickers: StickerMeta[] = [];
   private seclog: SecurityEvent[] = [];
+  /** Sender keys per group: my chain, who has it, the other members' chains, early messages. */
+  private gkeys: Record<string, GroupKeys> = {};
 
   private relay: RelayClient | null = null;
   private status: ConnectionStatus = 'offline';
@@ -626,6 +650,7 @@ export class Messenger {
     this.seenSet = new Set(state.seen);
     this.stickers = state.stickers;
     this.seclog = state.seclog ?? [];
+    this.gkeys = state.gkeys ?? {};
     this.identity = {
       sign: keyPairFromJSON(state.account.sign),
       dh: keyPairFromJSON(state.account.dh),
@@ -864,6 +889,7 @@ export class Messenger {
         else if (name === 'seen') await this.store.putJSON(name, this.seen);
         else if (name === 'stickers') await this.store.putJSON(name, this.stickers);
         else if (name === 'seclog') await this.store.putJSON(name, this.seclog);
+        else if (name === 'gkeys') await this.store.putJSON(name, this.gkeys);
         else if (name.startsWith('conv.')) {
           const messages = this.conversations.get(name.slice(5));
           if (messages) await this.store.putJSON(name, messages);
@@ -1009,7 +1035,7 @@ export class Messenger {
   private addFromInfo(info: UserInfo): Contact {
     const existing = this.contacts[info.userId];
     if (existing) {
-      if (existing.archived) this.updateContact(existing.id, { archived: false });
+      if (existing.archived || existing.groupOnly) this.updateContact(existing.id, { archived: false, groupOnly: undefined });
       return this.contacts[info.userId];
     }
     // The username now belongs to a different key (account reset, or someone in the middle).
@@ -1141,6 +1167,334 @@ export class Messenger {
     this.patchMessages(contactId, new Set([messageId]), (m) => (attachmentsOf(m).some((a) => a.kind === 'voice') ? { ...m, transcript: clean } : m));
   }
 
+  // ---- groups (features.groups) ------------------------------------------------------------
+
+  private groupsOn(): boolean {
+    return this.settings.features.groups !== false && !this.decoy;
+  }
+
+  private requireGroups(): void {
+    if (this.settings.features.groups === false) throw new MessengerError('disabled', 'Группы выключены в настройках');
+    if (this.decoy) throw new MessengerError('decoy', 'Недоступно');
+  }
+
+  private selfMember(role: GroupRole): GroupMember {
+    return { id: this.account.userId, username: this.account.username, name: this.account.displayName, role, dh: this.account.dh.pub, ds: this.account.dhSig };
+  }
+
+  private memberOf(contact: Contact, role: GroupRole = 'member'): GroupMember {
+    return { id: contact.id, username: contact.username, name: contact.displayName, role, dh: contact.dhKey, ds: contact.dhSig };
+  }
+
+  /** A member I may not know yet: known only through the group, not in the chat list. */
+  private memberContact(m: GroupMember): Contact {
+    const known = this.contacts[m.id];
+    if (known) return known;
+    const contact = this.createContact({ userId: m.id, username: m.username, dhKey: m.dh, dhSig: m.ds }, m.name);
+    return this.updateContact(contact.id, { groupOnly: true })!;
+  }
+
+  private keysOf(groupId: string): GroupKeys {
+    return (this.gkeys[groupId] ??= { sent: [], peers: {} });
+  }
+
+  private requireGroup(chatId: string): GroupState & { left?: boolean } {
+    const group = this.contacts[chatId]?.group;
+    if (!group) throw new MessengerError('not_group', 'Группа не найдена');
+    if (group.left) throw new MessengerError('left', 'Вы больше не в этой группе');
+    return group;
+  }
+
+  private nameIn(group: GroupState, id: string): string {
+    if (id === this.account.userId) return 'Вы';
+    return this.contacts[id] && !this.contacts[id].groupOnly ? this.contacts[id].displayName : (group.members.find((m) => m.id === id)?.name ?? 'Участник');
+  }
+
+  /** A new group with me as the owner and these contacts as members. */
+  async createGroup(name: string, contactIds: string[]): Promise<Contact> {
+    this.requireGroups();
+    const title = name.trim().slice(0, 64);
+    if (!title) throw new MessengerError('name', 'Введите название группы');
+    const people = [...new Set(contactIds)]
+      .map((id) => this.contacts[id])
+      .filter((c): c is Contact => !!c && !c.group && !isSavedChat(c.id) && !c.blocked && c.id !== this.account.userId);
+    if (!people.length) throw new MessengerError('members', 'Выберите хотя бы одного участника');
+    if (people.length + 1 > MAX_GROUP_MEMBERS) throw new MessengerError('members', `В группе может быть до ${MAX_GROUP_MEMBERS} человек`);
+    const state: GroupState = { id: randomId(12), name: title, v: 1, members: [this.selfMember('owner'), ...people.map((c) => this.memberOf(c))] };
+    const chat = this.storeGroup(state);
+    this.addSystem(chat.id, { kind: 'group', what: 'created', value: title });
+    await this.broadcastGroup(state, state.members);
+    return this.contacts[chat.id];
+  }
+
+  private storeGroup(state: GroupState, left = false): Contact {
+    const id = groupChatId(state.id);
+    for (const m of state.members) if (m.id !== this.account.userId) this.memberContact(m);
+    const existing = this.contacts[id];
+    if (existing) return this.updateContact(id, { displayName: state.name, group: { ...state, ...(left ? { left: true } : {}) } })!;
+    const now = Date.now();
+    const chat: Contact = {
+      id,
+      username: '',
+      displayName: state.name,
+      dhKey: '',
+      dhSig: '',
+      verified: false,
+      blocked: false,
+      createdAt: now,
+      lastActivity: now,
+      unread: 0,
+      timer: 0,
+      group: { ...state, ...(left ? { left: true } : {}) },
+    };
+    this.contacts[id] = chat;
+    this.conversations.set(id, this.conversations.get(id) ?? []);
+    this.markDirty('contacts', `conv.${id}`);
+    this.changed();
+    return chat;
+  }
+
+  /** The group as it is now, privately to each of these members (sent through the pairwise sessions). */
+  private async broadcastGroup(state: GroupState, to: GroupMember[]): Promise<void> {
+    for (const m of to) {
+      if (m.id === this.account.userId) continue;
+      await this.sendControl(this.memberContact(m), { t: 'gst', g: state });
+    }
+  }
+
+  /** My change: checked by the same rules as everyone else's, applied, then sent to all. */
+  private async changeGroup(chatId: string, change: (next: GroupState) => void, alsoTell: GroupMember[] = []): Promise<void> {
+    this.requireGroups();
+    const current = this.requireGroup(chatId);
+    const { left: _left, ...plain } = current;
+    const next: GroupState = { ...plain, v: current.v + 1, members: current.members.map((m) => ({ ...m })) };
+    change(next);
+    if (!canApply(plain, next, this.account.userId, this.account.userId)) throw new MessengerError('forbidden', 'Недостаточно прав для этого изменения');
+    await this.applyGroupState(this.account.userId, next);
+    await this.broadcastGroup(next, [...next.members, ...alsoTell]);
+  }
+
+  async addGroupMembers(chatId: string, contactIds: string[]): Promise<void> {
+    const group = this.requireGroup(chatId);
+    const fresh = [...new Set(contactIds)]
+      .map((id) => this.contacts[id])
+      .filter((c): c is Contact => !!c && !c.group && !isSavedChat(c.id) && !c.blocked && !group.members.some((m) => m.id === c.id));
+    if (!fresh.length) return;
+    if (group.members.length + fresh.length > MAX_GROUP_MEMBERS) throw new MessengerError('members', `В группе может быть до ${MAX_GROUP_MEMBERS} человек`);
+    await this.changeGroup(chatId, (next) => next.members.push(...fresh.map((c) => this.memberOf(c))));
+  }
+
+  async removeGroupMember(chatId: string, memberId: string): Promise<void> {
+    const removed = this.requireGroup(chatId).members.find((m) => m.id === memberId);
+    if (!removed || memberId === this.account.userId) return;
+    await this.changeGroup(chatId, (next) => (next.members = next.members.filter((m) => m.id !== memberId)), [removed]);
+  }
+
+  /** Owner only: make an admin or a member, or hand the group over (I become an admin). */
+  async setGroupRole(chatId: string, memberId: string, role: GroupRole): Promise<void> {
+    await this.changeGroup(chatId, (next) => {
+      const target = next.members.find((m) => m.id === memberId);
+      if (!target || memberId === this.account.userId) return;
+      if (role === 'owner') for (const m of next.members) if (m.role === 'owner') m.role = 'admin';
+      target.role = role;
+    });
+  }
+
+  async renameGroup(chatId: string, name: string): Promise<void> {
+    const title = name.trim().slice(0, 64);
+    if (!title) throw new MessengerError('name', 'Введите название группы');
+    await this.changeGroup(chatId, (next) => (next.name = title));
+  }
+
+  /** Leave: everyone drops me and starts new sender keys; the chat stays here, read-only. */
+  async leaveGroup(chatId: string): Promise<void> {
+    const group = this.requireGroup(chatId);
+    for (const m of group.members) if (m.id !== this.account.userId) await this.sendControl(this.memberContact(m), { t: 'gleave', g: group.id });
+    this.updateContact(chatId, { group: { ...group, left: true } });
+    delete this.gkeys[group.id];
+    this.markDirty('gkeys');
+    this.addSystem(chatId, { kind: 'group', what: 'left', who: 'Вы' });
+  }
+
+  /** A group change from `senderId` (or mine): applied only if the rules allow it. */
+  private async applyGroupState(senderId: string, next: GroupState): Promise<boolean> {
+    const chatId = groupChatId(typeof next?.id === 'string' ? next.id : '');
+    const stored = this.contacts[chatId]?.group;
+    const { left: wasLeft, ...current } = stored ?? ({} as GroupState & { left?: boolean });
+    const base = stored && !wasLeft ? (current as GroupState) : undefined;
+    if (stored && next?.v <= stored.v) return false;
+    if (!canApply(base, next, senderId, this.account.userId)) return false;
+    const inGroup = next.members.some((m) => m.id === this.account.userId);
+    const by = this.nameIn(base ?? next, senderId);
+    this.storeGroup(next, !inGroup);
+    if (!base) {
+      if (senderId !== this.account.userId) this.addSystem(chatId, { kind: 'group', what: 'joined', by, value: next.name });
+      return true;
+    }
+    const change = describeChange(base, next);
+    for (const m of change.added) this.addSystem(chatId, { kind: 'group', what: 'added', by, who: this.nameIn(next, m.id) });
+    for (const m of change.removed) this.addSystem(chatId, { kind: 'group', what: 'removed', by, who: m.id === this.account.userId ? 'вас' : this.nameIn(base, m.id) });
+    for (const m of change.roles) this.addSystem(chatId, { kind: 'group', what: 'role', by, who: this.nameIn(next, m.id), value: m.role });
+    if (change.renamed) this.addSystem(chatId, { kind: 'group', what: 'renamed', by, value: next.name });
+    if (!inGroup) delete this.gkeys[next.id];
+    else if (change.removed.length) this.rotateSenderKey(next.id, change.removed.map((m) => m.id));
+    this.markDirty('gkeys');
+    return true;
+  }
+
+  /** Someone left on their own. */
+  private memberLeft(senderId: string, groupId: unknown): void {
+    if (typeof groupId !== 'string') return;
+    const chatId = groupChatId(groupId);
+    const group = this.contacts[chatId]?.group;
+    if (!group || group.left) return;
+    const { left: _left, ...plain } = group;
+    const next = withoutMember(plain, senderId);
+    if (!next) return;
+    const who = this.nameIn(plain, senderId);
+    this.storeGroup(next);
+    this.addSystem(chatId, { kind: 'group', what: 'left', who });
+    this.rotateSenderKey(groupId, [senderId]);
+  }
+
+  /** After someone is out: a new chain of mine, and theirs forgotten, so they read nothing new. */
+  private rotateSenderKey(groupId: string, gone: string[]): void {
+    const keys = this.keysOf(groupId);
+    keys.mine = undefined;
+    keys.sent = [];
+    for (const id of gone) delete keys.peers[id];
+    keys.pending = keys.pending?.filter((p) => !gone.includes(p.from));
+    this.markDirty('gkeys');
+  }
+
+  /** Encrypts once with my sender key; each member gets the same ciphertext in their own sealed envelope. */
+  private async deliverGroup(chat: Contact, content: Content, data: Uint8Array | undefined, msgIds: string[]): Promise<void> {
+    const group = chat.group;
+    if (!group || group.left || !this.groupsOn()) {
+      this.setStatus(chat.id, msgIds, 'failed');
+      return;
+    }
+    if (content.t === 'msg') content.g = group.id;
+    await this.withContactLock(chat.id, async () => {
+      const keys = this.keysOf(group.id);
+      if (!keys.mine) {
+        keys.mine = newSenderChain();
+        keys.sent = [];
+      }
+      const others = group.members.filter((m) => m.id !== this.account.userId);
+      for (const m of others) {
+        if (keys.sent.includes(m.id)) continue;
+        try {
+          await this.encryptAndQueue(this.memberContact(m), { t: 'skd', g: group.id, ...distributionOf(keys.mine) }, undefined, []);
+          keys.sent.push(m.id);
+        } catch (error) {
+          console.warn('sender key not sent', error);
+        }
+      }
+      const { chain, wire, ct } = senderEncrypt(keys.mine, pack(content, data), group.id, this.account.userId);
+      keys.mine = chain;
+      const inner = pack({ k: 'grp', g: group.id, ...wire } satisfies GroupWireHeader, ct);
+      for (const m of others) {
+        const envelope = sealEnvelope(unb64(m.dh), this.senderInfo(), inner);
+        this.outbox.push({ qid: randomId(), to: m.id, env: b64(envelope), msgIds, chat: chat.id });
+      }
+      if (!others.length) this.setStatus(chat.id, msgIds, 'sent');
+      this.markDirty('gkeys', 'outbox');
+      // My chain must be on disk before its ciphertext leaves the device.
+      await this.flushNow();
+      void this.pumpOutbox();
+    });
+  }
+
+  private receiveSenderKey(contact: Contact, content: Extract<Content, { t: 'skd' }>): void {
+    if (!this.groupsOn() || typeof content.g !== 'string') return;
+    const group = this.contacts[groupChatId(content.g)]?.group;
+    if (!group || group.left || !group.members.some((m) => m.id === contact.id)) return;
+    const chain = chainFrom(content);
+    if (!chain) return;
+    const keys = this.keysOf(content.g);
+    const known = keys.peers[contact.id] ?? [];
+    if (known.some((c) => c.id === chain.id)) return;
+    keys.peers[contact.id] = [chain, ...known].slice(0, 2);
+    this.markDirty('gkeys');
+    // Messages that came before the key.
+    const waiting = (keys.pending ?? []).filter((p) => p.from === contact.id);
+    keys.pending = (keys.pending ?? []).filter((p) => p.from !== contact.id);
+    for (const p of waiting) {
+      const { header, body } = unpack<GroupWireHeader>(unb64(p.wire));
+      void this.handleGroupWire(p.from, header, body).catch(() => {});
+    }
+  }
+
+  /** A member lost my key (a restored backup, a new device): they get my current chain. */
+  private async resendSenderKey(contact: Contact, groupId: unknown): Promise<void> {
+    if (!this.groupsOn() || typeof groupId !== 'string') return;
+    const group = this.contacts[groupChatId(groupId)]?.group;
+    const keys = this.gkeys[groupId];
+    if (!group || group.left || !keys?.mine || !group.members.some((m) => m.id === contact.id)) return;
+    await this.sendControl(contact, { t: 'skd', g: groupId, ...distributionOf(keys.mine) });
+    if (!keys.sent.includes(contact.id)) keys.sent.push(contact.id);
+    this.markDirty('gkeys');
+  }
+
+  private async handleGroupWire(senderId: string, header: GroupWireHeader, body: Uint8Array): Promise<void> {
+    if (!this.groupsOn() || typeof header.g !== 'string') return;
+    const chat = this.contacts[groupChatId(header.g)];
+    const group = chat?.group;
+    if (!group || group.left) return;
+    const member = group.members.find((m) => m.id === senderId);
+    if (!member) return;
+    const keys = this.keysOf(header.g);
+    const chains = keys.peers[senderId] ?? [];
+    const chain = chains.find((c) => c.id === header.cid);
+    if (!chain) {
+      // Their key is still on the way (or was lost): keep the message a while and ask for it.
+      keys.pending = [...(keys.pending ?? []).filter((p) => Date.now() - p.at < 7 * DAY_MS), { from: senderId, wire: b64(pack(header, body)), at: Date.now() }].slice(-50);
+      this.markDirty('gkeys');
+      const asked = keys.asked?.[senderId] ?? 0;
+      if (Date.now() - asked > 60_000) {
+        keys.asked = { ...keys.asked, [senderId]: Date.now() };
+        void this.sendControl(this.memberContact(member), { t: 'skreq', g: header.g });
+      }
+      return;
+    }
+    const { chain: next, plaintext } = senderDecrypt(chain, header, body, header.g, senderId);
+    keys.peers[senderId] = chains.map((c) => (c.id === next.id ? next : c));
+    this.markDirty('gkeys');
+    const { header: content, body: data } = unpack<Content>(plaintext);
+    if (content.t !== 'msg' || content.g !== header.g || typeof content.id !== 'string') return;
+    const conversation = this.conversations.get(chat.id) ?? [];
+    if (conversation.some((m) => m.id === content.id)) return;
+    const now = Date.now();
+    const atts = await this.receiveAttachments(content, data);
+    const reply = content.r && typeof content.r.id === 'string' ? { id: content.r.id, text: String(content.r.s ?? '').slice(0, 300), out: false } : undefined;
+    const message: Message = {
+      id: content.id,
+      dir: 'in',
+      ts: Number(content.ts) || now,
+      at: now,
+      from: senderId,
+      ...(typeof content.text === 'string' ? { text: content.text.slice(0, 64_000) } : {}),
+      ...(cleanPreview(content.pv, content.text) ? { preview: cleanPreview(content.pv, content.text) } : {}),
+      ...(atts.length ? { atts } : {}),
+      ...(reply ? { reply } : {}),
+    };
+    this.addMessage(chat.id, message);
+    // Their own name, as with a direct message.
+    const sender = this.contacts[senderId];
+    if (sender && typeof content.p?.n === 'string' && content.p.n.trim() && content.p.n !== sender.displayName) this.updateContact(senderId, { displayName: content.p.n.trim().slice(0, 64) });
+    const updated = this.updateContact(chat.id, { lastActivity: now, unread: chat.unread + 1, ...(chat.archived && !chat.muted ? { archived: false } : {}) })!;
+    if (!updated.muted) this.events.onIncoming?.(updated, message);
+  }
+
+  /** «Щит» of a group: how many of the other members I have verified. */
+  groupVerified(chatId: string): { verified: number; total: number } {
+    const group = this.contacts[chatId]?.group;
+    if (!group) return { verified: 0, total: 0 };
+    const others = group.members.filter((m) => m.id !== this.account.userId);
+    return { verified: others.filter((m) => this.contacts[m.id]?.verified && this.contacts[m.id].id === m.id).length, total: others.length };
+  }
+
   // ---- veil:// invites (features.invites) -------------------------------------------------
 
   /** A new invite link with my identity key and a one-time token (valid 7 days). */
@@ -1259,14 +1613,16 @@ export class Messenger {
   }
 
   async deleteChat(contactId: string): Promise<void> {
+    if (this.contacts[contactId]?.group && !this.contacts[contactId].group!.left) await this.leaveGroup(contactId);
+    if (this.contacts[contactId]?.group) delete this.gkeys[this.contacts[contactId].group!.id];
     await this.clearChat(contactId);
     if (isSavedChat(contactId)) return; // «Избранное» stays, just empty
     delete this.contacts[contactId];
     delete this.sessions[contactId];
     delete this.online[contactId];
     this.conversations.delete(contactId);
-    this.outbox = this.outbox.filter((item) => item.to !== contactId);
-    this.markDirty('contacts', 'sessions', 'outbox', `conv.${contactId}`);
+    this.outbox = this.outbox.filter((item) => item.to !== contactId && item.chat !== contactId);
+    this.markDirty('contacts', 'sessions', 'outbox', 'gkeys', `conv.${contactId}`);
     this.scheduleBackup();
     this.changed();
   }
@@ -1369,6 +1725,7 @@ export class Messenger {
     if (!body) return;
     const contact = this.requireSendable(contactId);
     const now = Date.now();
+    if (options.capsule && contact.group) throw new MessengerError('group', 'В группах капсул времени нет');
     if (options.capsule && options.capsule > now + 60_000 && !isSavedChat(contactId)) {
       // The text is sealed with a key only this side has until the date comes.
       const key = newContentKey();
@@ -1458,6 +1815,7 @@ export class Messenger {
     for (const file of files) {
       if (file.data.length > MAX_ATTACHMENT_BYTES) throw new MessengerError('too_large', `«${file.name}» больше 20 МБ`);
     }
+    if (options.once && contact.group) throw new MessengerError('group', 'В группах нет фото «на один просмотр»');
     if (options.once) return this.sendOnce(contact, files, options);
     const groups: OutgoingFile[][] = [];
     let current: OutgoingFile[] = [];
@@ -1684,7 +2042,8 @@ export class Messenger {
       data = concat(...parts);
     }
     try {
-      await this.encryptAndQueue(contact, content, data, [message.id]);
+      if (contact.group) await this.deliverGroup(contact, content, data, [message.id]);
+      else await this.encryptAndQueue(contact, content, data, [message.id]);
     } catch (error) {
       if (error instanceof RelayRequestError && (error.code === 'offline' || error.code === 'timeout')) return; // retried on reconnect
       console.warn('send failed', error);
@@ -1715,7 +2074,7 @@ export class Messenger {
   }
 
   private async sendControl(contact: Contact, content: Content): Promise<void> {
-    if (isSavedChat(contact.id)) return;
+    if (isSavedChat(contact.id) || contact.group) return;
     try {
       await this.encryptAndQueue(contact, content, undefined, []);
     } catch (error) {
@@ -1793,7 +2152,7 @@ export class Messenger {
         try {
           await this.relay.request({ type: 'send', to: item.to, cid: item.qid }, unb64(item.env));
           this.outbox.shift();
-          this.setStatus(item.to, item.msgIds, 'sent');
+          this.setStatus(item.chat ?? item.to, item.msgIds, 'sent');
         } catch (error) {
           if (error instanceof RelayRequestError && (error.code === 'offline' || error.code === 'timeout')) break;
           if (error instanceof RelayRequestError && error.code === 'rate_limited') {
@@ -1801,7 +2160,7 @@ export class Messenger {
             continue;
           }
           this.outbox.shift();
-          this.setStatus(item.to, item.msgIds, 'failed');
+          this.setStatus(item.chat ?? item.to, item.msgIds, 'failed');
         }
         this.markDirty('outbox');
       }
@@ -1853,6 +2212,7 @@ export class Messenger {
 
   async setTimer(contactId: string, seconds: number): Promise<void> {
     const contact = this.requireContact(contactId);
+    if (contact.group) throw new MessengerError('group', 'В группах исчезающих сообщений пока нет');
     if (contact.timer === seconds) return;
     this.updateContact(contactId, { timer: seconds });
     this.addSystem(contactId, { kind: 'timer', seconds, by: 'me' });
@@ -1869,7 +2229,7 @@ export class Messenger {
   private async sendEphemeral(contactId: string, content: Content): Promise<boolean> {
     const contact = this.contacts[contactId];
     const session = this.confirmedSession(contactId);
-    if (isSavedChat(contactId)) return false;
+    if (isSavedChat(contactId) || isGroupChat(contactId)) return false;
     if (!this.relay || this.relay.status !== 'online' || !contact || contact.blocked || !session) return false;
     const envelope = sealEnvelope(unb64(contact.dhKey), this.senderInfo(), ephemeralEncrypt(session, pack(content)));
     try {
@@ -2055,6 +2415,8 @@ export class Messenger {
     // Nobody can write into «Избранное», and our own envelopes are ignored.
     if (contactId === this.account.userId || isSavedChat(contactId)) return;
     if (this.contacts[contactId]?.blocked) return;
+    const peek = unpack<{ k?: string }>(wire);
+    if (peek.header.k === 'grp') return this.handleGroupWire(contactId, peek.header as GroupWireHeader, peek.body);
     const { header, body } = parseWire(wire);
     const list = this.sessions[contactId] ?? [];
 
@@ -2112,6 +2474,8 @@ export class Messenger {
       contact = previous
         ? this.replaceIdentity(previous, fresh)
         : this.createContact(fresh, content.t === 'msg' && content.p?.n ? content.p.n : (info?.username ?? 'Неизвестный'));
+      // Someone from a group I am in: no chat in the list until we talk directly.
+      if (!previous && ['skd', 'skreq', 'gst', 'gleave'].includes(content.t)) contact = this.updateContact(contactId, { groupOnly: true })!;
     } else if (contact.dhKey !== sender.fd) {
       contact = this.updateContact(contactId, { dhKey: sender.fd, dhSig: sender.fs })!;
     }
@@ -2207,7 +2571,7 @@ export class Messenger {
         };
         this.addMessage(contact.id, message);
         this.clearTyping(contact.id);
-        const patch: Partial<Contact> = { lastActivity: now, unread: contact.unread + 1 };
+        const patch: Partial<Contact> = { lastActivity: now, unread: contact.unread + 1, ...(contact.groupOnly ? { groupOnly: undefined } : {}) };
         if (content.p?.n && content.p.n !== contact.displayName) patch.displayName = String(content.p.n).slice(0, 64);
         // Like Telegram: a new message brings an archived (not muted) chat back.
         if (contact.archived && !contact.muted) patch.archived = false;
@@ -2251,6 +2615,18 @@ export class Messenger {
       }
       case 'inv':
         this.redeemInvite(contact, content.tok);
+        return;
+      case 'skd':
+        this.receiveSenderKey(contact, content);
+        return;
+      case 'skreq':
+        await this.resendSenderKey(contact, content.g);
+        return;
+      case 'gst':
+        if (this.groupsOn()) await this.applyGroupState(contact.id, content.g);
+        return;
+      case 'gleave':
+        if (this.groupsOn()) this.memberLeft(contact.id, content.g);
         return;
       case 'viewed': {
         if (typeof content.id !== 'string') return;

@@ -23,7 +23,7 @@ function nextNewYear(): number {
 }
 
 /** «Отправить позже» and «Капсула времени» next to the send button. */
-export function SchedulePopover({ onPick, onClose }: { onPick(choice: ScheduleChoice): void; onClose(): void }) {
+export function SchedulePopover({ onPick, onClose, capsule: capsuleAllowed = true }: { onPick(choice: ScheduleChoice): void; onClose(): void; capsule?: boolean }) {
   const [custom, setCustom] = useState(() => localInput(Date.now() + 3 * 3600_000));
   const [capsule, setCapsule] = useState(() => localInput(nextNewYear()));
   const [error, setError] = useState('');
@@ -56,16 +56,20 @@ export function SchedulePopover({ onPick, onClose }: { onPick(choice: ScheduleCh
             <CalendarClock size={15} /> Выбрать дату
           </button>
         </div>
-        <div className="schedule-title capsule">
-          <Hourglass size={15} /> Капсула времени
-        </div>
-        <span className="schedule-hint">Доставится сразу, а откроется только в выбранный день. До этого собеседник увидит карточку с датой.</span>
-        <div className="schedule-custom">
-          <input type="datetime-local" className="input" aria-label="Когда открыть капсулу" value={capsule} onChange={(e) => setCapsule(e.target.value)} />
-          <button className="btn btn-sm btn-secondary" onClick={() => pickAt(capsule, 'capsule')}>
-            <Hourglass size={15} /> Отправить капсулу
-          </button>
-        </div>
+        {capsuleAllowed && (
+          <>
+            <div className="schedule-title capsule">
+              <Hourglass size={15} /> Капсула времени
+            </div>
+            <span className="schedule-hint">Доставится сразу, а откроется только в выбранный день. До этого собеседник увидит карточку с датой.</span>
+            <div className="schedule-custom">
+              <input type="datetime-local" className="input" aria-label="Когда открыть капсулу" value={capsule} onChange={(e) => setCapsule(e.target.value)} />
+              <button className="btn btn-sm btn-secondary" onClick={() => pickAt(capsule, 'capsule')}>
+                <Hourglass size={15} /> Отправить капсулу
+              </button>
+            </div>
+          </>
+        )}
         {error && <span className="field-error">{error}</span>}
       </div>
     </>

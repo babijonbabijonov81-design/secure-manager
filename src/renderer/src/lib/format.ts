@@ -145,6 +145,30 @@ export function systemText(message: Message, contact: Contact | undefined): stri
       return sys.match
         ? `Слова в звонке совпали — между вами и «${name}» никого нет`
         : 'Слова в звонке не совпали. Разговор могли перехватить — сверьте код безопасности при встрече';
+    case 'group': {
+      const by = sys.by ?? '';
+      switch (sys.what) {
+        case 'created':
+          return `Вы создали группу «${sys.value}». Сообщения шифруются для каждого участника`;
+        case 'joined':
+          return `${by} добавил(а) вас в группу «${sys.value}»`;
+        case 'added':
+          return by === 'Вы' ? `Вы добавили ${sys.who}` : `${by} добавил(а) ${sys.who}`;
+        case 'removed':
+          return by === 'Вы' ? `Вы удалили ${sys.who} из группы` : `${by} удалил(а) ${sys.who} из группы`;
+        case 'left':
+          return sys.who === 'Вы' ? 'Вы вышли из группы' : `${sys.who} вышел(а) из группы`;
+        case 'renamed':
+          return by === 'Вы' ? `Вы переименовали группу в «${sys.value}»` : `${by} переименовал(а) группу в «${sys.value}»`;
+        case 'role':
+          return sys.value === 'owner'
+            ? `${sys.who === 'Вы' ? 'Вы теперь владелец' : `${sys.who} теперь владелец`} группы`
+            : sys.value === 'admin'
+              ? `${sys.who === 'Вы' ? 'Вы теперь админ' : `${sys.who} теперь админ`}`
+              : `${sys.who === 'Вы' ? 'Вы больше не админ' : `${sys.who} больше не админ`}`;
+      }
+      return 'Группа изменена';
+    }
     case 'invite':
       return sys.by === 'me'
         ? `Контакт добавлен по приглашению «${name}» — ключ совпал, контакт проверен`

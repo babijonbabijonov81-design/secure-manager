@@ -27,8 +27,8 @@ export interface BackupHeader {
   records: number;
 }
 
-/** Records that never go into a .veil file: ratchet state and delivery bookkeeping. */
-export const BACKUP_SKIPPED = new Set(['sessions', 'outbox', 'seen']);
+/** Records that never go into a .veil file: ratchet and sender-key state, delivery bookkeeping. */
+export const BACKUP_SKIPPED = new Set(['sessions', 'outbox', 'seen', 'gkeys']);
 
 const key = (password: string, kdf: BackupHeader['kdf']) =>
   scryptAsync(utf8(password.normalize('NFKC')), unb64(kdf.salt), { N: kdf.N, r: kdf.r, p: kdf.p, dkLen: 32, maxmem: 2 ** 30 });
