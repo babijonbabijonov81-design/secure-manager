@@ -89,6 +89,8 @@ export interface VeilBridge {
   requestCamera(): Promise<boolean>;
   /** Quick unlock: the vault key in the system keychain, behind a PIN or a fingerprint. */
   quickUnlock: {
+    /** Which account on this computer the calls below are about (each has its own PIN and fingerprint). */
+    select(slot: 1 | 2): void;
     status(): Promise<QuickUnlockStatus>;
     enablePin(blob: string): Promise<void>;
     loadPin(): Promise<string | null>;

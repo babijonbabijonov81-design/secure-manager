@@ -2,7 +2,7 @@
 import { expect } from 'vitest';
 import { startRelay, type RelayHandle, type RelayOptions } from '../server/src/relay.ts';
 import { createAccount, type Messenger } from '../src/core/messenger.ts';
-import { MemoryStorage } from '../src/core/storage.ts';
+import { MemoryStorage, type StorageBackend } from '../src/core/storage.ts';
 
 export const FAST_KDF = { N: 2 ** 10, r: 8, p: 1 };
 
@@ -30,7 +30,7 @@ export async function testRelay(options: RelayOptions = {}): Promise<TestRelay> 
 }
 
 let counter = 0;
-export async function makeUser(url: string, name: string, storage = new MemoryStorage(), displayName = name[0].toUpperCase() + name.slice(1)) {
+export async function makeUser(url: string, name: string, storage: StorageBackend = new MemoryStorage(), displayName = name[0].toUpperCase() + name.slice(1)) {
   const username = `${name}_${process.pid % 1000}_${counter++}`;
   const messenger = await createAccount({ storage, serverUrl: url, username, displayName, password: `${name}-password`, kdf: FAST_KDF });
   await waitFor(() => messenger.getSnapshot().status === 'online');

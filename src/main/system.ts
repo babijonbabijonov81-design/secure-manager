@@ -9,7 +9,10 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const MAX_ATTEMPTS = 5;
-const file = () => join(app.getPath('userData'), 'quick-unlock.json');
+/** Each account on this computer has its own quick unlock (Settings → «Аккаунты»). */
+type Slot = 1 | 2;
+const file = (slot: Slot) => join(app.getPath('userData'), slot === 2 ? 'quick-unlock-2.json' : 'quick-unlock.json');
+export const quickSlot = (value: unknown): Slot => (value === 2 ? 2 : 1);
 
 interface Stored {
   /** The PIN-wrapped vault key, itself encrypted by safeStorage (base64). */
@@ -31,17 +34,17 @@ export interface QuickUnlockStatus {
   hello: false;
 }
 
-async function load(): Promise<Stored> {
+async function load(slot: Slot): Promise<Stored> {
   try {
-    return JSON.parse(await readFile(file(), 'utf8')) as Stored;
+    return JSON.parse(await readFile(file(slot), 'utf8')) as Stored;
   } catch {
     return {};
   }
 }
 
-async function save(stored: Stored): Promise<void> {
-  if (!stored.pin && !stored.fingerprint) await rm(file(), { force: true });
-  else await writeFile(file(), JSON.stringify(stored), { mode: 0o600 });
+async function save(slot: Slot, stored: Stored): Promise<void> {
+  if (!stored.pin && !stored.fingerprint) await rm(file(slot), { force: true });
+  else await writeFile(file(slot), JSON.stringify(stored), { mode: 0o600 });
 }
 
 function keychain(): QuickUnlockStatus['keychain'] {
@@ -80,8 +83,8 @@ async function fingerprintAvailable(): Promise<boolean> {
   return fprintdChecked;
 }
 
-export async function quickUnlockStatus(): Promise<QuickUnlockStatus> {
-  const stored = await load();
+export async function quickUnlockStatus(slot: Slot): Promise<QuickUnlockStatus> {
+  const stored = await load(slot);
   const kc = keychain();
   return {
     available: kc !== 'none',
@@ -93,15 +96,15 @@ export async function quickUnlockStatus(): Promise<QuickUnlockStatus> {
   };
 }
 
-export async function enablePin(blob: string): Promise<void> {
+export async function enablePin(slot: Slot, blob: string): Promise<void> {
   if (keychain() === 'none') throw new Error('Нет системной связки ключей');
-  const stored = await load();
-  await save({ ...stored, pin: safeStorage.encryptString(String(blob)).toString('base64'), failures: 0 });
+  const stored = await load(slot);
+  await save(slot, { ...stored, pin: safeStorage.encryptString(String(blob)).toString('base64'), failures: 0 });
 }
 
 /** The PIN-wrapped key (the renderer checks the PIN), or null. */
-export async function loadPin(): Promise<string | null> {
-  const stored = await load();
+export async function loadPin(slot: Slot): Promise<string | null> {
+  const stored = await load(slot);
   if (!stored.pin) return null;
   try {
     return safeStorage.decryptString(Buffer.from(stored.pin, 'base64'));
@@ -111,32 +114,32 @@ export async function loadPin(): Promise<string | null> {
 }
 
 /** A wrong PIN: after five in a row the wrapped key is deleted. Returns attempts left. */
-export async function pinFailed(): Promise<number> {
-  const stored = await load();
+export async function pinFailed(slot: Slot): Promise<number> {
+  const stored = await load(slot);
   const failures = (stored.failures ?? 0) + 1;
   if (failures >= MAX_ATTEMPTS) {
-    await save({ fingerprint: stored.fingerprint });
+    await save(slot, { fingerprint: stored.fingerprint });
     return 0;
   }
-  await save({ ...stored, failures });
+  await save(slot, { ...stored, failures });
   return MAX_ATTEMPTS - failures;
 }
 
-export async function pinSucceeded(): Promise<void> {
-  const stored = await load();
-  if (stored.failures) await save({ ...stored, failures: 0 });
+export async function pinSucceeded(slot: Slot): Promise<void> {
+  const stored = await load(slot);
+  if (stored.failures) await save(slot, { ...stored, failures: 0 });
 }
 
-export async function enableFingerprint(key: string): Promise<void> {
+export async function enableFingerprint(slot: Slot, key: string): Promise<void> {
   if (!(await fingerprintAvailable())) throw new Error('Сканер отпечатков не найден');
-  const stored = await load();
-  await save({ ...stored, fingerprint: safeStorage.encryptString(String(key)).toString('base64') });
+  const stored = await load(slot);
+  await save(slot, { ...stored, fingerprint: safeStorage.encryptString(String(key)).toString('base64') });
 }
 
 let verifying: ChildProcess | null = null;
 /** Asks fprintd for a finger; on a match returns the vault key (base64), otherwise null. */
-export async function unlockWithFingerprint(): Promise<string | null> {
-  const stored = await load();
+export async function unlockWithFingerprint(slot: Slot): Promise<string | null> {
+  const stored = await load(slot);
   if (!stored.fingerprint || !(await fingerprintAvailable())) return null;
   verifying?.kill();
   const matched =
@@ -166,11 +169,11 @@ export async function unlockWithFingerprint(): Promise<string | null> {
   }
 }
 
-export async function disableQuickUnlock(what: 'pin' | 'fingerprint' | 'all'): Promise<void> {
-  const stored = await load();
-  if (what === 'all') return save({});
+export async function disableQuickUnlock(slot: Slot, what: 'pin' | 'fingerprint' | 'all'): Promise<void> {
+  const stored = await load(slot);
+  if (what === 'all') return save(slot, {});
   const { [what]: _removed, ...rest } = stored;
-  await save(rest);
+  await save(slot, rest);
 }
 
 // ---- the operating system's lock screen -------------------------------------------------------

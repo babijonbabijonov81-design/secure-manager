@@ -6,51 +6,86 @@ import { unlock, unlockWithKey, type Messenger, type MessengerEvents } from '../
 import { bridge } from '../../../core/platform.ts';
 import { unwrapWithPin, type PinBlob } from '../../../core/quick-unlock.ts';
 import type { StorageBackend } from '../../../core/storage.ts';
+import { accountTitle, type DeviceAccount, type Slot } from '../../../core/accounts.ts';
 import { useQuickUnlockStatus } from '../components/QuickUnlock.tsx';
 import { CodeInput } from '../components/SecurityDialogs.tsx';
 import { Backdrop, ConfirmDialog, Logo } from '../lib/ui.tsx';
 
-// Wrong passwords happen before the vault is open, so they are counted here (just a number)
-// and written to the encrypted security log after the next successful login.
-const FAILED_KEY = 'veil.failed';
-const failedAttempts = () => {
+// Wrong passwords happen before the vault is open, so they are counted here (just a number, one
+// per account) and written to the encrypted security log after the next successful login.
+const failedKey = (slot: Slot) => (slot === 2 ? 'veil.failed.2' : 'veil.failed');
+const failedAttempts = (slot: Slot) => {
   try {
-    return Number(localStorage.getItem(FAILED_KEY)) || 0;
+    return Number(localStorage.getItem(failedKey(slot))) || 0;
   } catch {
     return 0;
   }
 };
-const countFailedAttempt = () => {
+const countFailedAttempt = (slot: Slot) => {
   try {
-    localStorage.setItem(FAILED_KEY, String(failedAttempts() + 1));
+    localStorage.setItem(failedKey(slot), String(failedAttempts(slot) + 1));
   } catch {
     // storage unavailable
   }
 };
-const resetFailedAttempts = () => {
+const resetFailedAttempts = (slot: Slot) => {
   try {
-    localStorage.removeItem(FAILED_KEY);
+    localStorage.removeItem(failedKey(slot));
   } catch {
     // storage unavailable
   }
 };
 
+/** With two accounts on the device: which one this lock screen opens. */
+function AccountPicker({ slot, accounts, onSwitch }: { slot: Slot; accounts: DeviceAccount[]; onSwitch(slot: Slot): void }) {
+  if (accounts.length < 2) return null;
+  return (
+    <div className="account-picker" role="tablist" aria-label="Аккаунт">
+      {accounts.map((a) => (
+        <button
+          key={a.slot}
+          type="button"
+          role="tab"
+          aria-selected={a.slot === slot}
+          className={a.slot === slot ? 'active' : ''}
+          onClick={() => a.slot !== slot && onSwitch(a.slot)}
+        >
+          <span className="account-dot">{accountTitle(a).slice(0, 1).toUpperCase()}</span>
+          <span className="account-names">
+            <b>{accountTitle(a)}</b>
+            {a.label?.username && !a.label.hidden && <small>@{a.label.username}</small>}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function LockScreen({
+  slot,
+  accounts,
+  notice = '',
   storage,
   events,
   onUnlock,
+  onSwitch,
   onReset,
 }: {
+  slot: Slot;
+  accounts: DeviceAccount[];
+  notice?: string;
   storage: StorageBackend;
   events: MessengerEvents;
   onUnlock(messenger: Messenger): void;
+  onSwitch(slot: Slot): void;
   onReset(): void;
 }) {
+  const picker = <AccountPicker slot={slot} accounts={accounts} onSwitch={onSwitch} />;
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(notice);
   const [shake, setShake] = useState(0);
   const [confirmReset, setConfirmReset] = useState(false);
   const [pending, setPending] = useState<Messenger | null>(null);
@@ -64,8 +99,8 @@ export function LockScreen({
 
   const opened = (messenger: Messenger, method: 'password' | 'pin' | 'fingerprint') => {
     if (messenger.wipedReal) void bridge?.quickUnlock.disable('all');
-    messenger.recordLogin(method, failedAttempts());
-    resetFailedAttempts();
+    messenger.recordLogin(method, failedAttempts(slot));
+    resetFailedAttempts(slot);
     if (messenger.needsTotp) {
       setPending(messenger);
       setBusy(false);
@@ -74,7 +109,7 @@ export function LockScreen({
     } else onUnlock(messenger);
   };
   const failed = (text: string, attempt = true) => {
-    if (attempt) countFailedAttempt();
+    if (attempt) countFailedAttempt(slot);
     setError(text);
     setShake((n) => n + 1);
     setBusy(false);
@@ -198,6 +233,7 @@ export function LockScreen({
         {bridge && <div className="titlebar" style={{ background: 'transparent', borderBottom: 0, position: 'fixed', inset: '0 0 auto 0' }} />}
         <div className="center-stage">
           <form className={`glass-card${shake ? ' shake' : ''}`} key={shake} onSubmit={submitPin} style={{ maxWidth: 400 }}>
+            {picker}
             <div className="brand" style={{ marginBottom: 24 }}>
               <div className="brand-logo">
                 <Logo size={68} />
@@ -253,6 +289,7 @@ export function LockScreen({
       {bridge && <div className="titlebar" style={{ background: 'transparent', borderBottom: 0, position: 'fixed', inset: '0 0 auto 0' }} />}
       <div className="center-stage">
         <form className={`glass-card${shake ? ' shake' : ''}`} key={shake} onSubmit={submit} style={{ maxWidth: 400 }}>
+          {picker}
           <div className="brand" style={{ marginBottom: 24 }}>
             <div className="brand-logo">
               <Logo size={68} />
@@ -322,9 +359,13 @@ export function LockScreen({
       </div>
       {confirmReset && (
         <ConfirmDialog
-          title="Сбросить Veil?"
-          text="Пароль невозможно восстановить — в этом и смысл защиты. Можно только удалить все данные на этом устройстве и создать новый аккаунт. Переписка будет потеряна навсегда."
-          confirm="Удалить всё"
+          title={accounts.length > 1 ? 'Удалить этот аккаунт с устройства?' : 'Сбросить Veil?'}
+          text={
+            accounts.length > 1
+              ? 'Пароль невозможно восстановить — в этом и смысл защиты. Можно только удалить данные этого аккаунта на этом устройстве. Переписка в нём будет потеряна навсегда, другой аккаунт останется как был.'
+              : 'Пароль невозможно восстановить — в этом и смысл защиты. Можно только удалить все данные на этом устройстве и создать новый аккаунт. Переписка будет потеряна навсегда.'
+          }
+          confirm={accounts.length > 1 ? 'Удалить аккаунт' : 'Удалить всё'}
           danger
           onClose={() => setConfirmReset(false)}
           onConfirm={async () => {

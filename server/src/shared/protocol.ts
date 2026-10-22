@@ -119,6 +119,7 @@ export type RequestFrame =
   | { type: 'backup_put'; reqId: string; meta: BackupMeta }
   | { type: 'devices'; reqId: string }
   | { type: 'device_revoke'; reqId: string; id: string }
+  | { type: 'device_signout'; reqId: string }
   /** Is this @name free? (for the live hint while typing a new one) */
   | { type: 'username_check'; reqId: string; username: string }
   /** Take a new @name; the old one is released at once. */

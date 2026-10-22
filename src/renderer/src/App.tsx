@@ -1,8 +1,22 @@
 import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { hasAccount, setThisDevice, type Messenger, type MessengerEvents } from '../../core/messenger.ts';
+import {
+  deviceAccounts,
+  duplicateOf,
+  forgetAccount,
+  freeSlot,
+  lastSlot,
+  rememberAccount,
+  setLastSlot,
+  setNameHidden,
+  SpaceStorage,
+  type DeviceAccount,
+  type Slot,
+} from '../../core/accounts.ts';
+import { setThisDevice, type Messenger, type MessengerEvents } from '../../core/messenger.ts';
 import { bridge } from '../../core/platform.ts';
 import { defaultStorage } from '../../core/storage.ts';
 import type { Contact, Message, Theme } from '../../core/types.ts';
+import { AccountsContext, type AccountsApi } from './lib/accounts.tsx';
 import { ToastProvider } from './lib/ui.tsx';
 import { LockScreen } from './screens/LockScreen.tsx';
 import { MainScreen } from './screens/MainScreen.tsx';
@@ -93,9 +107,15 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean
 }
 
 export function App() {
-  const storage = useMemo(defaultStorage, []);
+  const root = useMemo(defaultStorage, []);
+  const [slot, setSlot] = useState<Slot>(1);
+  const [accounts, setAccounts] = useState<DeviceAccount[]>([]);
+  const storage = useMemo(() => new SpaceStorage(root, slot), [root, slot]);
   const [phase, setPhase] = useState<Phase>('loading');
   const [messenger, setMessenger] = useState<Messenger | null>(null);
+  // Adding an account: the one to go back to if that is cancelled.
+  const [returnTo, setReturnTo] = useState<Slot | null>(null);
+  const [notice, setNotice] = useState('');
   const incoming = useRef<(contact: Contact, message: Message) => void>(() => {});
   const reminder = useRef<(message: Message) => void>(() => {});
   const events = useMemo<MessengerEvents>(
@@ -105,40 +125,137 @@ export function App() {
 
   // Once unlocked, the account's own setting takes over (in MainScreen).
   useAppearance(phase === 'ready' ? null : rememberedTheme());
-  useEffect(() => {
-    void hasAccount(storage).then((exists) => setPhase(exists ? 'locked' : 'welcome'));
-  }, [storage]);
 
-  const ready = (m: Messenger) => {
+  const select = (next: Slot) => {
+    bridge?.quickUnlock.select(next);
+    setSlot(next);
+  };
+
+  /** The lock screen of `prefer` (or of the account used last), or the welcome screen. */
+  const show = async (prefer?: Slot) => {
+    const list = await deviceAccounts(root);
+    setAccounts(list);
+    const target = list.find((a) => a.slot === prefer)?.slot ?? (await lastSlot(root, list));
+    if (target) {
+      select(target);
+      setPhase('locked');
+    } else {
+      select(1);
+      setPhase('welcome');
+    }
+  };
+
+  useEffect(() => {
+    void show();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root]);
+
+  const ready = async (m: Messenger) => {
+    const me = m.getSnapshot().me;
+    if (!m.decoy) {
+      const twin = await duplicateOf(root, slot, me.userId);
+      if (twin) {
+        // Two copies of one account would take each other's messages: keep the one already here.
+        await m.lock();
+        await storage.clear();
+        setReturnTo(null);
+        setNotice(`@${me.username} уже есть на этом устройстве — откройте его здесь.`);
+        return show(twin);
+      }
+      await rememberAccount(root, slot, me);
+    } else await setLastSlot(root, slot);
+    setAccounts(await deviceAccounts(root));
+    setReturnTo(null);
+    setNotice('');
     setMessenger(m);
     setPhase('ready');
   };
 
-  const lock = async () => {
+  const lockCurrent = async () => {
     const current = messenger;
     setMessenger(null);
-    setPhase('locked');
     // Locked means no message text anywhere on screen, notification cards included.
     bridge?.closeAllNotifications();
     await current?.lock();
   };
 
+  const lock = async () => {
+    setPhase('locked');
+    await lockCurrent();
+  };
+
+  /** The account is gone from this device (deleted, moved by «Мост», signed out, reset). */
+  const gone = async () => {
+    setMessenger(null);
+    await bridge?.quickUnlock.disable('all');
+    await forgetAccount(root, slot);
+    await show();
+  };
+
+  const api: AccountsApi = {
+    slot,
+    accounts,
+    switchTo: (next) => {
+      void lockCurrent().then(async () => {
+        await setLastSlot(root, next);
+        await show(next);
+      });
+    },
+    add: () => {
+      void (async () => {
+        const free = await freeSlot(root);
+        if (!free) return;
+        await lockCurrent();
+        setReturnTo(slot);
+        select(free);
+        setPhase('welcome');
+      })();
+    },
+    setNameHidden: async (hidden) => {
+      const m = messenger;
+      await setNameHidden(root, slot, hidden, m && !m.decoy ? m.getSnapshot().me : null);
+      setAccounts(await deviceAccounts(root));
+    },
+  };
+
   return (
     <ErrorBoundary>
       <ToastProvider>
-        {phase === 'welcome' && <Onboarding storage={storage} events={events} onDone={ready} />}
-        {phase === 'locked' && <LockScreen storage={storage} events={events} onUnlock={ready} onReset={() => setPhase('welcome')} />}
-        {phase === 'ready' && messenger && (
-          <MainScreen
-            messenger={messenger}
-            incomingRef={incoming}
-            reminderRef={reminder}
-            onLock={lock}
-            onDeleted={() => {
-              setMessenger(null);
-              setPhase('welcome');
-            }}
+        {phase === 'welcome' && (
+          <Onboarding
+            key={slot}
+            storage={storage}
+            events={events}
+            onDone={(m) => void ready(m)}
+            onCancel={returnTo ? () => void show(returnTo) : undefined}
           />
+        )}
+        {phase === 'locked' && (
+          <LockScreen
+            key={slot}
+            slot={slot}
+            accounts={accounts}
+            notice={notice}
+            storage={storage}
+            events={events}
+            onUnlock={(m) => void ready(m)}
+            onSwitch={(next) => {
+              setNotice('');
+              void show(next);
+            }}
+            onReset={() => void gone()}
+          />
+        )}
+        {phase === 'ready' && messenger && (
+          <AccountsContext.Provider value={api}>
+            <MainScreen
+              messenger={messenger}
+              incomingRef={incoming}
+              reminderRef={reminder}
+              onLock={lock}
+              onDeleted={() => void gone()}
+            />
+          </AccountsContext.Provider>
         )}
       </ToastProvider>
     </ErrorBoundary>

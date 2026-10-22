@@ -709,6 +709,17 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         send(conn, { type: 'result', reqId: frame.reqId, data: { revoked: true } });
         return;
       }
+      case 'device_signout': {
+        // «Выйти из аккаунта» on this computer: it leaves the list but is not barred from signing in again.
+        const user = store.users.get(userId)!;
+        if (conn.deviceId) {
+          user.devices = (user.devices ?? []).filter((d) => d.id !== conn.deviceId);
+          store.touch();
+        }
+        send(conn, { type: 'result', reqId: frame.reqId, data: { signedOut: true } });
+        conn.ws.close(1000, 'signed out');
+        return;
+      }
       default:
         fail('bad_request', 'Неизвестный тип запроса');
     }

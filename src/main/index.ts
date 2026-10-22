@@ -39,6 +39,7 @@ import {
   loadPin,
   pinFailed,
   pinSucceeded,
+  quickSlot,
   quickUnlockStatus,
   unlockWithFingerprint,
   watchSystemLock,
@@ -433,14 +434,16 @@ function registerIpc(): void {
   // Locked: no message text may stay on screen in notification cards.
   ipcMain.on('notify:close-all', (event) => trusted(event) && closeAllCards());
 
-  handle('quick:status', () => quickUnlockStatus());
-  handle('quick:enable-pin', (blob: string) => enablePin(blob));
-  handle('quick:load-pin', () => loadPin());
-  handle('quick:pin-failed', () => pinFailed());
-  handle('quick:pin-ok', () => pinSucceeded());
-  handle('quick:enable-fingerprint', (key: string) => enableFingerprint(key));
-  handle('quick:fingerprint', () => unlockWithFingerprint());
-  handle('quick:disable', (what: 'pin' | 'fingerprint' | 'all') => disableQuickUnlock(['pin', 'fingerprint'].includes(what) ? what : 'all'));
+  handle('quick:status', (slot: number) => quickUnlockStatus(quickSlot(slot)));
+  handle('quick:enable-pin', (slot: number, blob: string) => enablePin(quickSlot(slot), blob));
+  handle('quick:load-pin', (slot: number) => loadPin(quickSlot(slot)));
+  handle('quick:pin-failed', (slot: number) => pinFailed(quickSlot(slot)));
+  handle('quick:pin-ok', (slot: number) => pinSucceeded(quickSlot(slot)));
+  handle('quick:enable-fingerprint', (slot: number, key: string) => enableFingerprint(quickSlot(slot), key));
+  handle('quick:fingerprint', (slot: number) => unlockWithFingerprint(quickSlot(slot)));
+  handle('quick:disable', (slot: number, what: 'pin' | 'fingerprint' | 'all') =>
+    disableQuickUnlock(quickSlot(slot), ['pin', 'fingerprint'].includes(what) ? what : 'all'),
+  );
   handle('system:lock-supported', () => systemLock);
 
   ipcMain.on('badge', (event, count: number) => {

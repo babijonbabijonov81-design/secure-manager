@@ -37,10 +37,13 @@ export function Onboarding({
   storage,
   events,
   onDone,
+  onCancel,
 }: {
   storage: StorageBackend;
   events: MessengerEvents;
   onDone(messenger: Messenger): void;
+  /** Adding a second account: back to the one already on this device. */
+  onCancel?: () => void;
 }) {
   const [step, setStep] = useState<Step>('welcome');
   const [server, setServer] = useState('');
@@ -172,10 +175,30 @@ export function Onboarding({
                   <Logo size={76} />
                 </div>
                 <h1>
-                  <span className="gradient-text">Veil</span>
+                  <span className="gradient-text">{onCancel ? 'Второй аккаунт' : 'Veil'}</span>
                 </h1>
-                <p>Мессенджер, в котором ваши слова принадлежат только вам и вашему собеседнику.</p>
+                <p>
+                  {onCancel
+                    ? 'У него будет свой пароль: паролем одного аккаунта другой не открыть.'
+                    : 'Мессенджер, в котором ваши слова принадлежат только вам и вашему собеседнику.'}
+                </p>
               </div>
+              {onCancel ? (
+                <div className="features" data-testid="add-account">
+                  <div className="feature">
+                    <div className="feature-icon">
+                      <ShieldCheck size={20} />
+                    </div>
+                    <div>
+                      <b>Войти может только владелец</b>
+                      <span>
+                        Ключи аккаунта есть только на его устройствах. Войти можно с другого вашего устройства через «Мост» с кодом сверки, по коду
+                        из письма или из файла .veil с его паролем.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
               <div className="features">
                 <div className="feature">
                   <div className="feature-icon">
@@ -205,8 +228,9 @@ export function Onboarding({
                   </div>
                 </div>
               </div>
+              )}
               <button className="btn btn-primary btn-lg btn-block" onClick={() => setStep('server')}>
-                Создать аккаунт <ArrowRight size={18} />
+                {onCancel ? 'Создать новый аккаунт' : 'Создать аккаунт'} <ArrowRight size={18} />
               </button>
               <button className="btn btn-secondary btn-block" style={{ marginTop: 10 }} onClick={() => setTransferring(true)}>
                 <ArrowRightLeft size={17} /> Перенести с другого ПК
@@ -221,6 +245,13 @@ export function Onboarding({
                   Восстановить из файла .veil
                 </button>
               </div>
+              {onCancel && (
+                <div style={{ textAlign: 'center', marginTop: 14 }}>
+                  <button className="link-btn" onClick={onCancel}>
+                    <ArrowLeft size={14} /> Вернуться к своему аккаунту
+                  </button>
+                </div>
+              )}
             </>
           )}
 

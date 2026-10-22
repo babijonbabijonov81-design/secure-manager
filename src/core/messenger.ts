@@ -3223,6 +3223,25 @@ export class Messenger {
     await this.storage.clear();
   }
 
+  /**
+   * «Выйти из аккаунта» on this device: the account stays on the server and on the other devices,
+   * this one leaves «Устройства» and forgets everything. With recovery by email the server copy is
+   * refreshed first, so signing in again brings the chats back.
+   */
+  async signOut(): Promise<void> {
+    if (this.decoy) throw new MessengerError('offline', 'Сервер не отвечает. Попробуйте позже');
+    if (this.relay?.status === 'online') {
+      if (this.account.recovery) await this.backupNow().catch(() => {});
+      try {
+        await this.relay.request({ type: 'device_signout' });
+      } catch {
+        // an older server: the device stays in the list until it is unlinked from another one
+      }
+    }
+    await this.lock();
+    await this.storage.clear();
+  }
+
   private requireContact(contactId: string): Contact {
     const contact = this.contacts[contactId];
     if (!contact) throw new MessengerError('no_contact', 'Контакт не найден');

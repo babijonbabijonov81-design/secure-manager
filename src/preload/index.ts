@@ -10,6 +10,9 @@ const listen = <T>(channel: string, callback: (value: T) => void) => {
   };
 };
 
+// The account whose quick unlock the calls below use (Settings → «Аккаунты»).
+let quickSlot: 1 | 2 = 1;
+
 const bridge: VeilBridge = {
   platform: process.platform as VeilBridge['platform'],
   version: ipcRenderer.sendSync('app:version') as string,
@@ -42,14 +45,17 @@ const bridge: VeilBridge = {
   requestMicrophone: () => ipcRenderer.invoke('mic:request'),
   requestCamera: () => ipcRenderer.invoke('camera:request'),
   quickUnlock: {
-    status: () => ipcRenderer.invoke('quick:status'),
-    enablePin: (blob) => ipcRenderer.invoke('quick:enable-pin', blob),
-    loadPin: () => ipcRenderer.invoke('quick:load-pin'),
-    pinFailed: () => ipcRenderer.invoke('quick:pin-failed'),
-    pinSucceeded: () => ipcRenderer.invoke('quick:pin-ok'),
-    enableFingerprint: (key) => ipcRenderer.invoke('quick:enable-fingerprint', key),
-    fingerprint: () => ipcRenderer.invoke('quick:fingerprint'),
-    disable: (what) => ipcRenderer.invoke('quick:disable', what),
+    select: (slot) => {
+      quickSlot = slot === 2 ? 2 : 1;
+    },
+    status: () => ipcRenderer.invoke('quick:status', quickSlot),
+    enablePin: (blob) => ipcRenderer.invoke('quick:enable-pin', quickSlot, blob),
+    loadPin: () => ipcRenderer.invoke('quick:load-pin', quickSlot),
+    pinFailed: () => ipcRenderer.invoke('quick:pin-failed', quickSlot),
+    pinSucceeded: () => ipcRenderer.invoke('quick:pin-ok', quickSlot),
+    enableFingerprint: (key) => ipcRenderer.invoke('quick:enable-fingerprint', quickSlot, key),
+    fingerprint: () => ipcRenderer.invoke('quick:fingerprint', quickSlot),
+    disable: (what) => ipcRenderer.invoke('quick:disable', quickSlot, what),
   },
   onSystemLock: (callback) => listen('system-lock', callback),
   systemLockSupported: () => ipcRenderer.invoke('system:lock-supported'),

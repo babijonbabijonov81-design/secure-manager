@@ -41,7 +41,7 @@ export function BackupFileSection({ messenger, snapshot }: { messenger: Messenge
   );
 }
 
-function ExportDialog({ messenger, username, onClose }: { messenger: Messenger; username: string; onClose(): void }) {
+export function ExportDialog({ messenger, username, onClose }: { messenger: Messenger; username: string; onClose(): void }) {
   const [password, setPassword] = useState('');
   const [repeat, setRepeat] = useState('');
   const [busy, setBusy] = useState(false);
