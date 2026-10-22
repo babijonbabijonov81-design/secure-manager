@@ -39,9 +39,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS is temporarily disabled (GitHub's macOS runners are often unavailable).
-        # To re-enable, add: { os: macos-latest, target: --mac }
         include:
+          # Apple Silicon and Intel: .dmg and .zip, ad-hoc signed (no Apple Developer ID).
+          - os: macos-latest
+            target: --mac
           - os: windows-latest
             target: --win
           - os: ubuntu-latest
