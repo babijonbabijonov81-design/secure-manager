@@ -5381,3 +5381,26 @@ button:disabled {
   font-size: 13.5px;
   text-align: center;
 }
+
+/* ---- Обновление через менеджер пакетов ---- */
+.update-command {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.update-command code {
+  display: block;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  word-break: break-all;
+  user-select: all;
+}
+.update-command .btn {
+  justify-self: start;
+}

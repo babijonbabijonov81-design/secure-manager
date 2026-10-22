@@ -1,5 +1,6 @@
 import {
   ArrowRightLeft,
+  Copy,
   DownloadCloud,
   Info,
   KeyRound,
@@ -875,10 +876,22 @@ function UpdatesSection() {
           <div style={{ width: `${state.percent ?? 0}%` }} />
         </div>
       )}
+      {state.status === 'available' && state.packaged && (
+        <div className="update-command" data-testid="update-command">
+          <span>
+            {state.packaged.kind === 'flatpak' ? 'Veil установлен через Flatpak.' : `Veil установлен пакетом .${state.packaged.kind}.`} Обновите через
+            менеджер пакетов: скачайте новый пакет на странице загрузки и выполните в папке с ним:
+          </span>
+          <code className="selectable">{state.packaged.command}</code>
+          <button className="btn btn-secondary btn-sm" onClick={() => bridge!.copyText(state.packaged!.command)}>
+            <Copy size={15} /> Копировать команду
+          </button>
+        </div>
+      )}
       <div className="form-actions" style={{ marginTop: 0 }}>
         {state.status === 'available' && (
           <button className="btn btn-primary btn-sm" onClick={() => bridge!.update.download()}>
-            {state.manual ? 'Скачать новую версию' : 'Загрузить и установить'}
+            {state.packaged ? 'Открыть страницу загрузки' : state.manual ? 'Скачать новую версию' : 'Загрузить и установить'}
           </button>
         )}
         {state.status === 'ready' && (

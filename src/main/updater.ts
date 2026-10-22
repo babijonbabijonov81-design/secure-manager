@@ -1,7 +1,10 @@
 // In-app updates from GitHub Releases.
-// The Windows installer and the Linux AppImage update themselves (electron-updater);
-// the portable .exe, .deb and unsigned macOS builds get a link to the release page.
+// The Windows installer and the Linux AppImage update themselves (electron-updater). The portable
+// .zip and unsigned macOS builds get a link to the release page; .deb, .rpm and Flatpak say
+// «Обновите через менеджер пакетов» with the command to install the downloaded package.
 
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { app, ipcMain, net, shell, type BrowserWindow } from 'electron';
 import electronUpdater from 'electron-updater';
 import type { UpdateState } from '../core/platform.ts';
@@ -13,9 +16,37 @@ const RELEASES_PAGE = `https://github.com/${RELEASES_REPO}/releases/latest`;
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 
 
-const selfUpdating = () =>
-  app.isPackaged &&
-  ((process.platform === 'win32' && !process.env.PORTABLE_EXECUTABLE_DIR) || (process.platform === 'linux' && !!process.env.APPIMAGE));
+/** The NSIS installer leaves its uninstaller next to Veil.exe; the portable .zip does not. */
+const installedOnWindows = () => process.platform === 'win32' && existsSync(join(dirname(process.execPath), 'Uninstall Veil.exe'));
+
+const selfUpdating = () => app.isPackaged && (installedOnWindows() || (process.platform === 'linux' && !!process.env.APPIMAGE));
+
+/** How this Linux build was installed, if by a package manager. */
+function packageKind(): 'deb' | 'rpm' | 'flatpak' | null {
+  if (process.platform !== 'linux' || !app.isPackaged || process.env.APPIMAGE) return null;
+  if (process.env.FLATPAK_ID || existsSync('/.flatpak-info')) return 'flatpak';
+  let release = '';
+  try {
+    release = readFileSync('/etc/os-release', 'utf8');
+  } catch {
+    // unknown distribution
+  }
+  const family = (release.match(/^(?:ID|ID_LIKE)=.*$/gm) ?? []).join(' ');
+  if (/debian|ubuntu/i.test(family) || existsSync('/usr/bin/dpkg')) return 'deb';
+  if (/fedora|rhel|centos|suse/i.test(family) || existsSync('/usr/bin/rpm')) return 'rpm';
+  return null;
+}
+
+/** The command for the package the person downloads from the release page. */
+function packageCommand(kind: 'deb' | 'rpm' | 'flatpak', version: string): string {
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+  if (kind === 'deb') return `sudo apt install ./Veil-${version}-linux-${arch === 'x64' ? 'amd64' : 'arm64'}.deb`;
+  if (kind === 'rpm') {
+    const tool = /suse/i.test(existsSync('/etc/os-release') ? readFileSync('/etc/os-release', 'utf8') : '') ? 'zypper' : 'dnf';
+    return `sudo ${tool} install ./Veil-${version}-linux-${arch === 'x64' ? 'x86_64' : 'aarch64'}.rpm`;
+  }
+  return `flatpak install --user --reinstall ./Veil-${version}-linux-${arch === 'x64' ? 'x86_64' : 'aarch64'}.flatpak`;
+}
 
 const newer = (a: string, b: string) => {
   const pa = a.replace(/^v/, '').split('.').map(Number);
@@ -49,7 +80,9 @@ export function setupUpdater(getWindow: () => BrowserWindow | null, beforeInstal
       });
       if (!response.ok) throw new Error(String(response.status));
       const release = (await response.json()) as { tag_name: string };
-      if (newer(release.tag_name, app.getVersion())) set({ status: 'available', version: release.tag_name.replace(/^v/, '') });
+      const version = release.tag_name.replace(/^v/, '');
+      const kind = packageKind();
+      if (newer(release.tag_name, app.getVersion())) set({ status: 'available', version, ...(kind ? { packaged: { kind, command: packageCommand(kind, version) } } : {}) });
       else set({ status: 'none' });
     } catch (error) {
       set({ status: 'error', error: friendlyError(error as Error) });

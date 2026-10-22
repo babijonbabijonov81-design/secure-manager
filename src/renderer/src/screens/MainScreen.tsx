@@ -398,7 +398,9 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           {update.status === 'downloading' && <>Загрузка обновления… {update.percent ?? 0}%</>}
           {update.status === 'ready' && <>Обновление {update.version} готово</>}
           {update.status === 'available' && (
-            <button onClick={() => bridge!.update.download()}>{update.manual ? 'Скачать' : 'Обновить'}</button>
+            <button onClick={() => (update.packaged ? setModal({ kind: 'settings', tab: 'about' }) : bridge!.update.download())}>
+              {update.packaged ? 'Как обновить' : update.manual ? 'Скачать' : 'Обновить'}
+            </button>
           )}
           {update.status === 'ready' && <button onClick={() => bridge!.update.install()}>Перезапустить</button>}
           <button className="banner-close" onClick={() => setUpdateHidden(true)} aria-label="Скрыть">

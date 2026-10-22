@@ -15,6 +15,11 @@ export interface UpdateState {
   percent?: number;
   /** This build cannot install updates itself: offer the download page instead. */
   manual: boolean;
+  /**
+   * Installed by a package manager (.deb, .rpm, Flatpak): «Обновите через менеджер пакетов» and
+   * the command to run after downloading the new package.
+   */
+  packaged?: { kind: 'deb' | 'rpm' | 'flatpak'; command: string };
   error?: string;
 }
 
