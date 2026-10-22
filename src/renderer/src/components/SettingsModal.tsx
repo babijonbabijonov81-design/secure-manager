@@ -33,6 +33,8 @@ import { FEATURE_NAMES, type AudioSettings, type FeatureName, type MessengerSnap
 import { canChooseOutput, meterStream, openMicrophone, Tones, useAudioDevices } from '../lib/audio.ts';
 import { formatDay, formatTime } from '../lib/format.ts';
 import { feature } from '../lib/hooks.ts';
+import { transcribeAvailable } from '../lib/transcribe.ts';
+import { TranscribeSettings } from './Transcribe.tsx';
 import { isOwnServer } from '../lib/shield.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
 import { BackupFileSection } from './BackupFile.tsx';
@@ -406,6 +408,8 @@ function AudioTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Mes
           <span className="field-hint">Камера включается только в видеозвонке, когда вы нажимаете «Камера» или «С видео».</span>
         </div>
       )}
+
+      {feature(snapshot.settings, 'transcribe') && transcribeAvailable() && <TranscribeSettings messenger={messenger} snapshot={snapshot} />}
 
       <Row title="Шумоподавление" text="Убирает фоновый шум: вентилятор, клавиатуру, улицу.">
         <Toggle label="Шумоподавление" on={audio.noiseSuppression} onChange={(v) => setAudio({ noiseSuppression: v })} />

@@ -4,11 +4,13 @@ import type { Plugin } from 'vite';
 
 const CSP = [
   "default-src 'self'",
-  "script-src 'self'",
+  // WebAssembly: the speech-recognition runtime bundled with the app («Голосовые в текст»).
+  "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  "connect-src 'self' ws: wss:",
+  // veil-model: Whisper models from this computer's own folder, never the internet.
+  "connect-src 'self' ws: wss: veil-model:",
   "media-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'none'",

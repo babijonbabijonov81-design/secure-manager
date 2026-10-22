@@ -29,6 +29,7 @@ import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
 import { SecretClipboard } from '../core/secret-clipboard.ts';
 import { discoverBridges, LanBridge } from './bridge.ts';
 import { findInvite, registerInviteProtocol } from './invite.ts';
+import { cancelModelDownload, deleteModel, downloadModel, modelStatus, registerModelScheme, serveModels } from './models.ts';
 import { fetchLinkPreview } from './preview.ts';
 import { chooseScreenSource, listScreenSources, setupScreenShare, usesPortal } from './screen-share.ts';
 import {
@@ -58,6 +59,8 @@ const DEFAULT_PORT = 8787;
 // accounts on one computer, each with its own data directory.
 const profile = process.env.VEIL_PROFILE || app.commandLine.getSwitchValue('profile');
 if (profile && /^[\w-]{1,32}$/.test(profile)) app.setPath('userData', `${app.getPath('userData')}-${profile}`);
+
+registerModelScheme();
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -352,6 +355,12 @@ function registerIpc(): void {
 
   // «Мост» over the local network: only encrypted frames pass through here.
   handle('preview:fetch', (url: string) => fetchLinkPreview(String(url)));
+  handle('models:status', () => modelStatus());
+  handle('models:download', (id: string) =>
+    downloadModel(id, (done, total) => mainWindow?.webContents.send('models:progress', { done, total })),
+  );
+  handle('models:cancel', () => cancelModelDownload());
+  handle('models:delete', (id: string) => deleteModel(id));
   handle('screen:sources', async () => ({ portal: usesPortal, sources: await listScreenSources() }));
   handle('screen:choose', (id: string | null) => chooseScreenSource(id));
   handle('invite:take', () => {
@@ -627,6 +636,7 @@ app.whenReady().then(async () => {
   }
 
   registerIpc();
+  serveModels();
   setupScreenShare();
   void registerInviteProtocol();
   createMenu();

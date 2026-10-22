@@ -1135,6 +1135,12 @@ export class Messenger {
     });
   }
 
+  /** «Голосовые в текст»: keeps the text recognised on this device next to the voice message. */
+  setTranscript(contactId: string, messageId: string, text: string): void {
+    const clean = text.trim().slice(0, 20_000);
+    this.patchMessages(contactId, new Set([messageId]), (m) => (attachmentsOf(m).some((a) => a.kind === 'voice') ? { ...m, transcript: clean } : m));
+  }
+
   // ---- veil:// invites (features.invites) -------------------------------------------------
 
   /** A new invite link with my identity key and a one-time token (valid 7 days). */

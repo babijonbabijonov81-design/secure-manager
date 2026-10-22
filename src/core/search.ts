@@ -28,7 +28,7 @@ export const normalize = (text: string) => text.normalize('NFKC').toLowerCase().
 /** What a message can be found by. Passwords in «Избранное» are found by their title only. */
 function searchableText(m: Message): string {
   if (m.note?.kind === 'password') return m.note.title ?? '';
-  const parts = [m.note?.title, m.text, m.preview?.title, m.preview?.site, ...attachmentsOf(m).filter((a) => a.kind === 'file').map((a) => a.name)];
+  const parts = [m.note?.title, m.text, m.transcript, m.preview?.title, m.preview?.site, ...attachmentsOf(m).filter((a) => a.kind === 'file').map((a) => a.name)];
   return parts.filter(Boolean).join('\n');
 }
 
@@ -79,7 +79,7 @@ function snippetFor(m: Message, words: string[]): Pick<SearchHit, 'snippet' | 'm
   const raw =
     m.note?.kind === 'password'
       ? (m.note.title ?? 'Пароль')
-      : (m.text || m.preview?.title || atts.find((a) => a.kind === 'file')?.name || (atts.some((a) => a.kind === 'voice') ? 'Голосовое' : 'Фото'));
+      : (m.text || m.transcript || m.preview?.title || atts.find((a) => a.kind === 'file')?.name || (atts.some((a) => a.kind === 'voice') ? 'Голосовое' : 'Фото'));
   const flat = raw.replace(/\s+/g, ' ').trim();
   const all = marksIn(normalize(flat), words);
   if (!all.length) return { snippet: flat.slice(0, 120), marks: [] };

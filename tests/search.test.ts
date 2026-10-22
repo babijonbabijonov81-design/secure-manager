@@ -55,6 +55,14 @@ describe('searchMessages', () => {
     expect(searchMessages(chats, '')).toEqual([]);
   });
 
+  it('finds voice messages by the text recognised on this device', () => {
+    const voice: [string, Message[]][] = [['x', [msg({ atts: [file('voice')], transcript: 'Встретимся на вокзале в семь' })]]];
+    const [hit] = searchMessages(voice, 'вокзале');
+    expect(hit.kind).toBe('voice');
+    expect(hit.snippet).toBe('Встретимся на вокзале в семь');
+    expect(searchMessages(voice, 'вокзал', 'voice')).toHaveLength(1);
+  });
+
   it('never finds a password, view-once media or a sealed capsule; skips chats on request', () => {
     expect(searchMessages(chats, 'пароль')).toHaveLength(0);
     expect(searchMessages(chats, 'почта')[0].snippet).toBe('Почта');

@@ -35,6 +35,8 @@ export type FeatureName = (typeof FEATURE_NAMES)[number];
 export type Features = Record<FeatureName, boolean>;
 export const DEFAULT_FEATURES = Object.fromEntries(FEATURE_NAMES.map((name) => [name, true])) as Features;
 
+export type TranscribeModel = 'tiny' | 'base' | 'small';
+
 export interface AudioSettings {
   /** Microphone deviceId; '' is the system default. */
   input: string;
@@ -87,6 +89,8 @@ export interface Settings {
   ownServer?: boolean;
   /** Make link previews when sending (the recipient never opens the link). */
   linkPreviews: boolean;
+  /** «Голосовые в текст»: which Whisper model to use (features.transcribe). */
+  transcribeModel: TranscribeModel;
   /** When a .veil backup file was last saved (monthly reminder). */
   backupFileAt?: number;
 }
@@ -116,6 +120,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lockOnSystemLock: true,
   lockOnHide: false,
   linkPreviews: true,
+  transcribeModel: 'base',
 };
 
 /** Stored settings from any version, completed with defaults (new feature flags start on). */
@@ -126,6 +131,7 @@ export function normalizeSettings(stored: Partial<Settings> | null | undefined):
     ...rest,
     features: { ...DEFAULT_FEATURES, ...rest.features },
     audio: { ...DEFAULT_SETTINGS.audio, ...rest.audio },
+    transcribeModel: rest.transcribeModel && ['tiny', 'base', 'small'].includes(rest.transcribeModel) ? rest.transcribeModel : DEFAULT_SETTINGS.transcribeModel,
   };
 }
 
@@ -319,6 +325,8 @@ export interface Message {
   note?: { kind: NoteKind; title?: string; reminded?: boolean };
   /** Link preview made by the sender (features.linkPreviews). */
   preview?: LinkPreview;
+  /** «Голосовые в текст»: recognised on this device, kept only here (never sent). */
+  transcript?: string;
 }
 
 export type NoteKind = 'note' | 'password' | 'link';

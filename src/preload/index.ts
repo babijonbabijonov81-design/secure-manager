@@ -68,6 +68,13 @@ const bridge: VeilBridge = {
   onFullscreen: (callback) => listen('fullscreen', callback),
   openExternal: (url) => ipcRenderer.send('open-external', url),
   linkPreview: (url) => ipcRenderer.invoke('preview:fetch', url),
+  models: {
+    status: () => ipcRenderer.invoke('models:status'),
+    download: (id) => ipcRenderer.invoke('models:download', id),
+    cancel: () => ipcRenderer.invoke('models:cancel'),
+    remove: (id) => ipcRenderer.invoke('models:delete', id),
+    onProgress: (callback) => listen('models:progress', callback),
+  },
   screen: {
     sources: () => ipcRenderer.invoke('screen:sources'),
     choose: (id) => ipcRenderer.invoke('screen:choose', id),

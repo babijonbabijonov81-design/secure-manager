@@ -123,6 +123,14 @@ export interface VeilBridge {
   openExternal(url: string): void;
   /** The sender's side of link previews: fetches a public page's title, description and picture. */
   linkPreview(url: string): Promise<{ url: string; title: string; desc?: string; site?: string; image?: Uint8Array; imageType?: string } | null>;
+  /** «Голосовые в текст»: Whisper models on this computer (downloaded only with consent). */
+  models: {
+    status(): Promise<Record<'tiny' | 'base' | 'small', { installed: boolean; mb: number }>>;
+    download(id: 'tiny' | 'base' | 'small'): Promise<void>;
+    cancel(): Promise<void>;
+    remove(id: 'tiny' | 'base' | 'small'): Promise<void>;
+    onProgress(callback: (progress: { done: number; total: number }) => void): () => void;
+  };
   /** «Показ экрана»: screens and windows to pick from, or `portal` when the system asks itself (Wayland). */
   screen: {
     sources(): Promise<{ portal: boolean; sources: { id: string; name: string; kind: 'screen' | 'window'; thumbnail: string }[] }>;

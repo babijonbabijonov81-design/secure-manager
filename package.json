@@ -32,6 +32,7 @@
   "devDependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource-variable/onest": "^5.3.1",
+    "@huggingface/transformers": "^4.2.0",
     "@noble/ciphers": "^2.4.0",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",

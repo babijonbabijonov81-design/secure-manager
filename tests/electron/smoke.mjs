@@ -1,7 +1,7 @@
 // Launches the built desktop app, creates an account against the embedded relay and
 // takes a screenshot. Run after `npm run build` (on Linux CI: under xvfb-run).
-//   node tests/electron/smoke.mjs [screenshot.png] [card.png] [call-card.png]
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+//   node tests/electron/smoke.mjs [screenshot.png] [card.png] [call-card.png] [voice-text.png]
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron } from '@playwright/test';
@@ -149,6 +149,66 @@ try {
   });
   if (!shared) throw new Error('getDisplayMedia did not get the chosen screen');
   console.log('screen sharing source ok:', screens.portal ? 'portal' : `${screens.sources.length} sources`);
+
+  // «Голосовые в текст»: the bundled ONNX runtime runs Whisper from <userData>/models through
+  // veil-model://, under the app's CSP. Needs a model folder (Xenova/whisper-tiny layout):
+  //   VEIL_TEST_MODEL=/path/to/whisper-tiny node tests/electron/smoke.mjs
+  if (process.env.VEIL_TEST_MODEL && existsSync(process.env.VEIL_TEST_MODEL)) {
+    const models = await page.evaluate(() => window.veil.models.status());
+    if (models.tiny.installed) throw new Error('model installed before consent');
+    cpSync(process.env.VEIL_TEST_MODEL, join(userData, 'models', 'Xenova', 'whisper-tiny'), { recursive: true });
+    if (!(await page.evaluate(() => window.veil.models.status())).tiny.installed) throw new Error('model not seen');
+    const worker = readdirSync(join('out', 'renderer', 'assets')).find((f) => f.startsWith('transcribe.worker'));
+    const speech = [...readFileSync(join('tests', 'fixtures', 'speech-en.ogg'))];
+    const started = Date.now();
+    const text = await page.evaluate(
+      async ({ worker, speech }) => {
+        const decoded = await new OfflineAudioContext(1, 1, 16000).decodeAudioData(new Uint8Array(speech).buffer);
+        const audio = new Float32Array(decoded.getChannelData(0));
+        const w = new Worker(`./assets/${worker}`, { type: 'module' });
+        const reply = await new Promise((resolve) => {
+          w.onmessage = (e) => resolve(e.data);
+          w.onerror = (e) => resolve({ error: e.message || 'worker error' });
+          w.postMessage({ id: 1, repo: 'Xenova/whisper-tiny', audio }, [audio.buffer]);
+        });
+        w.terminate();
+        if (reply.error) throw new Error(reply.error);
+        return reply.text;
+      },
+      { worker, speech },
+    );
+    console.log(`transcribed on device in ${Date.now() - started} ms: «${text}»`);
+    if (!/train station/i.test(text)) throw new Error(`unexpected transcript: ${text}`);
+
+    // The whole path in the interface: a voice message from a friend → «Расшифровать» → the model
+    // is chosen in the consent dialog → the text appears under the voice message.
+    const { createAccount } = await import('../../src/core/messenger.ts');
+    const { MemoryStorage } = await import('../../src/core/storage.ts');
+    const { port } = await page.evaluate(() => window.veil.server.status());
+    const friend = await createAccount({
+      storage: new MemoryStorage(),
+      serverUrl: `127.0.0.1:${port}`,
+      username: 'smoke_friend',
+      displayName: 'Друг',
+      password: 'friend-password',
+      kdf: { N: 2 ** 10, r: 8, p: 1 },
+    });
+    for (let i = 0; friend.getSnapshot().status !== 'online' && i < 100; i++) await new Promise((r) => setTimeout(r, 100));
+    const contact = await friend.addContact('smoke_test');
+    const wave = Array.from({ length: 40 }, (_, i) => 6 + ((i * 5) % 20));
+    await friend.sendMedia(contact.id, [{ name: 'voice.ogg', mime: 'audio/ogg', data: new Uint8Array(readFileSync(join('tests', 'fixtures', 'speech-en.ogg'))), kind: 'voice', dur: 4, wave }]);
+    await page.getByTestId('chat-smoke_friend').click();
+    await page.getByRole('button', { name: 'Расшифровать голосовое' }).click();
+    const dialog = page.getByTestId('model-dialog');
+    await dialog.getByText(/^Быстрая/).click();
+    await dialog.getByRole('button', { name: 'Использовать' }).click();
+    const shown = page.getByTestId('voice-text');
+    await shown.getByText(/train station/i).waitFor({ timeout: 120_000 });
+    await shown.getByText('Текст: на устройстве').waitFor();
+    if (process.argv[5]) await page.screenshot({ path: process.argv[5] });
+    friend.dispose();
+    console.log('voice message transcribed in the chat ok');
+  }
 
   // A veil:// link opened by the system while Veil runs (a second copy is started with it).
   const link = `veil://add/smoke_friend?k=${'A'.repeat(43)}`;

@@ -25,17 +25,29 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
 import type { Messenger } from '../../../core/messenger.ts';
 import { bridge, platform } from '../../../core/platform.ts';
-import { attachmentsOf, isSavedChat, MAX_ATTACHMENT_BYTES, QUICK_REACTIONS, type Attachment, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
+import {
+  attachmentsOf,
+  isSavedChat,
+  MAX_ATTACHMENT_BYTES,
+  QUICK_REACTIONS,
+  type Attachment,
+  type Contact,
+  type Message,
+  type MessengerSnapshot,
+  type TranscribeModel,
+} from '../../../core/types.ts';
 import { attachmentUrl, saveAttachment } from '../lib/attachments.ts';
 import { formatDay, sameDay, systemText, timerChip } from '../lib/format.ts';
 import { feature } from '../lib/hooks.ts';
 import { chatShield } from '../lib/shield.ts';
 import { copyImage, copyText, prepareFile } from '../lib/media.ts';
 import { presenceText } from '../lib/text.ts';
+import { decodeVoice, ipcError, transcribe, transcribeAvailable } from '../lib/transcribe.ts';
 import { Avatar, ContextMenu, useEscape, useToast, type MenuItem } from '../lib/ui.tsx';
 import { AttachmentPreview } from './AttachmentPreview.tsx';
 import { Bubble } from './Bubble.tsx';
 import { Composer } from './Composer.tsx';
+import { ModelDownloadDialog } from './Transcribe.tsx';
 
 interface Props {
   messenger: Messenger;
@@ -71,6 +83,32 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
   const [highlight, setHighlight] = useState<string | null>(null);
   const [pending, setPending] = useState<File[]>([]);
   const dragDepth = useRef(0);
+
+  // «Голосовые в текст»: on this device only; the model is downloaded once, with consent.
+  const transcribeOn = feature(snapshot.settings, 'transcribe') && transcribeAvailable();
+  const [busyVoice, setBusyVoice] = useState<string | null>(null);
+  const [modelAsk, setModelAsk] = useState<Message | null>(null);
+  const runTranscribe = useCallback(
+    async (message: Message, model?: TranscribeModel) => {
+      const voice = attachmentsOf(message).find((a) => a.kind === 'voice');
+      if (!voice || !bridge) return;
+      const chosen = model ?? messenger.getSnapshot().settings.transcribeModel;
+      if (!(await bridge.models.status())[chosen].installed) return setModelAsk(message);
+      setBusyVoice(message.id);
+      try {
+        const bytes = await messenger.getAttachment(voice.id);
+        if (!bytes) throw new Error('Голосовое недоступно');
+        const text = await transcribe(await decodeVoice(bytes), chosen);
+        messenger.setTranscript(contact.id, message.id, text);
+      } catch (error) {
+        toast(`Не удалось расшифровать: ${ipcError(error)}`, 'error');
+      } finally {
+        setBusyVoice(null);
+      }
+    },
+    [messenger, contact.id, toast],
+  );
+  const onTranscribe = useCallback((message: Message) => void runTranscribe(message), [runTranscribe]);
 
   // Mark as read while the chat is visible and the window focused.
   useEffect(() => {
@@ -321,6 +359,9 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
         onCallBack={onCallBack}
         onOpenOnce={onOpenOnce}
         onScheduled={onScheduled}
+        transcribe={transcribeOn}
+        transcribing={busyVoice === message.id}
+        onTranscribe={onTranscribe}
       />,
     );
     previous = message;
@@ -524,6 +565,17 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
         />
       )}
       {lightbox && <Lightbox messenger={messenger} items={lightbox.items} start={lightbox.index} onClose={() => setLightbox(null)} />}
+      {modelAsk && (
+        <ModelDownloadDialog
+          messenger={messenger}
+          onClose={() => setModelAsk(null)}
+          onReady={(model) => {
+            const message = modelAsk;
+            setModelAsk(null);
+            void runTranscribe(message, model);
+          }}
+        />
+      )}
       {onceView && (
         <OnceViewer
           view={onceView}

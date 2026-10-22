@@ -1,9 +1,11 @@
 import {
   AlertCircle,
+  Captions,
   Check,
   CheckCheck,
   Clock,
   Copy,
+  Cpu,
   CornerUpLeft,
   CalendarClock,
   Download,
@@ -148,6 +150,37 @@ interface BubbleProps {
   onOpenOnce(message: Message): void;
   /** A scheduled message: send it now or cancel it. */
   onScheduled(message: Message, action: 'now' | 'cancel'): void;
+  /** «Голосовые в текст» is available here (features.transcribe, desktop app). */
+  transcribe?: boolean;
+  /** This voice message is being recognised right now. */
+  transcribing?: boolean;
+  onTranscribe?(message: Message): void;
+}
+
+/** «Голосовые в текст»: the button, the progress, then the text made on this device. */
+function VoiceText({ message, busy, onTranscribe }: { message: Message; busy: boolean; onTranscribe(): void }) {
+  if (message.transcript !== undefined)
+    return (
+      <div className="voice-text" data-testid="voice-text">
+        <p>{message.transcript || 'Речь не распознана'}</p>
+        <span className="voice-text-note">
+          <Cpu size={12} /> Текст: на устройстве
+        </span>
+      </div>
+    );
+  return (
+    <button className="voice-text-btn" onClick={onTranscribe} disabled={busy} aria-label="Расшифровать голосовое">
+      {busy ? (
+        <>
+          <span className="spinner sm" /> Распознаю на этом устройстве…
+        </>
+      ) : (
+        <>
+          <Captions size={14} /> Расшифровать
+        </>
+      )}
+    </button>
+  );
 }
 
 /** A call in the chat history: direction, outcome, length and a call-back button. */
@@ -297,6 +330,9 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
               </div>
             ))}
             {voice && <VoicePlayer messenger={messenger} att={voice} />}
+            {voice && props.transcribe && (
+              <VoiceText message={message} busy={!!props.transcribing} onTranscribe={() => props.onTranscribe?.(message)} />
+            )}
             {message.text && <div className={images.length && !message.once ? 'caption' : 'text'}>{linkify(message.text)}</div>}
             {message.preview && (
               <a className="link-card" href={message.preview.url} onClick={(e) => openLink(e, message.preview!.url)} data-testid="link-preview">
