@@ -475,10 +475,14 @@ function registerIpc(): void {
 
   // A call is on: the window keeps sending and drawing video while minimized or hidden in the
   // tray (no background throttling), and macOS does not put Veil to sleep (App Nap).
+  // Only real changes reach Chromium: nothing is touched when Veil locks or hides without a call.
   let callBlocker: number | null = null;
+  let callActive = false;
   ipcMain.on('call:active', (event, active: unknown) => {
     if (!trusted(event)) return;
     const on = active === true;
+    if (on === callActive) return;
+    callActive = on;
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(!on);
     if (on && callBlocker === null) callBlocker = powerSaveBlocker.start('prevent-app-suspension');
     if (!on && callBlocker !== null) {

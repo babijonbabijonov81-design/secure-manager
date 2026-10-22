@@ -205,10 +205,18 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
   // During a call the window must not be throttled when minimized: the screen and the camera
   // would freeze for the other side, and the picture here would stop.
   const inCall = !!callState && callState.phase !== 'ended';
+  const wasInCall = useRef(false);
   useEffect(() => {
+    if (inCall === wasInCall.current) return;
+    wasInCall.current = inCall;
     bridge?.setCallActive(inCall);
   }, [inCall]);
-  useEffect(() => () => bridge?.setCallActive(false), []);
+  useEffect(
+    () => () => {
+      if (wasInCall.current) bridge?.setCallActive(false);
+    },
+    [],
+  );
   const viewSnapshot = useMemo(
     () => (sharing ? { ...snapshot, settings: { ...snapshot.settings, veil: true, veilScope: 'all' as const, features: { ...snapshot.settings.features, veil: true } } } : snapshot),
     [snapshot, sharing],

@@ -7,6 +7,17 @@ import { join } from 'node:path';
 import { _electron as electron } from '@playwright/test';
 
 const home = mkdtempSync(join(tmpdir(), 'veil-smoke-'));
+// A step that never returns must fail the run, not hold CI until it is cancelled.
+let lastStep = 'start';
+const step = (text) => {
+  lastStep = text;
+  console.log(text);
+};
+const watchdog = setTimeout(() => {
+  console.error(`smoke test hung after «${lastStep}»`);
+  process.exit(1);
+}, Number(process.env.SMOKE_TIMEOUT_MS) || 6 * 60_000);
+watchdog.unref();
 // SMOKE_EXECUTABLE=release/linux-unpacked/veil-messenger checks the packaged app instead.
 const packaged = process.env.SMOKE_EXECUTABLE;
 const app = await electron.launch({
@@ -35,7 +46,7 @@ try {
   await page.waitForTimeout(300);
   const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
   if (copied !== 'Привет из Veil') throw new Error(`clipboard: ${copied}`);
-  console.log('clipboard ok');
+  step('clipboard ok');
 
   // A password copied from «Избранное» is erased after the timeout, but only if still there.
   await page.evaluate(() => window.veil.copySecret('пароль-для-смоук-теста', 1));
@@ -46,7 +57,7 @@ try {
   await app.evaluate(({ clipboard }) => clipboard.writeText('чужой текст'));
   await page.waitForTimeout(1600);
   if ((await app.evaluate(({ clipboard }) => clipboard.readText())) !== 'чужой текст') throw new Error('cleared somebody else\'s text');
-  console.log('clipboard clearing ok');
+  step('clipboard clearing ok');
 
   // Quick unlock reports the keychain honestly; system lock detection answers.
   const quick = await page.evaluate(() => window.veil.quickUnlock.status());
@@ -68,7 +79,7 @@ try {
   );
   const card = await app.waitForEvent('window', { predicate: (w) => w.url().includes('card.html'), timeout: 10_000 });
   await card.getByText('Привет! Как дела?').waitFor({ timeout: 10_000 });
-  console.log('notification card ok');
+  step('notification card ok');
   if (process.argv[3]) {
     await card.waitForTimeout(600);
     await card.screenshot({ path: process.argv[3], omitBackground: true });
@@ -95,9 +106,10 @@ try {
   await page.waitForFunction(() => window.__callActions.length > 0, null, { timeout: 5000 });
   const action = await page.evaluate(() => window.__callActions[0]);
   if (action.tag !== 'call:smoke' || action.action !== 'accept') throw new Error(`call action: ${JSON.stringify(action)}`);
-  console.log('call card ok');
+  step('call card ok');
 
   // «При сворачивании в трей»: closing the window hides it and locks Veil; notification cards go.
+  lastStep = 'lock on hide: turning it on';
   await page.getByRole('button', { name: 'Настройки' }).click();
   await page.getByRole('button', { name: 'Конфиденциальность' }).click();
   await page.getByRole('switch', { name: 'Блокировать при сворачивании в трей' }).click();
@@ -106,7 +118,9 @@ try {
     window.veil.notify({ title: 'Алиса', body: 'Секрет', tag: 'y', card: { title: 'Алиса', body: 'Секрет в карточке', initials: 'АЛ', gradient: '#e2582a', theme: 'dark', accent: '#ff7a45' } }),
   );
   await app.waitForEvent('window', { predicate: (w) => w.url().includes('card.html'), timeout: 10_000 });
+  lastStep = 'lock on hide: closing the window';
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('card.html'))?.close());
+  lastStep = 'lock on hide: waiting for the lock screen';
   await page.getByText('Veil заблокирован').waitFor({ timeout: 10_000 });
   await page.waitForTimeout(500);
   const cards = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => w.webContents.getURL().includes('card.html') && w.isVisible()).length);
@@ -115,7 +129,7 @@ try {
   await page.getByLabel('Пароль', { exact: true }).fill('Smoke-Test-123');
   await page.getByRole('button', { name: 'Разблокировать' }).click();
   await page.getByText('Добро пожаловать').waitFor({ timeout: 60_000 });
-  console.log('lock on hide ok');
+  step('lock on hide ok');
 
   const userData = await app.evaluate(({ app: a }) => a.getPath('userData'));
   // Quick unlock with a PIN: wrong PIN counts down, the right one opens the vault. A packaged
@@ -139,7 +153,7 @@ try {
   await page.getByLabel('PIN', { exact: true }).fill('482913');
   await page.getByRole('button', { name: 'Разблокировать' }).click();
   await page.getByText('Добро пожаловать').waitFor({ timeout: 30_000 });
-  console.log('quick unlock with PIN ok');
+  step('quick unlock with PIN ok');
   } else console.log('quick unlock skipped: no system keychain here');
 
   // «Копия в OneDrive»: offered in Settings → Безопасность when the build has a client ID (here
@@ -257,7 +271,7 @@ try {
     await shown.getByText('Текст: на устройстве').waitFor();
     if (process.argv[5]) await page.screenshot({ path: process.argv[5] });
     friend.dispose();
-    console.log('voice message transcribed in the chat ok');
+    step('voice message transcribed in the chat ok');
   }
 
   // A veil:// link opened by the system while Veil runs (a second copy is started with it).
@@ -265,7 +279,7 @@ try {
   await app.evaluate(({ app: a }, url) => a.emit('second-instance', {}, ['veil', url], {}), link);
   await page.getByTestId('open-invite').getByText('@smoke_friend').waitFor({ timeout: 10_000 });
   await page.keyboard.press('Escape');
-  console.log('veil:// link ok');
+  step('veil:// link ok');
 
   const maximized = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isMaximized()));
   console.log('maximized on first launch:', maximized);
@@ -273,7 +287,7 @@ try {
     await page.waitForTimeout(800);
     await page.screenshot({ path: process.argv[2] });
   }
-  console.log('smoke test passed');
+  step('smoke test passed');
 } finally {
   await app.close();
   rmSync(home, { recursive: true, force: true });
