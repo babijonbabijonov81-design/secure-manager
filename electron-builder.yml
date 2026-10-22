@@ -46,11 +46,12 @@ dmg:
 
 win:
   icon: build/icon.ico
+  # Installer and portable .zip, each for x64 and ARM64 (Windows 10 21H2+ and 11).
   target:
     - target: nsis
-      arch: [x64]
-    - target: portable
-      arch: [x64]
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
 nsis:
   oneClick: false
   perMachine: false
@@ -65,20 +66,50 @@ nsis:
   uninstallerSidebar: build/uninstallerSidebar.bmp
   installerLanguages: [ru_RU, en_US]
   multiLanguageInstaller: true
+  # One installer per architecture; the in-app updater picks the one for this PC.
+  buildUniversalInstaller: false
   artifactName: Veil-${version}-win-${arch}-setup.${ext}
-portable:
-  artifactName: Veil-${version}-win-portable.${ext}
 
 linux:
   icon: build/icons
   category: Network
+  # AppImage updates itself; .deb, .rpm and Flatpak are updated through the package manager.
   target:
     - target: AppImage
       arch: [x64]
     - target: deb
       arch: [x64]
+    - target: rpm
+      arch: [x64]
+    - target: flatpak
+      arch: [x64]
   maintainer: Veil
   synopsis: End-to-end encrypted messenger
+  description: Мессенджер со сквозным шифрованием
+flatpak:
+  runtime: org.freedesktop.Platform
+  runtimeVersion: '24.08'
+  sdk: org.freedesktop.Sdk
+  base: org.electronjs.Electron2.BaseApp
+  baseVersion: '24.08'
+  finishArgs:
+    - --share=ipc
+    - --share=network
+    - --socket=x11
+    - --socket=wayland
+    - --socket=pulseaudio
+    # GPU, microphone and camera (video calls, scanning a veil:// QR code).
+    - --device=all
+    # Saved files; other folders through the system file chooser (portal).
+    - --filesystem=xdg-download
+    - --talk-name=org.freedesktop.Notifications
+    - --talk-name=org.kde.StatusNotifierWatcher
+    # Quick unlock keeps its key in the system keychain.
+    - --talk-name=org.freedesktop.secrets
+    # Locking together with the system.
+    - --talk-name=org.freedesktop.ScreenSaver
+    - --talk-name=org.gnome.ScreenSaver
+    - --system-talk-name=org.freedesktop.login1
 
 # In-app updates read releases from this repository (it must be public for that).
 publish:

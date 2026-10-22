@@ -54,6 +54,13 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Linux packaging tools (rpm, Flatpak runtime 24.08)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08 org.electronjs.Electron2.BaseApp//24.08
       - run: npm run build
       - name: Package
         run: npx electron-builder ${{ matrix.target }} --publish never
@@ -69,6 +76,8 @@ jobs:
             release/*.zip
             release/*.AppImage
             release/*.deb
+            release/*.rpm
+            release/*.flatpak
             release/*.blockmap
             release/latest*.yml
           if-no-files-found: error
@@ -85,6 +94,18 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: SHA-256 checksums and release notes
+        run: |
+          shopt -s nullglob
+          cd dist
+          files=(*.exe *.zip *.AppImage *.deb *.rpm *.flatpak *.dmg)
+          sha256sum -- "${files[@]}" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd ..
+          # The notes are this version's section of CHANGELOG.md, plus how to check the files.
+          version="${{ steps.version.outputs.tag }}"
+          awk -v v="## ${version#v}" '/^## / { on = index($0, v) == 1; next } on' CHANGELOG.md > notes.md
+          printf '\n### Проверка файлов\n\nКонтрольные суммы — в `SHA256SUMS.txt`. Linux: `sha256sum -c SHA256SUMS.txt --ignore-missing`; Windows (PowerShell): `Get-FileHash .\\Veil-*-setup.exe`.\n' >> notes.md
       - uses: softprops/action-gh-release@v2
         with:
           # A manual run creates the tag from package.json on the built commit.
@@ -92,4 +113,4 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Veil ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || steps.version.outputs.tag }}
           files: dist/*
-          generate_release_notes: true
+          body_path: notes.md

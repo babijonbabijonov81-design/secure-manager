@@ -7,8 +7,10 @@ import { join } from 'node:path';
 import { _electron as electron } from '@playwright/test';
 
 const home = mkdtempSync(join(tmpdir(), 'veil-smoke-'));
+// SMOKE_EXECUTABLE=release/linux-unpacked/veil-messenger checks the packaged app instead.
+const packaged = process.env.SMOKE_EXECUTABLE;
 const app = await electron.launch({
-  args: ['.', '--no-sandbox'],
+  ...(packaged ? { executablePath: packaged, args: ['--no-sandbox'] } : { args: ['.', '--no-sandbox'] }),
   env: { ...process.env, VEIL_PROFILE: `smoke${process.pid}`, HOME: home, XDG_CONFIG_HOME: home, APPDATA: home, VEIL_TEST_KEYCHAIN: '1' },
 });
 try {
@@ -115,7 +117,10 @@ try {
   await page.getByText('Добро пожаловать').waitFor({ timeout: 60_000 });
   console.log('lock on hide ok');
 
-  // Quick unlock with a PIN: wrong PIN counts down, the right one opens the vault.
+  const userData = await app.evaluate(({ app: a }) => a.getPath('userData'));
+  // Quick unlock with a PIN: wrong PIN counts down, the right one opens the vault. A packaged
+  // build uses the real system keychain, which a bare CI display may not have.
+  if (quick.available) {
   await page.getByRole('button', { name: 'Настройки' }).click();
   await page.getByRole('button', { name: 'Безопасность' }).click();
   await page.getByRole('switch', { name: 'Вход по PIN' }).click();
@@ -124,7 +129,6 @@ try {
   await page.getByLabel('Повторите PIN').fill('482913');
   await page.getByRole('button', { name: 'Включить' }).click();
   await page.getByTestId('quick-unlock').getByText('PIN включён').waitFor({ timeout: 20_000 });
-  const userData = await app.evaluate(({ app: a }) => a.getPath('userData'));
   const stored = readFileSync(join(userData, 'quick-unlock.json'), 'utf8');
   if (stored.includes('482913')) throw new Error('PIN stored in plain text');
   await page.getByRole('button', { name: 'Закрыть', exact: true }).first().click();
@@ -136,6 +140,7 @@ try {
   await page.getByRole('button', { name: 'Разблокировать' }).click();
   await page.getByText('Добро пожаловать').waitFor({ timeout: 30_000 });
   console.log('quick unlock with PIN ok');
+  } else console.log('quick unlock skipped: no system keychain here');
 
   // «Показ экрана»: Veil's picker lists the screens (X11 here; Wayland would use the portal).
   const screens = await page.evaluate(() => window.veil.screen.sources());
@@ -158,6 +163,7 @@ try {
     if (models.tiny.installed) throw new Error('model installed before consent');
     cpSync(process.env.VEIL_TEST_MODEL, join(userData, 'models', 'Xenova', 'whisper-tiny'), { recursive: true });
     if (!(await page.evaluate(() => window.veil.models.status())).tiny.installed) throw new Error('model not seen');
+    // The packaged app is built from the same out/ folder.
     const worker = readdirSync(join('out', 'renderer', 'assets')).find((f) => f.startsWith('transcribe.worker'));
     const speech = [...readFileSync(join('tests', 'fixtures', 'speech-en.ogg'))];
     const started = Date.now();
