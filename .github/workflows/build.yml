@@ -11,6 +11,13 @@ on:
         description: Publish a GitHub release (tag v<version from package.json>)
         type: boolean
         default: false
+      platforms:
+        description: >-
+          Which systems to build. «windows» publishes a pre-release with Windows only (to try it
+          first); «mac-linux» then adds macOS and Linux to the same release and makes it final.
+        type: choice
+        options: [all, windows, mac-linux]
+        default: all
 
 permissions:
   contents: write
@@ -34,19 +41,29 @@ jobs:
           npm run build
           xvfb-run -a node tests/electron/smoke.mjs
 
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        run: |
+          # Apple Silicon and Intel: .dmg and .zip, ad-hoc signed (no Apple Developer ID).
+          mac='{"os":"macos-latest","target":"--mac"}'
+          win='{"os":"windows-latest","target":"--win"}'
+          linux='{"os":"ubuntu-latest","target":"--linux"}'
+          case "${{ inputs.platforms }}" in
+            windows) list="[$win]" ;;
+            mac-linux) list="[$mac,$linux]" ;;
+            *) list="[$mac,$win,$linux]" ;;
+          esac
+          echo "matrix={\"include\":$list}" >> "$GITHUB_OUTPUT"
+
   package:
-    needs: test
+    needs: [test, plan]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # Apple Silicon and Intel: .dmg and .zip, ad-hoc signed (no Apple Developer ID).
-          - os: macos-latest
-            target: --mac
-          - os: windows-latest
-            target: --win
-          - os: ubuntu-latest
-            target: --linux
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -100,11 +117,18 @@ jobs:
           path: dist
           merge-multiple: true
       - name: SHA-256 checksums and release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
+          # Adding systems to a release that already has some: keep the checksums already there.
+          gh release download "${{ steps.version.outputs.tag }}" -p SHA256SUMS.txt -O previous-sums.txt 2>/dev/null || : > previous-sums.txt
           cd dist
           files=(*.exe *.zip *.AppImage *.deb *.rpm *.flatpak *.dmg)
-          sha256sum -- "${files[@]}" > SHA256SUMS.txt
+          sha256sum -- "${files[@]}" > new-sums.txt
+          # A file built again replaces its old line.
+          awk 'NR == FNR { seen[$2] = 1; print; next } !($2 in seen)' new-sums.txt ../previous-sums.txt | sort -k2 > SHA256SUMS.txt
+          rm new-sums.txt
           cat SHA256SUMS.txt
           cd ..
           # The notes are this version's section of CHANGELOG.md, plus how to check the files.
@@ -119,3 +143,6 @@ jobs:
           name: Veil ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || steps.version.outputs.tag }}
           files: dist/*
           body_path: notes.md
+          # Windows alone is a pre-release: the updaters on macOS and Linux keep to the last full one.
+          prerelease: ${{ inputs.platforms == 'windows' }}
+          make_latest: ${{ inputs.platforms != 'windows' }}

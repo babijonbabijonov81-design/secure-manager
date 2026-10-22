@@ -331,6 +331,8 @@ git push --follow-tags
 
 Можно и без терминала: на GitHub откройте **Actions → Build desktop apps → Run workflow**, поставьте галочку **release** и нажмите **Run workflow**. Версия берётся из `package.json`, описание выпуска — из раздела этой версии в `CHANGELOG.md`.
 
+Поле **platforms** позволяет выпустить версию по частям. Если выбрать `windows`, выйдет предварительный выпуск только с Windows: можно проверить его до остальных, а программы на macOS и Linux его не увидят. Если затем выбрать `mac-linux`, в тот же выпуск добавятся macOS и Linux, `SHA256SUMS.txt` объединится, и выпуск станет основным.
+
 GitHub Actions прогонит тесты, соберёт Windows (NSIS и .zip, x64 и ARM64), macOS (.dmg и .zip, Apple Silicon и Intel) и Linux (AppImage, .deb, .rpm, Flatpak), посчитает `SHA256SUMS.txt` и опубликует релиз вместе с файлами `latest*.yml`, по которым приложения находят обновление.
 
 > Обновление из приложения читает релизы этого репозитория без авторизации, поэтому репозиторий должен быть **публичным**. Адрес задаётся в `electron-builder.yml` (`publish`) и `src/main/updater.ts`.
