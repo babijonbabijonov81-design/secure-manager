@@ -98,6 +98,7 @@ const LOOKUP_WINDOW_MS = 60_000;
 const LOOKUPS_PER_WINDOW = 120;
 const SENDS_PER_WINDOW = 1200;
 const REGISTRATIONS_PER_HOUR = 20;
+const RENAMES_PER_DAY = 3;
 const CODE_TTL_MS = 15 * 60 * 1000;
 const CODE_ATTEMPTS = 5;
 const EMAILS_PER_HOUR = 5;
@@ -589,6 +590,30 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         if (frame.spk !== undefined && !validSignedPreKey(signKey, frame.spk)) fail('bad_request', 'Неверный предключ');
         const count = store.addPreKeys(userId, frame.opks, frame.spk);
         send(conn, { type: 'result', reqId: frame.reqId, data: { opkCount: count } });
+        return;
+      }
+      case 'username_check': {
+        if (!conn.lookups.take()) fail('rate_limited', 'Слишком много запросов');
+        const wanted = String(frame.username ?? '').toLowerCase().replace(/^@/, '');
+        const owner = store.byUsername(wanted);
+        send(conn, { type: 'result', reqId: frame.reqId, data: { valid: USERNAME_RE.test(wanted), free: !owner || owner.userId === userId } });
+        return;
+      }
+      case 'username_set': {
+        const wanted = String(frame.username ?? '').toLowerCase().replace(/^@/, '');
+        if (!USERNAME_RE.test(wanted)) fail('bad_request', 'Имя: от 3 до 32 символов — латинские буквы, цифры и _');
+        const user = store.users.get(userId)!;
+        if (user.username === wanted) fail('bad_request', 'Это уже ваше имя пользователя');
+        const owner = store.byUsername(wanted);
+        if (owner && owner.userId !== userId) fail('username_taken', 'Это имя пользователя уже занято');
+        const day = Date.now() - 86_400_000;
+        if ((user.renamedAt ?? []).filter((t) => t > day).length >= RENAMES_PER_DAY)
+          fail('rate_limited', `Имя можно менять не чаще ${RENAMES_PER_DAY} раз в сутки`);
+        // A recovery code sent to the old name must not work for whoever takes it next.
+        recoverPending.delete(user.username);
+        store.renameUser(userId, wanted);
+        log(`username changed`);
+        send(conn, { type: 'result', reqId: frame.reqId, data: { username: wanted } });
         return;
       }
       case 'account_status': {

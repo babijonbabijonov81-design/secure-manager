@@ -1018,6 +1018,61 @@ export class Messenger {
     return this.addFromInfo(await this.lookupUser(username));
   }
 
+  /**
+   * A known @name now points to another account. Either the old owner renamed themselves
+   * (they still exist under a new name: nothing about their key changed) or their account
+   * was reset (a new key: the chat moves over with a warning).
+   */
+  private async renamedOrReset(previous: Contact): Promise<boolean> {
+    const now = await this.resolveContact(previous.id);
+    if (!now || now.userId !== previous.id || now.username === previous.username) return false;
+    this.updateContact(previous.id, { username: now.username });
+    return true;
+  }
+
+  private async refreshUsername(contactId: string): Promise<void> {
+    const info = await this.resolveContact(contactId);
+    const contact = this.contacts[contactId];
+    if (info && contact && info.userId === contactId && info.username !== contact.username) this.updateContact(contactId, { username: info.username });
+  }
+
+  /** Settings → «Имя пользователя»: is this @name free on the server? */
+  async checkUsername(raw: string): Promise<'free' | 'taken' | 'invalid' | 'mine'> {
+    const username = cleanUsername(raw);
+    if (!USERNAME_RE.test(username)) return 'invalid';
+    if (username === this.account.username) return 'mine';
+    if (!this.relay || this.relay.status !== 'online') throw new MessengerError('offline', 'Нет соединения с сервером');
+    const result = await this.relay.request<{ valid: boolean; free: boolean }>({ type: 'username_check', username });
+    return !result.valid ? 'invalid' : result.free ? 'free' : 'taken';
+  }
+
+  /**
+   * Takes a new @name if nobody has it. Keys, chats and contacts stay; contacts learn the new
+   * name from the server. The old name is released at once and someone else may take it.
+   */
+  async changeUsername(raw: string): Promise<void> {
+    const username = cleanUsername(raw);
+    if (this.decoy) throw new MessengerError('decoy', 'Недоступно');
+    if (!USERNAME_RE.test(username)) throw new MessengerError('bad_username', 'Имя: от 3 до 32 символов — латинские буквы, цифры и _');
+    if (username === this.account.username) return;
+    if (!this.relay || this.relay.status !== 'online') throw new MessengerError('offline', 'Нет соединения с сервером');
+    try {
+      await this.relay.request({ type: 'username_set', username });
+    } catch (error) {
+      if (error instanceof RelayRequestError) throw new MessengerError(error.code, error.message);
+      throw error;
+    }
+    const before = this.account.username;
+    this.account.username = username;
+    this.markDirty('account');
+    this.scheduleBackup();
+    this.logSecurity('username_change', `@${before} → @${username}`);
+    this.changed();
+    for (const contact of Object.values(this.contacts)) {
+      if (!contact.blocked && !contact.group && this.sessions[contact.id]?.length) void this.sendControl(contact, { t: 'prof', n: this.account.displayName, u: 1 });
+    }
+  }
+
   private async lookupUser(username: string): Promise<UserInfo> {
     if (!this.relay) throw new MessengerError('offline', 'Нет соединения с сервером');
     let info: UserInfo;
@@ -1032,7 +1087,7 @@ export class Messenger {
     return info;
   }
 
-  private addFromInfo(info: UserInfo): Contact {
+  private async addFromInfo(info: UserInfo): Promise<Contact> {
     const existing = this.contacts[info.userId];
     if (existing) {
       if (existing.archived || existing.groupOnly) this.updateContact(existing.id, { archived: false, groupOnly: undefined });
@@ -1040,7 +1095,7 @@ export class Messenger {
     }
     // The username now belongs to a different key (account reset, or someone in the middle).
     const previous = Object.values(this.contacts).find((c) => c.username === info.username && c.id !== info.userId && !isSavedChat(c.id));
-    if (previous) return this.replaceIdentity(previous, info);
+    if (previous && !(await this.renamedOrReset(previous))) return this.replaceIdentity(previous, info);
     return this.createContact(info, info.username);
   }
 
@@ -1529,7 +1584,7 @@ export class Messenger {
         'Ключ не совпадает с приглашением. Возможно, его подменили по дороге — не пишите туда ничего важного и сверьте код безопасности при встрече',
       );
     }
-    const contact = this.addFromInfo(info);
+    const contact = await this.addFromInfo(info);
     if (!contact.verified || contact.verifiedBy !== 'invite') this.markInvited(contact.id, 'me');
     // My name (as with a first message) and the token: the inviter sees who came and verifies me.
     await this.sendControl(this.contacts[contact.id], { t: 'prof', n: this.account.displayName });
@@ -2474,7 +2529,7 @@ export class Messenger {
       const previous = info?.username
         ? Object.values(this.contacts).find((c) => c.username === info.username && c.id !== contactId && !isSavedChat(c.id))
         : undefined;
-      contact = previous
+      contact = previous && !(await this.renamedOrReset(previous))
         ? this.replaceIdentity(previous, fresh)
         : this.createContact(fresh, content.t === 'msg' && content.p?.n ? content.p.n : (info?.username ?? 'Неизвестный'));
       // Someone from a group I am in: no chat in the list until we talk directly.
@@ -2657,6 +2712,8 @@ export class Messenger {
         return;
       case 'prof':
         if (typeof content.n === 'string' && content.n.trim()) this.updateContact(contact.id, { displayName: content.n.trim().slice(0, 64) });
+        // The new @name is taken from the server, never from the message itself.
+        if (content.u === 1) await this.refreshUsername(contact.id);
         return;
     }
   }

@@ -118,7 +118,11 @@ export type RequestFrame =
   | { type: 'totp_disable'; reqId: string; code: string }
   | { type: 'backup_put'; reqId: string; meta: BackupMeta }
   | { type: 'devices'; reqId: string }
-  | { type: 'device_revoke'; reqId: string; id: string };
+  | { type: 'device_revoke'; reqId: string; id: string }
+  /** Is this @name free? (for the live hint while typing a new one) */
+  | { type: 'username_check'; reqId: string; username: string }
+  /** Take a new @name; the old one is released at once. */
+  | { type: 'username_set'; reqId: string; username: string };
 
 /** Anonymous frames of a bridge room: the relay only pipes the (encrypted) bytes between two sides. */
 export type BridgeFrame =

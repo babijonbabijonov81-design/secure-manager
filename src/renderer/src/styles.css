@@ -5404,3 +5404,64 @@ button:disabled {
 .update-command .btn {
   justify-self: start;
 }
+
+/* ---- Настройки → Имя пользователя ---- */
+.username-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.username-card .grow {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.username-card .grow span {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.username-card b {
+  font-size: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.username-at {
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.username-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.username-hint.free {
+  color: var(--success);
+}
+.username-hint.taken,
+.username-hint.invalid,
+.username-hint.error {
+  color: var(--danger);
+}
+.username-hint .spin {
+  animation: spin 0.9s linear infinite;
+}
+.username-facts {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 13.5px;
+  color: var(--text-2);
+}

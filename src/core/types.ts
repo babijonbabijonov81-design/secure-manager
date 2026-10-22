@@ -400,7 +400,8 @@ export type Content =
   | { t: 'pres'; s: 'on' | 'off' | 'hidden'; ask?: 1 }
   /** Sent after restoring from a backup to open fresh sessions with every contact. */
   | { t: 'hi' }
-  | { t: 'prof'; n: string }
+  /** My display name; `u`: my @name changed — ask the server which one it is now. */
+  | { t: 'prof'; n: string; u?: 1 }
   | ({ t: 'call'; ts: number } & CallSignal);
 
 export interface OutboxItem {
@@ -437,7 +438,8 @@ export type SecurityEventKind =
   | 'duress_off'
   | 'backup_export'
   | 'backup_import'
-  | 'invite_mismatch';
+  | 'invite_mismatch'
+  | 'username_change';
 
 export interface SecurityEvent {
   id: string;

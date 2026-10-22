@@ -1,5 +1,6 @@
 import {
   ArrowRightLeft,
+  AtSign,
   Copy,
   DownloadCloud,
   Info,
@@ -36,6 +37,7 @@ import { formatDay, formatTime } from '../lib/format.ts';
 import { feature } from '../lib/hooks.ts';
 import { transcribeAvailable } from '../lib/transcribe.ts';
 import { TranscribeSettings } from './Transcribe.tsx';
+import { UsernameTab } from './UsernameTab.tsx';
 import { isOwnServer } from '../lib/shield.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
 import { BackupFileSection } from './BackupFile.tsx';
@@ -45,10 +47,11 @@ import { QuickUnlockSection } from './QuickUnlock.tsx';
 import { BridgeCard, DuressSection, ProtectionBar, SafetyCodeCard, SecurityLogSection } from './SecurityCards.tsx';
 import { CodeInput, RecoveryEmailDialog, TotpDisableDialog, TotpSetupDialog } from './SecurityDialogs.tsx';
 
-export type SettingsTab = 'profile' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'devices' | 'features' | 'about';
+export type SettingsTab = 'profile' | 'username' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'devices' | 'features' | 'about';
 
 const TABS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: 'profile', label: 'Профиль', icon: <UserRound size={18} /> },
+  { id: 'username', label: 'Имя пользователя', icon: <AtSign size={18} /> },
   { id: 'privacy', label: 'Конфиденциальность', icon: <ShieldCheck size={18} /> },
   { id: 'appearance', label: 'Оформление', icon: <Palette size={18} /> },
   { id: 'audio', label: 'Аудио', icon: <Mic size={18} /> },
@@ -96,6 +99,7 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
           </div>
           <div className="modal-body">
             {tab === 'profile' && <ProfileTab messenger={messenger} snapshot={snapshot} />}
+            {tab === 'username' && <UsernameTab messenger={messenger} snapshot={snapshot} />}
             {tab === 'privacy' && (
               <div>
                 <div className="field-label" style={{ marginBottom: 2 }}>

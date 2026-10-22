@@ -26,6 +26,8 @@ export interface UserRecord {
   devices?: DeviceRecord[];
   /** Device ids the owner unlinked: sign-in from them is refused. */
   revoked?: string[];
+  /** When the @name was changed (last few), to limit how often it can be. */
+  renamedAt?: number[];
 }
 
 export interface QueuedEnvelope {
@@ -128,6 +130,17 @@ export class RelayStore {
       await rm(join(this.dataDir, 'queue', userDir(userId)), { recursive: true, force: true });
       await rm(join(this.dataDir, 'backups', `${userDir(userId)}.bin`), { force: true });
     }
+  }
+
+  /** Moves the user to a new @name; the old one becomes free immediately. */
+  renameUser(userId: string, username: string): void {
+    const user = this.users.get(userId);
+    if (!user) return;
+    if (this.usernames.get(user.username) === userId) this.usernames.delete(user.username);
+    user.username = username;
+    user.renamedAt = [...(user.renamedAt ?? []), Date.now()].slice(-5);
+    this.usernames.set(username, userId);
+    this.scheduleSave();
   }
 
   touch(): void {
