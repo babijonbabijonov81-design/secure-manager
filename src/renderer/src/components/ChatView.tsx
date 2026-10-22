@@ -349,7 +349,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
     }
     const next = messages[i + 1];
     const continues = (a: Message | undefined, b: Message | undefined) =>
-      !!a && !!b && !a.call && !b.call && a.dir === b.dir && b.ts - a.ts < GROUP_GAP_MS && sameDay(a.ts, b.ts);
+      !!a && !!b && !a.call && !b.call && a.dir === b.dir && a.from === b.from && b.ts - a.ts < GROUP_GAP_MS && sameDay(a.ts, b.ts);
     rows.push(
       <Bubble
         key={message.id}

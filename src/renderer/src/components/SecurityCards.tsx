@@ -12,7 +12,8 @@ const BACKUP_FRESH_MS = 31 * 24 * 60 * 60 * 1000;
 /** «Защита: 4 из 5» at the top of Settings → Безопасность. */
 export function ProtectionBar({ snapshot }: { snapshot: MessengerSnapshot }) {
   const { security, settings } = snapshot;
-  const contacts = snapshot.contacts.filter((c) => !isSavedChat(c.id) && !c.blocked);
+  // People only: a group has no safety number of its own.
+  const contacts = snapshot.contacts.filter((c) => !isSavedChat(c.id) && !c.group && !c.blocked);
   const items = [
     { label: 'Пароль хранилища', ok: true },
     { label: 'Google Authenticator', ok: security.totp },
@@ -47,7 +48,7 @@ export function ProtectionBar({ snapshot }: { snapshot: MessengerSnapshot }) {
 
 /** The 12-group safety number with one contact, picked from a list. */
 export function SafetyCodeCard({ messenger, snapshot }: { messenger: Messenger; snapshot: MessengerSnapshot }) {
-  const contacts = snapshot.contacts.filter((c) => !isSavedChat(c.id));
+  const contacts = snapshot.contacts.filter((c) => !isSavedChat(c.id) && !c.group);
   const [id, setId] = useState(() => (contacts.find((c) => !c.verified) ?? contacts[0])?.id ?? '');
   const contact = contacts.find((c) => c.id === id);
   const groups = useMemo(() => (contact ? formatSafetyNumber(messenger.safetyNumber(contact.id)) : []), [messenger, contact]);

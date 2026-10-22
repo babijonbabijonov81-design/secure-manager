@@ -312,7 +312,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
   }, [messenger, toast]);
 
   // Chats in the order of the list, for Alt+↑/↓.
-  const visibleChats = snapshot.contacts.filter((c) => !c.archived);
+  const visibleChats = snapshot.contacts.filter((c) => !c.archived && !c.groupOnly);
   const step = useCallback(
     (delta: number) => {
       if (!visibleChats.length) return;

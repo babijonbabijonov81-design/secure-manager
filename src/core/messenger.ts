@@ -1608,7 +1608,9 @@ export class Messenger {
     }
   }
 
+  /** 60 digits for a person; empty for «Избранное» and groups (each member has their own). */
   safetyNumber(contactId: string): string {
+    if (isSavedChat(contactId) || isGroupChat(contactId)) return '';
     return safetyNumber(this.account.userId, contactId);
   }
 
@@ -2331,7 +2333,8 @@ export class Messenger {
   private announcePresence(state: 'on' | 'off', ask = false): void {
     if (!this.relay || this.relay.status !== 'online') return;
     for (const contact of Object.values(this.contacts)) {
-      if (contact.blocked) continue;
+      // People I only share a group with do not learn when I am online.
+      if (contact.blocked || contact.groupOnly || contact.group) continue;
       if (state === 'off' && !this.online[contact.id]) continue;
       const hidden = !this.shares(contact.id, 'online');
       const content: Content = hidden ? { t: 'pres', s: 'hidden', ...(ask ? { ask: 1 } : {}) } : { t: 'pres', s: state, ...(ask ? { ask: 1 } : {}) };
