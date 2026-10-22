@@ -81,11 +81,13 @@ export function QuickUnlockSection({ messenger }: { messenger: Messenger }) {
           {status.fingerprint.available && (
             <div className="setting-row" style={{ padding: 0, border: 0 }}>
               <div className="grow">
-                <b>Отпечаток пальца</b>
-                <span>Через fprintd. Ключ выдаётся только после совпадения отпечатка.</span>
+                <b>{bridge.platform === 'darwin' ? 'Touch ID' : 'Отпечаток пальца'}</b>
+                <span>
+                  {bridge.platform === 'darwin' ? 'Через Touch ID' : 'Через fprintd'}. Ключ выдаётся только после совпадения отпечатка.
+                </span>
               </div>
               <Toggle
-                label="Вход по отпечатку"
+                label={bridge.platform === 'darwin' ? 'Вход по Touch ID' : 'Вход по отпечатку'}
                 on={status.fingerprint.enabled}
                 onChange={async (on) => {
                   try {

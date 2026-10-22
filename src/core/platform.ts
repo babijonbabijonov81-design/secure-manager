@@ -85,6 +85,8 @@ export interface VeilBridge {
     setEnabled(enabled: boolean): void;
   };
   requestMicrophone(): Promise<boolean>;
+  /** macOS: the system's camera permission (video calls, QR codes); true elsewhere. */
+  requestCamera(): Promise<boolean>;
   /** Quick unlock: the vault key in the system keychain, behind a PIN or a fingerprint. */
   quickUnlock: {
     status(): Promise<QuickUnlockStatus>;

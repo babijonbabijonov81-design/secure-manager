@@ -40,6 +40,7 @@ const bridge: VeilBridge = {
     setEnabled: (enabled) => ipcRenderer.send('spell:enable', enabled),
   },
   requestMicrophone: () => ipcRenderer.invoke('mic:request'),
+  requestCamera: () => ipcRenderer.invoke('camera:request'),
   quickUnlock: {
     status: () => ipcRenderer.invoke('quick:status'),
     enablePin: (blob) => ipcRenderer.invoke('quick:enable-pin', blob),

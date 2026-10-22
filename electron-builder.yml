@@ -31,8 +31,11 @@ mac:
   hardenedRuntime: false
   extendInfo:
     NSHumanReadableCopyright: Veil — end-to-end encrypted messenger
-    NSMicrophoneUsageDescription: Veil records voice messages only when you press the microphone button.
-    NSCameraUsageDescription: Veil uses the camera only to scan a veil:// invite QR code.
+    NSCameraUsageDescription: Veil включает камеру только в видеозвонке и для QR-кода приглашения.
+    NSMicrophoneUsageDescription: Veil записывает голосовые и звук звонка, только когда вы этого просите.
+    # «Мост» finds the other computer on the local network (mDNS).
+    NSLocalNetworkUsageDescription: Veil ищет ваш второй компьютер в локальной сети, чтобы перенести аккаунт через «Мост».
+    NSBonjourServices: [_veil-bridge._tcp]
 dmg:
   title: Veil ${version}
   artifactName: Veil-${version}-mac-${arch}.${ext}

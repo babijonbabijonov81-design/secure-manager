@@ -3,6 +3,7 @@ import { Camera, Check, Copy, KeyRound, ShieldCheck, UserPlus } from 'lucide-rea
 import QRCode from 'qrcode';
 import { useEffect, useRef, useState } from 'react';
 import { INVITE_DAYS, parseInvite } from '../../../core/invite.ts';
+import { bridge } from '../../../core/platform.ts';
 import type { Messenger } from '../../../core/messenger.ts';
 import { Modal, useToast } from '../lib/ui.tsx';
 
@@ -72,8 +73,8 @@ export function ScanPanel({ onFound }: { onFound(link: string): void }) {
       }
       timer = window.setTimeout(scan, 180);
     };
-    navigator.mediaDevices
-      .getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
+    (bridge ? bridge.requestCamera() : Promise.resolve(true))
+      .then((ok) => (ok ? navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }) : Promise.reject(new Error('denied'))))
       .then((s) => {
         stream = s;
         if (stopped) return s.getTracks().forEach((t) => t.stop());

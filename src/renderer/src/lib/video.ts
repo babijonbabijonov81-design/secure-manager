@@ -8,7 +8,9 @@ function cameraErrorText(error: unknown): string {
   switch ((error as DOMException)?.name) {
     case 'NotAllowedError':
     case 'SecurityError':
-      return 'Нет доступа к камере. Разрешите его в настройках системы (Конфиденциальность → Камера)';
+      return bridge?.platform === 'darwin'
+        ? 'Нет доступа к камере. Разрешите его: Системные настройки → Конфиденциальность и безопасность → Камера'
+        : 'Нет доступа к камере. Разрешите его в настройках системы (Конфиденциальность → Камера)';
     case 'NotFoundError':
     case 'OverconstrainedError':
       return 'Камера не найдена';
@@ -21,6 +23,7 @@ function cameraErrorText(error: unknown): string {
 }
 
 export async function openCamera(deviceId: string): Promise<MediaStream> {
+  if (bridge && !(await bridge.requestCamera())) throw new MediaAccessError(cameraErrorText({ name: 'NotAllowedError' }));
   const base = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } };
   try {
     return await navigator.mediaDevices.getUserMedia({ video: deviceId ? { ...base, deviceId: { exact: deviceId } } : base, audio: false });

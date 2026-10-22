@@ -1,8 +1,9 @@
 // System integration for locking: the quick-unlock key in the system keychain (Electron
-// safeStorage: DPAPI on Windows, libsecret or KWallet on Linux), the fingerprint reader through
-// fprintd on Linux, and the operating system's own screen lock. Nothing here is logged.
+// safeStorage: DPAPI on Windows, Keychain on macOS, libsecret or KWallet on Linux), the
+// fingerprint (fprintd on Linux, Touch ID on macOS), and the operating system's own screen lock.
+// Nothing here is logged.
 
-import { app, powerMonitor, safeStorage } from 'electron';
+import { app, powerMonitor, safeStorage, systemPreferences } from 'electron';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -69,6 +70,8 @@ const run = (command: string, args: string[], timeout = 5000) =>
 let fprintdChecked: boolean | null = null;
 /** fprintd is installed and the user has at least one enrolled finger. */
 async function fingerprintAvailable(): Promise<boolean> {
+  // macOS: Touch ID, answered by the system itself.
+  if (process.platform === 'darwin') return systemPreferences.canPromptTouchID();
   if (process.platform !== 'linux') return false;
   if (fprintdChecked !== null) return fprintdChecked;
   const user = process.env.USER || process.env.LOGNAME || '';
@@ -136,7 +139,13 @@ export async function unlockWithFingerprint(): Promise<string | null> {
   const stored = await load();
   if (!stored.fingerprint || !(await fingerprintAvailable())) return null;
   verifying?.kill();
-  const matched = await new Promise<boolean>((resolve) => {
+  const matched =
+    process.platform === 'darwin'
+      ? await systemPreferences.promptTouchID('открыть Veil').then(
+          () => true,
+          () => false,
+        )
+      : await new Promise<boolean>((resolve) => {
     const child = spawn('fprintd-verify', [], { stdio: ['ignore', 'pipe', 'pipe'] });
     verifying = child;
     let out = '';

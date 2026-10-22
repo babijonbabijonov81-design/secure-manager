@@ -487,6 +487,12 @@ function registerIpc(): void {
     if (systemPreferences.getMediaAccessStatus('microphone') === 'granted') return true;
     return systemPreferences.askForMediaAccess('microphone');
   });
+  // macOS asks the person once before the camera can be used (video calls, QR codes).
+  handle('camera:request', async () => {
+    if (!isMac) return true;
+    if (systemPreferences.getMediaAccessStatus('camera') === 'granted') return true;
+    return systemPreferences.askForMediaAccess('camera');
+  });
 
   ipcMain.on('fullscreen:toggle', (event) => {
     if (trusted(event) && mainWindow) mainWindow.setFullScreen(!mainWindow.isFullScreen());
@@ -586,6 +592,15 @@ async function startEmbeddedRelay(port = DEFAULT_PORT) {
 
 // A veil:// link opened while Veil runs (Windows and Linux start a second copy with it).
 let pendingInvite: string | null = findInvite(process.argv);
+// macOS hands veil:// links to the running app (or the one it starts) as an event.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  const invite = findInvite([url]);
+  if (!invite) return;
+  pendingInvite = invite;
+  mainWindow?.webContents.send('invite');
+  if (app.isReady()) showWindow();
+});
 app.on('second-instance', (_event, argv) => {
   const invite = findInvite(argv);
   if (invite) {

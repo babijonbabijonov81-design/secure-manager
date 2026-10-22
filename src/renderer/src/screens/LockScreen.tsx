@@ -225,7 +225,7 @@ export function LockScreen({
               </button>
               {quick?.fingerprint.enabled && (
                 <button type="button" className="btn btn-secondary btn-block" disabled={busy} onClick={() => void unlockByFingerprint()}>
-                  <Fingerprint size={18} /> Приложите палец к сканеру
+                  <Fingerprint size={18} /> {bridge?.platform === 'darwin' ? 'Войти по Touch ID' : 'Приложите палец к сканеру'}
                 </button>
               )}
               <div style={{ textAlign: 'center' }}>
@@ -304,7 +304,7 @@ export function LockScreen({
             </button>
             {quick?.fingerprint.enabled && (
               <button type="button" className="btn btn-secondary btn-block" disabled={busy} onClick={() => void unlockByFingerprint()}>
-                <Fingerprint size={18} /> Войти по отпечатку
+                <Fingerprint size={18} /> {bridge?.platform === 'darwin' ? 'Войти по Touch ID' : 'Войти по отпечатку'}
               </button>
             )}
             <div style={{ textAlign: 'center', display: 'flex', justifyContent: 'center', gap: 18 }}>
