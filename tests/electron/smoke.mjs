@@ -121,7 +121,9 @@ try {
   lastStep = 'lock on hide: closing the window';
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('card.html'))?.close());
   lastStep = 'lock on hide: waiting for the lock screen';
-  await page.getByText('Veil заблокирован').waitFor({ timeout: 10_000 });
+  // A hidden window draws no frames, so no waiting for visibility (that needs animation frames):
+  // the page's text is read on a timer instead.
+  await page.waitForFunction(() => document.body.innerText.includes('Veil заблокирован'), null, { polling: 100, timeout: 10_000 });
   await page.waitForTimeout(500);
   const cards = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => w.webContents.getURL().includes('card.html') && w.isVisible()).length);
   if (cards) throw new Error(`${cards} notification cards still on screen after locking`);
