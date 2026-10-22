@@ -96,6 +96,8 @@ export interface VeilBridge {
     setEnabled(enabled: boolean): void;
   };
   requestMicrophone(): Promise<boolean>;
+  /** A call started or ended: while on, the window is not throttled when minimized (video keeps going). */
+  setCallActive(active: boolean): void;
   /** macOS: the system's camera permission (video calls, QR codes); true elsewhere. */
   requestCamera(): Promise<boolean>;
   /** Quick unlock: the vault key in the system keychain, behind a PIN or a fingerprint. */

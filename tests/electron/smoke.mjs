@@ -168,6 +168,37 @@ try {
   if (!shared) throw new Error('getDisplayMedia did not get the chosen screen');
   console.log('screen sharing source ok:', screens.portal ? 'portal' : `${screens.sources.length} sources`);
 
+  // A call keeps running while the window is minimized or hidden: no background throttling, so
+  // the shared screen and the camera do not freeze. Timers in a hidden page are the telltale.
+  const ticksWhileHidden = async () => {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html'))?.hide());
+    await page.waitForTimeout(500);
+    const ticks = await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          let n = 0;
+          const t = setInterval(() => n++, 50);
+          setTimeout(() => {
+            clearInterval(t);
+            resolve(n);
+          }, 2000);
+        }),
+    );
+    const visible = await page.evaluate(() => document.visibilityState);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html'))?.show());
+    return { ticks, visible };
+  };
+  const idle = await ticksWhileHidden();
+  await page.evaluate(() => window.veil.setCallActive(true));
+  await page.waitForTimeout(200);
+  const throttling = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html'))?.webContents.getBackgroundThrottling());
+  const calling = await ticksWhileHidden();
+  await page.evaluate(() => window.veil.setCallActive(false));
+  console.log('hidden window, no call:', JSON.stringify(idle), 'in a call:', JSON.stringify(calling), 'throttling in call:', throttling);
+  if (throttling !== false) throw new Error('background throttling stays on during a call');
+  if (calling.ticks < 25) throw new Error(`a hidden window is throttled during a call (${calling.ticks} ticks in 2 s)`);
+  await page.getByText('Добро пожаловать').waitFor({ timeout: 10_000 });
+
   // «Голосовые в текст»: the bundled ONNX runtime runs Whisper from <userData>/models through
   // veil-model://, under the app's CSP. Needs a model folder (Xenova/whisper-tiny layout):
   //   VEIL_TEST_MODEL=/path/to/whisper-tiny node tests/electron/smoke.mjs

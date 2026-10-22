@@ -51,6 +51,22 @@ function VideoView({ stream, className, label, mirror }: { stream: MediaStream |
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream;
   }, [stream]);
+  // Chromium pauses video while the window is hidden; back in view it must play on, not stay frozen.
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    const resume = () => {
+      if (video.srcObject && video.paused && document.visibilityState === 'visible') void video.play().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('focus', resume);
+    video.addEventListener('pause', resume);
+    return () => {
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('focus', resume);
+      video.removeEventListener('pause', resume);
+    };
+  }, []);
   // Muted: the voice plays through the call's own audio element.
   return <video ref={ref} className={`${className}${mirror ? ' mirror' : ''}`} autoPlay playsInline muted aria-label={label} />;
 }

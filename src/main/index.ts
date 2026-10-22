@@ -13,6 +13,7 @@ import {
   nativeImage,
   nativeTheme,
   Notification,
+  powerSaveBlocker,
   screen,
   session,
   shell,
@@ -61,6 +62,10 @@ const DEFAULT_PORT = 8787;
 // accounts on one computer, each with its own data directory.
 const profile = process.env.VEIL_PROFILE || app.commandLine.getSwitchValue('profile');
 if (profile && /^[\w-]{1,32}$/.test(profile)) app.setPath('userData', `${app.getPath('userData')}-${profile}`);
+
+// Windows marks a window covered by other windows as hidden, and Chromium then stops drawing it
+// and pauses its video: a call's picture would freeze while another app is in front.
+if (process.platform === 'win32') app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 registerModelScheme();
 
@@ -467,6 +472,20 @@ function registerIpc(): void {
   handle('cloud:download', (refresh: string, name: string) => cloud(() => oneDrive.download(String(refresh), String(name))));
   handle('cloud:remove', (refresh: string, name: string) => cloud(() => oneDrive.remove(String(refresh), String(name))));
   handle('cloud:forget', (refresh: string) => oneDrive.forget(String(refresh)));
+
+  // A call is on: the window keeps sending and drawing video while minimized or hidden in the
+  // tray (no background throttling), and macOS does not put Veil to sleep (App Nap).
+  let callBlocker: number | null = null;
+  ipcMain.on('call:active', (event, active: unknown) => {
+    if (!trusted(event)) return;
+    const on = active === true;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(!on);
+    if (on && callBlocker === null) callBlocker = powerSaveBlocker.start('prevent-app-suspension');
+    if (!on && callBlocker !== null) {
+      powerSaveBlocker.stop(callBlocker);
+      callBlocker = null;
+    }
+  });
 
   handle('quick:status', (slot: number) => quickUnlockStatus(quickSlot(slot)));
   handle('quick:enable-pin', (slot: number, blob: string) => enablePin(quickSlot(slot), blob));
