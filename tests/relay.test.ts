@@ -57,3 +57,14 @@ describe('relay', () => {
     }
   });
 });
+
+describe('client address behind a proxy', () => {
+  it('ignores X-Forwarded-For unless proxies are trusted, and then takes the address the proxy added', async () => {
+    const { clientAddress } = await import('../server/src/relay.ts');
+    expect(clientAddress('6.6.6.6', '10.0.0.5', 0)).toBe('10.0.0.5');
+    // The client wrote «6.6.6.6» itself; the proxy appended the real 203.0.113.7.
+    expect(clientAddress('6.6.6.6, 203.0.113.7', '10.0.0.5', 1)).toBe('203.0.113.7');
+    expect(clientAddress('203.0.113.7, 198.51.100.1', '10.0.0.5', 2)).toBe('203.0.113.7');
+    expect(clientAddress(undefined, '10.0.0.5', 1)).toBe('10.0.0.5');
+  });
+});

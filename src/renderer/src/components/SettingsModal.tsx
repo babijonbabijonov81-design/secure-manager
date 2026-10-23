@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { WrongPasswordError } from '../../../core/crypto/vault.ts';
-import type { DeviceInfo, Messenger } from '../../../core/messenger.ts';
+import { fingerprintOf, type DeviceInfo, type Messenger } from '../../../core/messenger.ts';
 import type { AccountStatus } from '../../../../server/src/shared/protocol.ts';
 import { bridge, type EmbeddedServerStatus, type UpdateState } from '../../../core/platform.ts';
 import { probeServer } from '../../../core/relay-client.ts';
@@ -535,6 +535,30 @@ function ServerTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Me
           <RefreshCw size={15} /> Переподключить
         </button>
       </div>
+      {snapshot.me.serverKey && (
+        <Row
+          title="Ключ сервера"
+          text="Veil запомнил ключ этого сервера и проверяет им каждое подключение и каждый ответ «@имя → ключ». Сверьте цифры с тем, кто держит сервер."
+        >
+          <code className="selectable" data-testid="server-key">
+            {fingerprintOf(snapshot.me.serverKey)}
+          </code>
+        </Row>
+      )}
+      {snapshot.serverKeyChanged && (
+        <div className="callout danger" data-testid="server-key-changed">
+          <TriangleAlert size={16} />
+          <div>
+            <b>Сервер показал другой ключ.</b> Так бывает, если сервер переустановили или удалили его папку с данными. Если нет — кто-то в вашей сети
+            может выдавать себя за сервер. Переписка с прежними собеседниками защищена в любом случае, а новых Veil не добавит, пока вы не решите.
+            <div style={{ marginTop: 8 }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => messenger.trustServerKey()}>
+                Сервер переустанавливали — доверять новому ключу
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <Row title="Это мой сервер" text="Сервер развернули вы или люди, которым вы доверяете. Щит чата учитывает это в оценке.">
         <Toggle label="Это мой сервер" on={isOwnServer(snapshot)} onChange={(v) => messenger.updateSettings({ ownServer: v })} />
       </Row>

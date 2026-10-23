@@ -232,13 +232,14 @@ const EVENT_TEXT: Record<SecurityEventKind, (detail?: string) => string> = {
   backup_export: () => 'Сохранена резервная копия .veil',
   cloud_on: () => 'Включена копия в OneDrive',
   cloud_off: () => 'Копия в OneDrive выключена',
+  server_key: (d) => `Новый ключ сервера${d ? `: ${d}` : ''}`,
   backup_import: () => 'Аккаунт восстановлен из файла .veil',
   username_change: (d) => `Имя пользователя изменено${d ? `: ${d}` : ''}`,
   invite_mismatch: (d) => `Ключ ${d ?? 'контакта'} не совпал с приглашением — контакт не добавлен`,
 };
 
 /** Events someone else could have caused: they get «Это не я». */
-const SUSPICIOUS = new Set<SecurityEventKind>(['login', 'username_change', 'login_failed', 'device_new', 'password_change', 'totp_off', 'email_on', 'email_off', 'duress_off', 'backup_export', 'cloud_on']);
+const SUSPICIOUS = new Set<SecurityEventKind>(['login', 'username_change', 'login_failed', 'device_new', 'password_change', 'totp_off', 'email_on', 'email_off', 'duress_off', 'backup_export', 'cloud_on', 'server_key']);
 
 /** «Журнал безопасности»: local, encrypted, with «Это не я» on each event. */
 export function SecurityLogSection({ messenger, snapshot, onDevices }: { messenger: Messenger; snapshot: MessengerSnapshot; onDevices(): void }) {

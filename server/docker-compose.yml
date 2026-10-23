@@ -17,6 +17,8 @@ services:
       - MAIL_FROM
       - TURN_URLS
       - TURN_SECRET
+      # Caddy in front adds the visitor's address to X-Forwarded-For; without a proxy leave it out.
+      - TRUST_PROXY=1
     volumes:
       - relay-data:/data
   caddy:

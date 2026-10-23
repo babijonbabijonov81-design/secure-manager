@@ -33,6 +33,8 @@ export interface UserInfo {
   /** X25519 identity key, signed by the userId (Ed25519) key. */
   dhKey: string;
   dhSig: string;
+  /** The server's signature of userBindingStatement (newer servers). */
+  ssig?: string;
 }
 
 export interface PreKeyBundle extends UserInfo {
@@ -148,7 +150,18 @@ export interface IceServer {
 }
 
 export type ServerFrame =
-  | { type: 'hello'; nonce: string; version: number; name: string; /** Stable server id (older servers: absent). */ id?: string }
+  | {
+      type: 'hello';
+      nonce: string;
+      version: number;
+      name: string;
+      /** Stable server id: a hash of `key` (older servers: absent). */
+      id?: string;
+      /** The server's Ed25519 public key. */
+      key?: string;
+      /** Signature of serverProofStatement(the `c` challenge in the WebSocket URL). */
+      proof?: string;
+    }
   | { type: 'ready'; userId: string; username: string; opkCount: number; spkId: number | null; queued: number; ice?: IceServer[] }
   | { type: 'error'; reqId?: string; code: ErrorCode; message: string }
   | { type: 'result'; reqId: string; data?: unknown }
@@ -191,6 +204,21 @@ export function registerExtra(frame: Pick<RegisterFrame, 'username' | 'dhKey' | 
 export function dhKeyStatement(dhKey: Uint8Array): Uint8Array {
   return concat(utf8('veil-dh-v1'), dhKey);
 }
+
+/**
+ * What a server signs with its own key: the client's random challenge (proves this is the server
+ * the client knows, not someone on the same Wi-Fi with the same id).
+ */
+export function serverProofStatement(challenge: string): Uint8Array {
+  return utf8(`veil-server-proof-v1|${challenge}`);
+}
+
+/** «@username has this identity key» as the server vouches for it in lookups (`ssig`). */
+export function userBindingStatement(info: Pick<UserInfo, 'userId' | 'username' | 'dhKey'>): Uint8Array {
+  return utf8(`veil-user-v1|${info.userId}|${info.username}|${info.dhKey}`);
+}
+
+export const SERVER_CHALLENGE_RE = /^[A-Za-z0-9_-]{22,64}$/;
 
 export function signedPreKeyStatement(id: number, pub: Uint8Array): Uint8Array {
   return concat(utf8('veil-spk-v1'), u32(id), pub);

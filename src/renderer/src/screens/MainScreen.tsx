@@ -18,6 +18,7 @@ import { revokeAttachmentUrls } from '../lib/attachments.ts';
 import { CallManager } from '../lib/calls.ts';
 import { snippetOf } from '../../../core/messenger.ts';
 import { isLanServer } from '../../../core/invite.ts';
+import { probeServer } from '../../../core/relay-client.ts';
 import { avatarColor, initials } from '../lib/format.ts';
 import { feature, useMediaQuery, veiledFor } from '../lib/hooks.ts';
 import { playChime, setBadge, showNotification } from '../lib/notify.ts';
@@ -287,7 +288,11 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
     const timer = setTimeout(async () => {
       const found = (await bridge!.server.discover().catch(() => [])).find((r) => r.id === serverId);
       if (!alive || !found || found.address === messenger.getSnapshot().me.serverUrl) return;
-      messenger.setServerUrl(found.address);
+      // The id is public: only a server that signs our challenge with the pinned key is the same one.
+      const pinned = messenger.getSnapshot().me.serverKey;
+      const proof = await probeServer(found.address).catch(() => null);
+      if (!alive || !pinned || proof?.key !== pinned) return;
+      messenger.moveServer(found.address);
       toast(`Сервер «${found.name}» теперь по адресу ${found.address} — переподключились`, 'info');
     }, 15_000);
     return () => {
@@ -466,6 +471,13 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           <WifiOff size={14} />
           Нет соединения с сервером{snapshot.statusError ? `: ${snapshot.statusError}` : ''}. Сообщения отправятся автоматически.
           <button onClick={() => messenger.reconnect()}>Повторить</button>
+        </div>
+      )}
+      {snapshot.serverKeyChanged && (
+        <div className="banner warn" data-testid="server-key-banner">
+          <ShieldCheck size={14} />
+          Сервер показал другой ключ. Если вы не переустанавливали его, это может быть подмена: новых собеседников пока не добавить.
+          <button onClick={() => setModal({ kind: 'settings', tab: 'server' })}>Проверить</button>
         </div>
       )}
       <div className="shell-body">

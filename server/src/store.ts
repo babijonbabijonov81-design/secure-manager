@@ -4,6 +4,7 @@
 import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import type { BackupMeta, DeviceRecord, OneTimePreKeyPublic, SignedPreKeyPublic } from './shared/protocol.ts';
 import { unb64 } from './shared/wire.ts';
 
@@ -75,11 +76,25 @@ export class RelayStore {
    * tells clients that «localhost:8787» and «192.168.1.5:8787» are the same server.
    */
   get serverId(): string {
-    return createHash('sha256').update('veil-server-id-v1').update(this.pepper).digest('base64url').slice(0, 16);
+    return createHash('sha256').update('veil-server-id-v1').update(this.serverPublicKey).digest('base64url').slice(0, 16);
   }
 
-  constructor(dataDir: string | null, limits: Partial<StoreLimits> = {}) {
+  /** The server's own signing key, from its secret: signs challenges and username lookups. */
+  get serverSecretKey(): Uint8Array {
+    return new Uint8Array(createHash('sha256').update('veil-server-key-v1').update(this.pepper).digest());
+  }
+
+  get serverPublicKey(): Uint8Array {
+    this.publicKey ??= ed25519.getPublicKey(this.serverSecretKey);
+    return this.publicKey;
+  }
+
+  private publicKey: Uint8Array | undefined;
+
+  /** `secret`: SERVER_SECRET for servers without a data folder, so their key survives restarts. */
+  constructor(dataDir: string | null, limits: Partial<StoreLimits> = {}, secret?: Uint8Array) {
     this.dataDir = dataDir;
+    if (secret) this.pepper = secret;
     this.limits = { ...DEFAULT_LIMITS, ...limits };
   }
 
@@ -89,6 +104,7 @@ export class RelayStore {
     await mkdir(join(this.dataDir, 'backups'), { recursive: true });
     try {
       this.pepper = new Uint8Array(await readFile(join(this.dataDir, 'secret.key')));
+      this.publicKey = undefined;
     } catch {
       await writeFile(join(this.dataDir, 'secret.key'), this.pepper, { mode: 0o600 });
     }

@@ -13,14 +13,14 @@ import {
   type RegisterFrame,
   type UserInfo,
 } from '../../server/src/shared/protocol.ts';
-import { authStatement, registerExtra } from '../../server/src/shared/protocol.ts';
+import { authStatement, registerExtra, userBindingStatement } from '../../server/src/shared/protocol.ts';
 import { base32Encode, otpauthUrl, verifyTotp } from '../../server/src/shared/totp.ts';
 import { b64, concat, fromUtf8, pack, randomId, unb64, unpack, utf8 } from '../../server/src/shared/wire.ts';
 import { BACKUP_SKIPPED, backupKey, createBackupFile, openBackupFile, sealBackupFile, type BackupHeader } from './backup-file.ts';
 import { compress, decompress } from './compress.ts';
 import { safetyNumber } from './crypto/fingerprint.ts';
 import { newContentKey, openContent, sealContent } from './crypto/media.ts';
-import { aeadOpen, aeadSeal, equalBytes, generateDH, kdf, keyPairFromJSON, keyPairToJSON, random, sign } from './crypto/primitives.ts';
+import { aeadOpen, aeadSeal, equalBytes, generateDH, kdf, keyPairFromJSON, keyPairToJSON, random, sign, verify } from './crypto/primitives.ts';
 import { openEnvelope, sealEnvelope, type SenderInfo } from './crypto/sealed.ts';
 import { chainFrom, distributionOf, newSenderChain, senderDecrypt, senderEncrypt, type GroupWire, type SenderChain } from './crypto/sender-keys.ts';
 import {
@@ -53,7 +53,7 @@ import { INVITE_DAYS, inviteLink, MAX_INVITES, newInviteToken, parseInvite, serv
 import { canApply, describeChange, groupChatId, isGroupChat, MAX_GROUP_MEMBERS, withoutMember, type GroupMember, type GroupRole, type GroupState } from './groups.ts';
 import { cleanPreview } from './link-preview.ts';
 import { searchMessages, type SearchFilter, type SearchHit } from './search.ts';
-import { anonymousRequest, RelayClient, RelayRequestError, type ConnectionStatus } from './relay-client.ts';
+import { anonymousRequest, normalizeServerUrl, RelayClient, RelayRequestError, type ConnectionStatus } from './relay-client.ts';
 import { readVaultMeta, SecureStore, writeVaultMeta, type StorageBackend } from './storage.ts';
 import type { RecordSource } from './bridge.ts';
 import type { CloudApi } from './platform.ts';
@@ -250,6 +250,14 @@ interface CloudRecord {
   size?: number;
   error?: string;
 }
+
+/** A server key as people compare it: «3F2A 91C0 7B1E 44D2». */
+export const fingerprintOf = (key: string) =>
+  [...sha256(utf8(key)).subarray(0, 8)]
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase()
+    .replace(/(.{4})(?=.)/g, '$1 ');
 
 const randomName = () => [...random(12)].map((b) => 'abcdefghijklmnopqrstuvwxyz234567'[b & 31]).join('');
 
@@ -650,6 +658,8 @@ export class Messenger {
   private backupTimer: ReturnType<typeof setTimeout> | null = null;
   private backingUp = false;
   private cloud: CloudRecord | null = null;
+  /** A key the server showed that differs from the pinned one (no TLS): see pinServerKey. */
+  private serverKeyChanged: string | null = null;
   private cloudBusy = false;
   private cloudTriedAt = 0;
   private resolvingContacts = new Map<string, Promise<UserInfo | null>>();
@@ -787,6 +797,7 @@ export class Messenger {
           this.markDirty('account');
           this.snapshot = null;
         }
+        this.pinServerKey(this.relay?.serverKey);
         pendingHooks?.ready();
         pendingHooks = undefined;
         void this.afterReady(frame.opkCount, frame.spkId);
@@ -871,6 +882,7 @@ export class Messenger {
           displayName: this.account.displayName,
           serverUrl: this.account.serverUrl,
           ...(this.account.serverId ? { serverId: this.account.serverId } : {}),
+          ...(this.account.serverKey ? { serverKey: this.account.serverKey } : {}),
           createdAt: this.account.createdAt,
         },
         security: {
@@ -881,6 +893,7 @@ export class Messenger {
           hiddenChats: !!this.account.hiddenChats,
         },
         ...(this.decoy ? { decoy: true } : {}),
+        ...(this.serverKeyChanged ? { serverKeyChanged: true } : {}),
         ...(this.cloud
           ? { cloud: { lastAt: this.cloud.lastAt, size: this.cloud.size, error: this.cloud.error, ...(this.cloudBusy ? { busy: true } : {}) } }
           : {}),
@@ -1123,8 +1136,70 @@ export class Messenger {
     }
   }
 
+  /**
+   * The server's key is pinned on first contact. Over TLS (wss://) the address itself is
+   * authenticated, so a new key (a reinstalled server) simply replaces the old one; without TLS
+   * (a server on the Wi-Fi) a different key may be an impostor, so new contacts wait until the
+   * user decides in Settings → Сервер. Chats with known contacts are not affected either way.
+   */
+  private pinServerKey(key: string | undefined): void {
+    if (!key) return;
+    const pinned = this.account.serverKey;
+    if (key === pinned) {
+      if (this.serverKeyChanged) {
+        this.serverKeyChanged = null;
+        this.changed();
+      }
+      return;
+    }
+    let tls = false;
+    try {
+      tls = normalizeServerUrl(this.account.serverUrl).startsWith('wss:');
+    } catch {
+      // keep tls = false
+    }
+    if (pinned && !tls) {
+      this.serverKeyChanged = key;
+      this.changed();
+      return;
+    }
+    this.account.serverKey = key;
+    this.serverKeyChanged = null;
+    this.markDirty('account');
+    if (pinned) this.logSecurity('server_key', fingerprintOf(key));
+    this.changed();
+  }
+
+  /** Settings → Сервер: the server was really reinstalled — trust its new key. */
+  trustServerKey(): void {
+    const key = this.serverKeyChanged;
+    if (!key) return;
+    this.account.serverKey = key;
+    this.serverKeyChanged = null;
+    this.markDirty('account');
+    this.logSecurity('server_key', fingerprintOf(key));
+    this.changed();
+  }
+
+  /** «@name has this key» must come signed by the pinned server key. */
+  private checkVouched(info: UserInfo): void {
+    if (this.serverKeyChanged)
+      throw new MessengerError('server_key', 'Ключ сервера изменился. Пока вы не проверите это в Настройки → Сервер, новых собеседников не добавить');
+    const pinned = this.account.serverKey;
+    if (!pinned) return;
+    let ok = false;
+    try {
+      ok = !!info.ssig && verify(unb64(info.ssig), userBindingStatement(info), unb64(pinned));
+    } catch {
+      ok = false;
+    }
+    if (!ok) throw new MessengerError('server_key', 'Сервер не подтвердил ключ собеседника своей подписью — возможно, это подмена сервера');
+  }
+
   private async lookupUser(username: string): Promise<UserInfo> {
     if (!this.relay) throw new MessengerError('offline', 'Нет соединения с сервером');
+    // Not even the question goes to a server whose key is in doubt.
+    if (this.serverKeyChanged) this.checkVouched({ userId: '', username, dhKey: '', dhSig: '' });
     let info: UserInfo;
     try {
       info = await this.relay.request<UserInfo>({ type: 'lookup', username });
@@ -1134,6 +1209,7 @@ export class Messenger {
       throw error;
     }
     this.checkUserInfo(info);
+    this.checkVouched(info);
     return info;
   }
 
@@ -2605,9 +2681,12 @@ export class Messenger {
   private resolveContact(userId: string): Promise<UserInfo | null> {
     let pending = this.resolvingContacts.get(userId);
     if (!pending) {
-      pending = (this.relay?.request<UserInfo>({ type: 'resolve', userId }) ?? Promise.reject(new Error('offline'))).catch(
-        () => null,
-      );
+      pending = (this.relay?.request<UserInfo>({ type: 'resolve', userId }) ?? Promise.reject(new Error('offline')))
+        .then((info) => {
+          this.checkVouched(info);
+          return info;
+        })
+        .catch(() => null);
       this.resolvingContacts.set(userId, pending);
       void pending.finally(() => this.resolvingContacts.delete(userId));
     }
@@ -2871,7 +2950,16 @@ export class Messenger {
     this.changed();
   }
 
+  /** Another server: its key is pinned anew on the first connection. */
   setServerUrl(url: string): void {
+    delete this.account.serverKey;
+    delete this.account.serverId;
+    this.serverKeyChanged = null;
+    this.moveServer(url);
+  }
+
+  /** The same server under a new address (its key stays pinned and is checked again). */
+  moveServer(url: string): void {
     this.account.serverUrl = url.trim();
     this.markDirty('account');
     this.changed();

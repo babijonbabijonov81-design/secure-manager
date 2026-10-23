@@ -1,4 +1,5 @@
 // Entry point: `node src/index.ts` (Node.js >= 22.18 runs TypeScript natively).
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { mailerFromEnv } from './mailer.ts';
 import { startRelay } from './relay.ts';
@@ -22,7 +23,14 @@ const ice = {
 };
 if (ice.turn.length && !ice.secret && !(ice.username && ice.credential)) log('TURN_URLS is set without TURN_SECRET or TURN_USERNAME/TURN_PASSWORD: ignored');
 
+// Without a data folder (DATA_DIR=memory, e.g. free Render) the server's key would change on every
+// restart; SERVER_SECRET (any long random string) keeps it, and so the server's id, the same.
+const secretText = process.env.SERVER_SECRET?.trim();
+const secret = secretText && secretText.length >= 32 ? new Uint8Array(createHash('sha256').update(secretText).digest()) : undefined;
+if (secretText && !secret) log('SERVER_SECRET is shorter than 32 characters: ignored');
+
 const relay = await startRelay({
+  secret,
   port,
   host: process.env.HOST ?? '0.0.0.0',
   dataDir,
@@ -30,6 +38,8 @@ const relay = await startRelay({
   log,
   mailer,
   ice,
+  // Behind Render, nginx or another proxy: TRUST_PROXY=1 (the number of proxies in front).
+  trustProxy: Math.max(0, Math.floor(Number(process.env.TRUST_PROXY) || 0)),
   ...(Number(process.env.REGISTRATIONS_PER_HOUR) > 0 ? { registrationsPerHour: Number(process.env.REGISTRATIONS_PER_HOUR) } : {}),
 });
 

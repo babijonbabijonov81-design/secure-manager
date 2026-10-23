@@ -168,6 +168,8 @@ export interface AccountRecord {
   serverUrl: string;
   /** The relay's stable id, learned on connecting (newer servers only). */
   serverId?: string;
+  /** The relay's own key, pinned on first contact: it must sign every «@name → key» answer. */
+  serverKey?: string;
   createdAt: number;
   /** Base32 secret of the authenticator app (two-factor authentication). */
   totp?: string;
@@ -442,6 +444,7 @@ export type SecurityEventKind =
   | 'backup_import'
   | 'cloud_on'
   | 'cloud_off'
+  | 'server_key'
   | 'invite_mismatch'
   | 'username_change';
 
@@ -456,10 +459,12 @@ export interface MessengerSnapshot {
   status: ConnectionStatus;
   statusError?: string;
   fatal?: string;
-  me: { userId: string; username: string; displayName: string; serverUrl: string; serverId?: string; createdAt: number };
+  me: { userId: string; username: string; displayName: string; serverUrl: string; serverId?: string; serverKey?: string; createdAt: number };
   security: { totp: boolean; recoveryEmail?: string; lastBackupAt?: number; duress?: { wipe: boolean }; hiddenChats: boolean };
   /** This is the empty Veil opened by the duress password (never shown in the interface). */
   decoy?: boolean;
+  /** The server answered with another key than the pinned one (no TLS): new contacts wait for a decision. */
+  serverKeyChanged?: boolean;
   /** «Копия в OneDrive», when connected: no tokens or keys here, just how it is going. */
   cloud?: { lastAt?: number; size?: number; error?: string; busy?: boolean };
   settings: Settings;

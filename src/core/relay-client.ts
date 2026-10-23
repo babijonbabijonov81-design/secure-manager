@@ -8,9 +8,10 @@ import {
   type RegisterFrame,
   type RequestFrame,
   type ServerFrame,
+  serverProofStatement,
 } from '../../server/src/shared/protocol.ts';
-import { b64, pack, randomId, unpack } from '../../server/src/shared/wire.ts';
-import { sign } from './crypto/primitives.ts';
+import { b64, pack, randomId, unb64, unpack } from '../../server/src/shared/wire.ts';
+import { random, sign, verify } from './crypto/primitives.ts';
 
 export type ConnectionStatus = 'connecting' | 'online' | 'offline';
 
@@ -59,12 +60,32 @@ export function normalizeServerUrl(input: string): string {
   return url.toString().replace(/\/$/, '');
 }
 
+/** The WebSocket URL with a fresh random challenge the server must sign in its hello. */
+export function withChallenge(input: string): { url: string; challenge: string } {
+  const challenge = b64(random(18));
+  const url = new URL(normalizeServerUrl(input));
+  url.searchParams.set('c', challenge);
+  return { url: url.toString(), challenge };
+}
+
+/** The server's key, if its hello carries a valid signature of our challenge (newer servers). */
+export function provenServerKey(hello: Extract<ServerFrame, { type: 'hello' }>, challenge: string): string | undefined {
+  if (!hello.key || !hello.proof) return undefined;
+  try {
+    const key = unb64(hello.key);
+    return key.length === 32 && verify(unb64(hello.proof), serverProofStatement(challenge), key) ? hello.key : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Opens a connection just long enough to read the server greeting. */
-export function probeServer(input: string, timeoutMs = 6000): Promise<{ name: string; version: number; id?: string }> {
+export function probeServer(input: string, timeoutMs = 6000): Promise<{ name: string; version: number; id?: string; key?: string }> {
   return new Promise((resolve, reject) => {
     let url: string;
+    let challenge: string;
     try {
-      url = normalizeServerUrl(input);
+      ({ url, challenge } = withChallenge(input));
     } catch (error) {
       reject(error);
       return;
@@ -80,7 +101,8 @@ export function probeServer(input: string, timeoutMs = 6000): Promise<{ name: st
       try {
         const { header } = unpack<ServerFrame>(new Uint8Array(event.data as ArrayBuffer));
         if (header.type !== 'hello') throw new Error('Это не сервер Veil');
-        resolve({ name: header.name, version: header.version, ...(header.id ? { id: header.id } : {}) });
+        const key = provenServerKey(header, challenge);
+        resolve({ name: header.name, version: header.version, ...(header.id ? { id: header.id } : {}), ...(key ? { key } : {}) });
       } catch (error) {
         reject(error);
       } finally {
@@ -144,6 +166,9 @@ export class RelayClient {
   status: ConnectionStatus = 'offline';
   /** The server's stable id from its hello (absent on older servers). */
   serverId: string | undefined;
+  /** The server's key, proven by signing this connection's challenge (newer servers). */
+  serverKey: string | undefined;
+  private challenge = '';
   private ws: WebSocket | null = null;
   private readonly options: RelayClientOptions;
   private register: boolean;
@@ -204,7 +229,9 @@ export class RelayClient {
     this.setStatus('connecting');
     let ws: WebSocket;
     try {
-      ws = new WebSocket(normalizeServerUrl(this.options.url));
+      const { url, challenge } = withChallenge(this.options.url);
+      this.challenge = challenge;
+      ws = new WebSocket(url);
     } catch (error) {
       this.setStatus('offline', (error as Error).message);
       this.scheduleReconnect();
@@ -256,6 +283,7 @@ export class RelayClient {
       case 'hello': {
         this.nonce = frame.nonce;
         this.serverId = frame.id;
+        this.serverKey = provenServerKey(frame, this.challenge);
         const message = this.register
           ? await this.options.buildRegistration(frame.nonce)
           : ({

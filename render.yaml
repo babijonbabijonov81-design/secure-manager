@@ -12,6 +12,12 @@ services:
         value: memory
       - key: RELAY_NAME
         value: Veil Relay
+      # Render's proxy adds the visitor's address to X-Forwarded-For: limits per IP use it.
+      - key: TRUST_PROXY
+        value: '1'
+      # The server's own key (and id) stays the same across restarts; Render makes up the value.
+      - key: SERVER_SECRET
+        generateValue: true
       # Почта для кодов восстановления (по желанию). Brevo работает на бесплатном Render:
       # создайте API-ключ на brevo.com и укажите адрес отправителя, подтверждённый там.
       # Звонки на Render работают без настройки; TURN здесь запустить нельзя (нет UDP).

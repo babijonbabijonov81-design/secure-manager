@@ -82,4 +82,40 @@ describe('one server, several addresses', () => {
     for (const wan of ['veil.onrender.com', 'wss://relay.example.com', '172.32.0.1:8787', '8.8.8.8:8787', '192.169.0.1'])
       expect(isLanServer(wan)).toBe(false);
   });
+
+  it('pins the server key: an impostor with another key cannot hand out contacts', async () => {
+    const real = await probeServer(t.url);
+    expect(real.key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const anna = await makeUser(t.url, 'pinned');
+    const target = await makeUser(t.url, 'target');
+    await waitFor(() => anna.messenger.getSnapshot().me.serverKey);
+    expect(anna.messenger.getSnapshot().me.serverKey).toBe(real.key);
+    // Lookups are signed by the pinned key.
+    expect((await anna.messenger.addContact(target.username)).id).toBe(target.id);
+
+    // «The same server at a new address» — but it is another relay with its own key (no TLS here).
+    anna.messenger.moveServer(other.url);
+    await waitFor(() => anna.messenger.getSnapshot().serverKeyChanged);
+    expect(anna.messenger.getSnapshot().me.serverKey).toBe(real.key);
+    await expect(anna.messenger.addContact('anyone_here')).rejects.toMatchObject({ code: 'server_key' });
+
+    // The user says the server was reinstalled: the new key is trusted from now on.
+    anna.messenger.trustServerKey();
+    expect(anna.messenger.getSnapshot().serverKeyChanged).toBeUndefined();
+    expect(anna.messenger.getSnapshot().me.serverKey).toBe((await probeServer(other.url)).key);
+    expect(anna.messenger.getSnapshot().securityLog.some((e) => e.kind === 'server_key')).toBe(true);
+  });
+
+  it('keeps its key across restarts given the same secret', async () => {
+    const { startRelay } = await import('../server/src/relay.ts');
+    const secret = new Uint8Array(32).fill(7);
+    const first = await startRelay({ port: 0, host: '127.0.0.1', dataDir: null, secret });
+    const key1 = (await probeServer(`ws://127.0.0.1:${first.port}`)).key;
+    await first.close();
+    const second = await startRelay({ port: 0, host: '127.0.0.1', dataDir: null, secret });
+    const key2 = (await probeServer(`ws://127.0.0.1:${second.port}`)).key;
+    await second.close();
+    expect(key1).toBeTruthy();
+    expect(key2).toBe(key1);
+  });
 });

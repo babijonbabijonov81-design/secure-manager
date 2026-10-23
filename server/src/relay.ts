@@ -20,7 +20,10 @@ import {
   DEVICE_ID_RE,
   PROTOCOL_VERSION,
   registerExtra,
+  SERVER_CHALLENGE_RE,
+  serverProofStatement,
   signedPreKeyStatement,
+  userBindingStatement,
   USERNAME_RE,
   type AccountStatus,
   type BackupMeta,
@@ -55,6 +58,28 @@ export interface RelayOptions {
   tap?: (direction: 'in' | 'out', bytes: Uint8Array) => void;
   /** New accounts per IP address and hour (default 20). */
   registrationsPerHour?: number;
+  /**
+   * Proxies in front of the relay (Render, nginx) that add X-Forwarded-For: the client's address
+   * is taken from that many hops from the right. 0 (default): the header is ignored, since anyone
+   * could send it and get around the limits per IP.
+   */
+  trustProxy?: number;
+  /** SERVER_SECRET: the server's secret (and so its key and id) for servers without a data folder. */
+  secret?: Uint8Array;
+}
+
+/**
+ * The client's IP. Each trusted proxy appends the address it saw to X-Forwarded-For, so the real
+ * one is `hops` entries from the right; what the client wrote itself further left is ignored.
+ */
+export function clientAddress(header: string | string[] | undefined, socket: string | undefined, hops: number): string {
+  const direct = socket || 'unknown';
+  if (!hops || !header) return direct;
+  const list = (Array.isArray(header) ? header.join(',') : header)
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return list[list.length - hops] ?? direct;
 }
 
 export interface IceOptions {
@@ -99,6 +124,7 @@ const LOOKUPS_PER_WINDOW = 120;
 const SENDS_PER_WINDOW = 1200;
 const REGISTRATIONS_PER_HOUR = 20;
 const RENAMES_PER_DAY = 3;
+const OPK_REPEAT_MS = 10 * 60_000;
 const CODE_TTL_MS = 15 * 60 * 1000;
 const CODE_ATTEMPTS = 5;
 const EMAILS_PER_HOUR = 5;
@@ -140,7 +166,6 @@ interface Connection {
   /** An anonymous connection taking part in a bridge room (account transfer). */
   bridge?: BridgeRoom;
   alive: boolean;
-  lookups: Bucket;
   sends: Bucket;
 }
 
@@ -213,12 +238,6 @@ function validOneTimePreKeys(opks: unknown): opks is OneTimePreKeyPublic[] {
   );
 }
 
-const publicInfo = (user: UserRecord): UserInfo => ({
-  userId: user.userId,
-  username: user.username,
-  dhKey: user.dhKey,
-  dhSig: user.dhSig,
-});
 
 const statusPage = (name: string) => `<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -241,8 +260,26 @@ const statusPage = (name: string) => `<!doctype html>
 export async function startRelay(options: RelayOptions = {}): Promise<RelayHandle> {
   const name = options.name ?? 'Veil Relay';
   const log = options.log ?? (() => {});
-  const store = new RelayStore(options.dataDir ?? null, options.limits);
+  const store = new RelayStore(options.dataDir ?? null, options.limits, options.secret);
   await store.load();
+  // The server vouches for «@name has this key» with its own key: a fake server on the same Wi-Fi
+  // cannot hand out somebody else's keys under a pinned server key.
+  const publicInfo = (user: UserRecord): UserInfo => {
+    const info = { userId: user.userId, username: user.username, dhKey: user.dhKey, dhSig: user.dhSig };
+    return { ...info, ssig: b64(ed25519.sign(userBindingStatement(info), store.serverSecretKey)) };
+  };
+  // Lookups count per account and per IP, not per connection (reconnecting does not reset them).
+  const lookupBuckets = new Map<string, Bucket>();
+  const lookupAllowed = (conn: Connection): boolean => {
+    for (const key of [`u:${conn.userId}`, `ip:${conn.ip}`]) {
+      let bucket = lookupBuckets.get(key);
+      if (!bucket) lookupBuckets.set(key, (bucket = new Bucket(LOOKUPS_PER_WINDOW, LOOKUP_WINDOW_MS)));
+      if (!bucket.take()) return false;
+    }
+    return true;
+  };
+  // One-time prekeys: one per asker and contact every 10 minutes, so nobody drains them by asking.
+  const opkGiven = new Map<string, number>();
 
   const online = new Map<string, Set<Connection>>();
   const connections = new Map<WebSocket, Connection>();
@@ -527,24 +564,27 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         send(conn, { type: 'pong' });
         return;
       case 'lookup': {
-        if (!conn.lookups.take()) fail('rate_limited', 'Слишком много запросов');
+        if (!lookupAllowed(conn)) fail('rate_limited', 'Слишком много запросов');
         const user = store.byUsername(String(frame.username ?? '').toLowerCase().replace(/^@/, ''));
         if (!user) fail('not_found', 'Пользователь не найден');
         send(conn, { type: 'result', reqId: frame.reqId, data: publicInfo(user!) });
         return;
       }
       case 'resolve': {
-        if (!conn.lookups.take()) fail('rate_limited', 'Слишком много запросов');
+        if (!lookupAllowed(conn)) fail('rate_limited', 'Слишком много запросов');
         const user = store.users.get(frame.userId);
         if (!user) fail('not_found', 'Пользователь не найден');
         send(conn, { type: 'result', reqId: frame.reqId, data: publicInfo(user!) });
         return;
       }
       case 'bundle': {
-        if (!conn.lookups.take()) fail('rate_limited', 'Слишком много запросов');
+        if (!lookupAllowed(conn)) fail('rate_limited', 'Слишком много запросов');
         const user = store.users.get(frame.userId);
         if (!user) fail('not_found', 'Пользователь не найден');
-        const opk = store.takeOneTimePreKey(frame.userId);
+        const askKey = `${userId}>${frame.userId}`;
+        const recently = (opkGiven.get(askKey) ?? 0) > Date.now() - OPK_REPEAT_MS;
+        const opk = recently ? undefined : store.takeOneTimePreKey(frame.userId);
+        if (opk) opkGiven.set(askKey, Date.now());
         send(conn, { type: 'result', reqId: frame.reqId, data: { ...publicInfo(user!), spk: user!.spk, opk } });
         const remaining = user!.opks.length;
         if (remaining < LOW_PREKEYS) {
@@ -593,7 +633,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         return;
       }
       case 'username_check': {
-        if (!conn.lookups.take()) fail('rate_limited', 'Слишком много запросов');
+        if (!lookupAllowed(conn)) fail('rate_limited', 'Слишком много запросов');
         const wanted = String(frame.username ?? '').toLowerCase().replace(/^@/, '');
         const owner = store.byUsername(wanted);
         send(conn, { type: 'result', reqId: frame.reqId, data: { valid: USERNAME_RE.test(wanted), free: !owner || owner.userId === userId } });
@@ -726,14 +766,12 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
   };
 
   wss.on('connection', (ws, req) => {
-    const forwarded = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
     const conn: Connection = {
       ws,
-      ip: forwarded || req.socket.remoteAddress || 'unknown',
+      ip: clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, options.trustProxy ?? 0),
       nonce: b64(randomBytes(32)),
       userId: null,
       alive: true,
-      lookups: new Bucket(LOOKUPS_PER_WINDOW, LOOKUP_WINDOW_MS),
       sends: new Bucket(SENDS_PER_WINDOW, LOOKUP_WINDOW_MS),
     };
     connections.set(ws, conn);
@@ -784,7 +822,16 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       if (set && set.size === 0) online.delete(conn.userId);
     });
 
-    send(conn, { type: 'hello', nonce: conn.nonce, version: PROTOCOL_VERSION, name, id: store.serverId });
+    const challenge = new URL(req.url ?? '/', 'http://relay').searchParams.get('c');
+    send(conn, {
+      type: 'hello',
+      nonce: conn.nonce,
+      version: PROTOCOL_VERSION,
+      name,
+      id: store.serverId,
+      key: b64(store.serverPublicKey),
+      ...(challenge && SERVER_CHALLENGE_RE.test(challenge) ? { proof: b64(ed25519.sign(serverProofStatement(challenge), store.serverSecretKey)) } : {}),
+    });
   });
 
   const heartbeat = setInterval(() => {
@@ -797,7 +844,13 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       conn.ws.ping();
     }
   }, 30_000);
-  const janitor = setInterval(() => void store.expire(), 60 * 60 * 1000);
+  const janitor = setInterval(() => {
+    void store.expire();
+    // Old rate-limit counters: their windows are long over.
+    lookupBuckets.clear();
+    const stale = Date.now() - OPK_REPEAT_MS;
+    for (const [key, at] of opkGiven) if (at < stale) opkGiven.delete(key);
+  }, 60 * 60 * 1000);
   heartbeat.unref?.();
   janitor.unref?.();
 
