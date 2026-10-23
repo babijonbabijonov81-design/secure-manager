@@ -481,6 +481,8 @@ export interface MessengerSnapshot {
   decoy?: boolean;
   /** The server answered with another key than the pinned one (no TLS): new contacts wait for a decision. */
   serverKeyChanged?: boolean;
+  /** Fingerprint of the key the server showed instead (absent: it showed none). */
+  serverKeyOffered?: string;
   /** Someone is restoring this account by email: it goes through at `readyAt` unless cancelled. */
   recoveryHold?: { readyAt: number; requestedAt: number };
   /** «Копия в OneDrive», when connected: no tokens or keys here, just how it is going. */

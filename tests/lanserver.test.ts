@@ -97,6 +97,9 @@ describe('one server, several addresses', () => {
     anna.messenger.moveServer(other.url);
     await waitFor(() => anna.messenger.getSnapshot().serverKeyChanged);
     expect(anna.messenger.getSnapshot().me.serverKey).toBe(real.key);
+    // No login, no registration there: the impostor never got a signature with Anna's key.
+    expect(anna.messenger.getSnapshot().status).toBe('offline');
+    expect(other.relay.store.users.has(anna.id)).toBe(false);
     await expect(anna.messenger.addContact('anyone_here')).rejects.toMatchObject({ code: 'server_key' });
 
     // The user says the server was reinstalled: the new key is trusted from now on.
@@ -104,6 +107,8 @@ describe('one server, several addresses', () => {
     expect(anna.messenger.getSnapshot().serverKeyChanged).toBeUndefined();
     expect(anna.messenger.getSnapshot().me.serverKey).toBe((await probeServer(other.url)).key);
     expect(anna.messenger.getSnapshot().securityLog.some((e) => e.kind === 'server_key')).toBe(true);
+    // Trusted: it logs in there now (and registers, since that server never knew Anna).
+    await waitFor(() => anna.messenger.getSnapshot().status === 'online');
   });
 
   it('keeps its key across restarts given the same secret', async () => {

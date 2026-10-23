@@ -53,7 +53,7 @@ import { INVITE_DAYS, inviteLink, MAX_INVITES, newInviteToken, parseInvite, serv
 import { canApply, describeChange, groupChatId, isGroupChat, MAX_GROUP_MEMBERS, withoutMember, type GroupMember, type GroupRole, type GroupState } from './groups.ts';
 import { cleanPreview } from './link-preview.ts';
 import { searchMessages, type SearchFilter, type SearchHit } from './search.ts';
-import { anonymousRequest, normalizeServerUrl, RelayClient, RelayRequestError, SealedSender, type ConnectionStatus } from './relay-client.ts';
+import { anonymousRequest, RelayClient, RelayRequestError, SealedSender, type ConnectionStatus } from './relay-client.ts';
 import { readVaultMeta, SecureStore, writeVaultMeta, type StorageBackend } from './storage.ts';
 import type { RecordSource } from './bridge.ts';
 import type { CloudApi } from './platform.ts';
@@ -258,6 +258,9 @@ export const fingerprintOf = (key: string) =>
     .join('')
     .toUpperCase()
     .replace(/(.{4})(?=.)/g, '$1 ');
+
+/** serverKeyChanged when the server proved no key at all. */
+const NO_KEY = 'none';
 
 const randomName = () => [...random(12)].map((b) => 'abcdefghijklmnopqrstuvwxyz234567'[b & 31]).join('');
 
@@ -849,6 +852,11 @@ export class Messenger {
       },
       onPrekeysLow: (count) => void this.refillPreKeys(count),
       onRecoveryHold: (hold) => this.noteRecoveryHold(hold),
+      expectKey: () => this.account.serverKey,
+      onKeyMismatch: (key) => {
+        this.serverKeyChanged = key ?? NO_KEY;
+        this.changed();
+      },
       device: () => this.deviceHello(),
       onFatal: (code, message) => {
         if (pendingHooks) {
@@ -948,6 +956,7 @@ export class Messenger {
         },
         ...(this.decoy ? { decoy: true } : {}),
         ...(this.serverKeyChanged ? { serverKeyChanged: true } : {}),
+        ...(this.serverKeyChanged && this.serverKeyChanged !== NO_KEY ? { serverKeyOffered: fingerprintOf(this.serverKeyChanged) } : {}),
         ...(this.recoveryHold ? { recoveryHold: this.recoveryHold } : {}),
         ...(this.cloud
           ? { cloud: { lastAt: this.cloud.lastAt, size: this.cloud.size, error: this.cloud.error, ...(this.cloudBusy ? { busy: true } : {}) } }
@@ -1193,38 +1202,24 @@ export class Messenger {
   }
 
   /**
-   * The server's key is pinned on first contact. Over TLS (wss://) the address itself is
-   * authenticated, so a new key (a reinstalled server) simply replaces the old one; without TLS
-   * (a server on the Wi-Fi) a different key may be an impostor, so new contacts wait until the
-   * user decides in Settings → Сервер. Chats with known contacts are not affected either way.
+   * The server's key is pinned on first contact. Later a server that cannot sign our challenge
+   * with it gets no login at all (RelayClient.expectKey): TLS proves only the address, and a tunnel
+   * address belongs to the public relay, not to the server behind it. The user decides in
+   * Settings → Сервер (trustServerKey) — e.g. after reinstalling a server without SERVER_SECRET.
    */
   private pinServerKey(key: string | undefined): void {
     if (!key) return;
-    const pinned = this.account.serverKey;
-    if (key === pinned) {
-      if (this.serverKeyChanged) {
-        this.serverKeyChanged = null;
-        this.changed();
-      }
-      return;
-    }
-    let tls = false;
-    try {
-      tls = normalizeServerUrl(this.account.serverUrl).startsWith('wss:');
-    } catch {
-      // keep tls = false
-    }
-    if (pinned && !tls) {
-      this.serverKeyChanged = key;
+    if (!this.account.serverKey) {
+      this.account.serverKey = key;
+      this.markDirty('account');
       this.changed();
-      return;
     }
-    this.account.serverKey = key;
-    this.serverKeyChanged = null;
-    this.markDirty('account');
-    if (pinned) this.logSecurity('server_key', fingerprintOf(key));
-    this.changed();
+    if (this.serverKeyChanged && key === this.account.serverKey) {
+      this.serverKeyChanged = null;
+      this.changed();
+    }
   }
+
 
   /**
    * Someone is restoring this account by email and will get the @name at `readyAt` unless I cancel.
@@ -1250,12 +1245,16 @@ export class Messenger {
   trustServerKey(): void {
     const key = this.serverKeyChanged;
     if (!key) return;
-    this.account.serverKey = key;
+    // A server with no key at all (an old version): the pin is dropped, the next key is pinned.
+    if (key === NO_KEY) delete this.account.serverKey;
+    else this.account.serverKey = key;
     this.serverKeyChanged = null;
     this.markDirty('account');
-    this.logSecurity('server_key', fingerprintOf(key));
+    this.logSecurity('server_key', key === NO_KEY ? 'сервер без ключа' : fingerprintOf(key));
     this.changed();
+    this.connect();
   }
+
 
   /** «@name has this key» must come signed by the pinned server key. */
   private checkVouched(info: UserInfo): void {

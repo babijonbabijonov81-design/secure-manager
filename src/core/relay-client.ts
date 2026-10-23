@@ -45,6 +45,10 @@ export interface RelayClientOptions {
   onFatal(code: string, message: string): void;
   /** This computer, for Settings → «Устройства» (only when the feature is on). */
   device?(): DeviceHello | undefined;
+  /** The server key pinned for this account: a server that cannot prove it gets no login. */
+  expectKey?(): string | undefined;
+  /** The server showed another key (or none): the connection stops until the user decides. */
+  onKeyMismatch?(key: string | null): void;
 }
 
 /** Accepts "host:port", "https://host", "wss://host/ws"… and returns the WebSocket URL. */
@@ -305,6 +309,15 @@ export class RelayClient {
         this.nonce = frame.nonce;
         this.serverId = frame.id;
         this.serverKey = provenServerKey(frame, this.challenge);
+        const expected = this.options.expectKey?.();
+        if (expected && this.serverKey !== expected) {
+          // Not the server this account knows: no signature with our key goes to it, no retries.
+          this.closed = true;
+          this.teardown();
+          this.setStatus('offline', 'Ключ сервера не совпадает с запомненным');
+          this.options.onKeyMismatch?.(this.serverKey ?? null);
+          return;
+        }
         const message = this.register
           ? await this.options.buildRegistration(frame.nonce)
           : ({

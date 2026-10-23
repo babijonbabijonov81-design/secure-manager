@@ -493,7 +493,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
       {snapshot.serverKeyChanged && (
         <div className="banner warn" data-testid="server-key-banner">
           <ShieldCheck size={14} />
-          Сервер показал другой ключ. Если вы не переустанавливали его, это может быть подмена: новых собеседников пока не добавить.
+          Сервер показал не тот ключ, и Veil не стал к нему подключаться. Если вы не переустанавливали сервер, это может быть подмена.
           <button onClick={() => setModal({ kind: 'settings', tab: 'server' })}>Проверить</button>
         </div>
       )}
