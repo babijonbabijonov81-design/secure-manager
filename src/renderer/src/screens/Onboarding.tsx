@@ -19,10 +19,12 @@ import {
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { USERNAME_RE } from '../../../../server/src/shared/protocol.ts';
-import { createAccount, MessengerError, type Messenger, type MessengerEvents } from '../../../core/messenger.ts';
+import { createAccount, findInviteServer, MessengerError, type Messenger, type MessengerEvents } from '../../../core/messenger.ts';
+import { parseInvite, type Invite } from '../../../core/invite.ts';
 import { bridge, type EmbeddedServerStatus } from '../../../core/platform.ts';
 import { probeServer } from '../../../core/relay-client.ts';
 import { RestoreFileFlow } from '../components/BackupFile.tsx';
+import { InternetAccess } from '../components/InternetAccess.tsx';
 import { CloudRestoreFlow, useCloudAvailable } from '../components/CloudBackup.tsx';
 import { BridgeGuestFlow } from '../components/BridgeFlows.tsx';
 import type { StorageBackend } from '../../../core/storage.ts';
@@ -52,6 +54,31 @@ export function Onboarding({
   const [probe, setProbe] = useState<{ state: 'idle' | 'checking' | 'ok' | 'error'; text?: string }>({ state: 'idle' });
   const [embedded, setEmbedded] = useState<EmbeddedServerStatus | null>(null);
   const [embeddedBusy, setEmbeddedBusy] = useState(false);
+  // A veil:// invite (Veil opened with it, or pasted): the server, its key and a registration token.
+  const [inviteLinkText, setInviteLinkText] = useState('');
+  const [invite, setInvite] = useState<{ link: string; data: Invite; serverKey?: string; address?: string } | null>(null);
+  const [inviteState, setInviteState] = useState<'idle' | 'searching' | 'found' | 'none'>('idle');
+  const useInvite = async (link: string) => {
+    const data = parseInvite(link);
+    if (!data) return setError({ field: 'server', text: 'Это не приглашение Veil или ссылка повреждена' });
+    setError(null);
+    setInvite({ link, data });
+    setInviteState('searching');
+    const found = await findInviteServer(data);
+    if (!found) return setInviteState('none');
+    setInvite({ link, data, address: found.address, ...(found.key ? { serverKey: found.key } : {}) });
+    setServer(found.address);
+    setProbe({ state: 'ok', text: `Сервер из приглашения отвечает и подтвердил свой ключ: ${found.address}` });
+    setInviteState('found');
+  };
+  useEffect(() => {
+    if (!bridge) return;
+    const take = () => void bridge!.takeInvite().then((link) => link && void useInvite(link));
+    take();
+    return bridge.onInvite(take);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Servers other computers run on this Wi-Fi («Свой сервер» there), found over mDNS.
   const [nearby, setNearby] = useState<{ name: string; address: string; id?: string }[] | null>(null);
 
@@ -135,6 +162,9 @@ export function Onboarding({
           username: cleanUsername,
           displayName: displayName.trim() || cleanUsername,
           password,
+          ...(invite?.data.registration ? { inviteToken: invite.data.registration } : {}),
+          // The key from the invite holds only for the address found for it (not one typed instead).
+          ...(invite?.serverKey && invite.address === server ? { serverKey: invite.serverKey } : {}),
           onProgress: (stage, p) => {
             if (stage === 'keys') setProgress({ text: 'Генерируем ключи шифрования…', value: 0.15 });
             if (stage === 'vault') setProgress({ text: 'Шифруем локальное хранилище…', value: 0.2 + (p ?? 0) * 0.6 });
@@ -144,12 +174,17 @@ export function Onboarding({
         events,
       );
       setProgress({ text: 'Готово!', value: 1 });
+      // Whoever invited me becomes a contact right away (both sides verified).
+      if (invite) await messenger.acceptInvite(invite.link).catch(() => {});
       setTimeout(() => onDone(messenger), 450);
     } catch (e) {
       const err = e as MessengerError;
       if (err.code === 'username_taken') {
         setError({ field: 'username', text: 'Это имя уже занято — попробуйте другое' });
         setStep('profile');
+      } else if (err.code === 'invite_required') {
+        setError({ field: 'server', text: 'На этом сервере регистрируются только по приглашению: попросите у его владельца ссылку veil://' });
+        setStep('server');
       } else if (err.code === 'timeout' || err.code === 'offline') {
         setError({ field: 'server', text: err.message });
         setStep('server');
@@ -336,6 +371,34 @@ export function Onboarding({
                   )}
                 </div>
               )}
+              {bridge && embedded?.running && <InternetAccess embedded={embedded} />}
+              <div className="field">
+                <label className="field-label" htmlFor="invite-link">
+                  Есть приглашение?
+                </label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    id="invite-link"
+                    className="input"
+                    placeholder="veil://add/…"
+                    value={inviteLinkText}
+                    onChange={(e) => setInviteLinkText(e.target.value)}
+                  />
+                  <button type="button" className="btn btn-secondary" disabled={!inviteLinkText.trim()} onClick={() => void useInvite(inviteLinkText.trim())}>
+                    Открыть
+                  </button>
+                </div>
+                {invite && (
+                  <span className="field-hint" data-testid="invite-status">
+                    Приглашение от @{invite.data.username}:{' '}
+                    {inviteState === 'searching'
+                      ? 'ищем рабочий адрес сервера…'
+                      : inviteState === 'found'
+                        ? `сервер найден${invite.data.registration ? ', регистрация по приглашению разрешена' : ''}. После регистрации @${invite.data.username} сразу появится в чатах.`
+                        : 'ни один адрес сервера из ссылки не отвечает отсюда. Попросите отправителя включить «Доступен из интернета».'}
+                  </span>
+                )}
+              </div>
               <div className="field">
                 <label className="field-label" htmlFor="server">
                   Адрес сервера

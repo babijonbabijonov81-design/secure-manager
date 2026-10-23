@@ -139,7 +139,8 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           contact.group && message.from
             ? (messenger.getSnapshot().contacts.find((c) => c.id === message.from)?.displayName ?? contact.group.members.find((m) => m.id === message.from)?.name)
             : undefined;
-        const text = snippetOf(message) || 'Сообщение';
+        // A stranger's first words stay in the request until it is opened, not on the screen.
+        const text = contact.request ? 'Запрос на переписку' : snippetOf(message) || 'Сообщение';
         const body = preview ? (author ? `${author}: ${text}` : text) : 'Новое зашифрованное сообщение';
         if (bridge && current.notificationStyle === 'veil') bridge.notify({ title: contact.displayName, body, tag: contact.id, card: cardData(contact, body) });
         else showNotification(contact.displayName, body, contact.id, () => setActiveId(contact.id));

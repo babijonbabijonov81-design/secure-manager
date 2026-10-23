@@ -5634,3 +5634,89 @@ button:disabled {
   flex: none;
   margin-top: 2px;
 }
+
+/* ---- «Доступен из интернета» ---- */
+.internet-access {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.reach-levels {
+  display: grid;
+  gap: 8px;
+}
+.reach-level {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--r-md, 12px);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.reach-level.ok {
+  border-color: rgba(var(--mint-rgb), 0.45);
+}
+.reach-level .grow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.reach-level .grow span {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.reach-level.failed .grow span {
+  color: var(--text-2);
+}
+.reach-level code {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.invite-copy {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+details.field-hint summary {
+  cursor: pointer;
+  color: var(--text-2);
+}
+
+/* ---- «Запросы на переписку» ---- */
+.request-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px 10px;
+  padding: 12px 14px;
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.request-panel > svg {
+  flex: none;
+  color: var(--accent);
+}
+.closed-media {
+  padding: 18px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px dashed var(--border);
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+.list-note {
+  margin: 4px 16px 10px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  line-height: 1.45;
+}

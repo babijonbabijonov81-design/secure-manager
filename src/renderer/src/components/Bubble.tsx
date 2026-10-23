@@ -139,6 +139,8 @@ interface BubbleProps {
   highlighted: boolean;
   /** «Вуаль»: blurred until hovered or focused, so the bubble takes keyboard focus. */
   veiled?: boolean;
+  /** «Запрос на переписку»: a stranger's pictures and videos stay closed until accepted. */
+  closedMedia?: boolean;
   onContext(e: MouseEvent, message: Message): void;
   onOpenMedia(message: Message, index: number): void;
   onRetry(message: Message): void;
@@ -323,7 +325,14 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
             )}
             {message.once && <OnceCard message={message} onOpen={() => props.onOpenOnce(message)} />}
             {!message.once && sticker && <StickerImage messenger={messenger} att={sticker} />}
-            {!message.once && images.length > 0 && <Album messenger={messenger} images={images} onOpen={(i) => props.onOpenMedia(message, i)} />}
+            {!message.once && images.length > 0 && props.closedMedia && !out && (
+              <div className="closed-media" data-testid="closed-media">
+                {images.length > 1 ? `${images.length} фото или видео` : 'Фото или видео'} — откроется, когда вы примете запрос
+              </div>
+            )}
+            {!message.once && images.length > 0 && !(props.closedMedia && !out) && (
+              <Album messenger={messenger} images={images} onOpen={(i) => props.onOpenMedia(message, i)} />
+            )}
             {!message.once && files.map((att) => (
               <div className="file-card" key={att.id}>
                 <button className="file-icon" onClick={() => void saveAttachment(messenger, att)} aria-label="Сохранить файл">

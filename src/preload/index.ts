@@ -106,6 +106,11 @@ const bridge: VeilBridge = {
     stop: () => ipcRenderer.invoke('server:stop'),
     status: () => ipcRenderer.invoke('server:status'),
     setAutoStart: (enabled, port) => ipcRenderer.invoke('server:autostart', enabled, port),
+    reachConfig: () => ipcRenderer.invoke('server:reach-config'),
+    reachStatus: () => ipcRenderer.invoke('server:reach-status'),
+    configure: (patch) => ipcRenderer.invoke('server:configure', patch),
+    onReach: (callback) => listen('server:reach', callback),
+    mintInvite: () => ipcRenderer.invoke('server:mint-invite'),
   },
   update: {
     state: () => ipcRenderer.invoke('update:state'),

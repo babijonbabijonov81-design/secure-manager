@@ -290,10 +290,12 @@ class VirtualChannel implements Channel {
   private messageHandlers: ((bytes: Uint8Array, binary: boolean) => void)[] = [];
   private closeHandlers: (() => void)[] = [];
 
-  constructor(
-    private readonly vc: number,
-    private readonly send_: (frame: TunnelFrame, body?: Uint8Array) => void,
-  ) {}
+  private readonly vc: number;
+  private readonly send_: (frame: TunnelFrame, body?: Uint8Array) => void;
+  constructor(vc: number, send: (frame: TunnelFrame, body?: Uint8Array) => void) {
+    this.vc = vc;
+    this.send_ = send;
+  }
 
   get open() {
     return !this.closed;
@@ -338,7 +340,10 @@ export class TunnelClient {
   private channels = new Map<number, VirtualChannel>();
   private status: TunnelStatus = { state: 'off' };
 
-  constructor(private readonly options: TunnelClientOptions) {}
+  private readonly options: TunnelClientOptions;
+  constructor(options: TunnelClientOptions) {
+    this.options = options;
+  }
 
   get current(): TunnelStatus {
     return this.status;

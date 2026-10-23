@@ -41,6 +41,7 @@ import { transcribeAvailable } from '../lib/transcribe.ts';
 import { TranscribeSettings } from './Transcribe.tsx';
 import { UsernameTab } from './UsernameTab.tsx';
 import { AccountsTab } from './AccountsTab.tsx';
+import { InternetAccess } from './InternetAccess.tsx';
 import { isOwnServer } from '../lib/shield.ts';
 import { Avatar, ConfirmDialog, Logo, Modal, Toggle, useEscape, useToast } from '../lib/ui.tsx';
 import { BackupFileSection } from './BackupFile.tsx';
@@ -607,8 +608,8 @@ function ServerTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Me
             <Server size={16} /> Встроенный сервер
           </div>
           <p>
-            Запускает ретранслятор Veil прямо на этом компьютере. Друзья в той же сети могут подключиться по адресам ниже. Для общения через
-            интернет разверните сервер на хостинге (см. README).
+            Запускает ретранслятор Veil прямо на этом компьютере. Друзья в той же сети подключаются по адресам ниже, а включив «Доступен из
+            интернета» — и из любой другой сети. Пока компьютер выключен или спит, сообщения через этот сервер не ходят.
           </p>
           <div className="setting-row" style={{ padding: 0, border: 0 }}>
             <div className="grow">
@@ -641,6 +642,7 @@ function ServerTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Me
               ))}
             </div>
           )}
+          {embedded?.running && <InternetAccess embedded={embedded} messenger={messenger} snapshot={snapshot} />}
         </div>
       )}
       {confirm && (

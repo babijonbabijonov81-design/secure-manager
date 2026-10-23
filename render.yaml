@@ -18,6 +18,12 @@ services:
       # The server's own key (and id) stays the same across restarts; Render makes up the value.
       - key: SERVER_SECRET
         generateValue: true
+      # Tunnels for Veil servers at home behind NAT. The free plan has 100 GB of traffic a month:
+      # at most 20 tunnels, 500 MB a day each (change or set TUNNELS=0 to turn tunnels off).
+      - key: TUNNELS_MAX
+        value: '20'
+      - key: TUNNEL_MB_PER_DAY
+        value: '500'
       # Почта для кодов восстановления (по желанию). Brevo работает на бесплатном Render:
       # создайте API-ключ на brevo.com и укажите адрес отправителя, подтверждённый там.
       # Звонки на Render работают без настройки; TURN здесь запустить нельзя (нет UDP).

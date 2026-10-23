@@ -271,10 +271,12 @@ class Bucket {
 class ByteBucket {
   private used = 0;
   private windowStart = Date.now();
-  constructor(
-    private readonly limit: number,
-    private readonly windowMs: number,
-  ) {}
+  private readonly limit: number;
+  private readonly windowMs: number;
+  constructor(limit: number, windowMs: number) {
+    this.limit = limit;
+    this.windowMs = windowMs;
+  }
   take(bytes: number): boolean {
     const now = Date.now();
     if (now - this.windowStart > this.windowMs) {

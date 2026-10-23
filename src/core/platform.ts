@@ -1,6 +1,32 @@
 // The bridge exposed by the Electron preload script. In a plain browser (development,
 // tests) it is absent and the app falls back to web APIs.
 
+/** «Доступен из интернета» (see src/main/reach): settings… */
+export interface ReachConfig {
+  internet: boolean;
+  publicRelay: string;
+  manual: string;
+  inviteOnly: boolean;
+  keepAwake: boolean;
+}
+
+export interface ReachLevel {
+  state: 'off' | 'working' | 'ok' | 'failed';
+  address?: string;
+  text?: string;
+}
+
+/** …and what came of them. */
+export interface ReachStatus {
+  internet: boolean;
+  mapping: ReachLevel & { method?: 'UPnP' | 'PCP' | 'NAT-PMP' };
+  tunnel: ReachLevel & { retryAt?: number };
+  manual: ReachLevel;
+  /** Every way in, best first: what invites carry. */
+  addresses: string[];
+  publicIp?: string;
+}
+
 export interface EmbeddedServerStatus {
   running: boolean;
   /** The server's stable id (same as in its hello). */
@@ -187,6 +213,12 @@ export interface VeilBridge {
     stop(): Promise<EmbeddedServerStatus>;
     status(): Promise<EmbeddedServerStatus>;
     setAutoStart(enabled: boolean, port?: number): Promise<void>;
+    reachConfig(): Promise<ReachConfig>;
+    reachStatus(): Promise<ReachStatus>;
+    configure(patch: Partial<ReachConfig>): Promise<ReachStatus>;
+    onReach(callback: (status: ReachStatus) => void): () => void;
+    /** A registration token for this computer's invite-only server (the owner's, no daily limit). */
+    mintInvite(): Promise<string>;
   };
 }
 

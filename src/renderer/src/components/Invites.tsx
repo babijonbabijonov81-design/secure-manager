@@ -9,10 +9,34 @@ import { Modal, useToast } from '../lib/ui.tsx';
 
 /** «Пригласить лично»: a new link with my key and its QR code (body of «Новый чат»). */
 export function InvitePanel({ messenger }: { messenger: Messenger }) {
-  const [link] = useState(() => messenger.createInvite());
+  const [link, setLink] = useState(() => messenger.createInvite());
+  const [forNewcomer, setForNewcomer] = useState(false);
+  const toast = useToast();
+  const [onThisComputer, setOnThisComputer] = useState(false);
+  // My account on this computer's server: the link carries every way in (tunnel, router port,
+  // Wi-Fi) and, if the server is invite-only, a registration token — so it works from anywhere.
+  useEffect(() => {
+    if (!bridge) return;
+    void (async () => {
+      const [server, reach, config] = await Promise.all([bridge!.server.status(), bridge!.server.reachStatus(), bridge!.server.reachConfig()]);
+      if (!server.running || !server.id || server.id !== messenger.getSnapshot().me.serverId) return;
+      setOnThisComputer(true);
+      const registration = reach.internet && config.inviteOnly ? await bridge!.server.mintInvite() : undefined;
+      setLink(messenger.createInvite({ addresses: reach.addresses, ...(registration ? { registration } : {}) }));
+    })().catch(() => {});
+  }, [messenger]);
+  // On someone else's invite-only server: a token for a newcomer, five a day.
+  const toggleNewcomer = async (on: boolean) => {
+    setForNewcomer(on);
+    try {
+      setLink(on ? messenger.createInvite({ registration: await messenger.mintRegistration() }) : messenger.createInvite());
+    } catch (e) {
+      setForNewcomer(false);
+      toast((e as Error).message, 'error');
+    }
+  };
   const [qr, setQr] = useState('');
   const [copied, setCopied] = useState(false);
-  const toast = useToast();
   useEffect(() => {
     void QRCode.toDataURL(link, { margin: 1, width: 220, errorCorrectionLevel: 'M', color: { dark: '#1a1411', light: '#ffffff' } }).then(setQr);
   }, [link]);
@@ -33,6 +57,12 @@ export function InvitePanel({ messenger }: { messenger: Messenger }) {
       >
         {copied ? <Check size={16} /> : <Copy size={16} />} Копировать ссылку
       </button>
+      {!onThisComputer && (
+        <label className="check-row" style={{ fontSize: 13.5 }}>
+          <input type="checkbox" checked={forNewcomer} onChange={(e) => void toggleNewcomer(e.target.checked)} /> Для человека без аккаунта: с приглашением
+          на регистрацию (если сервер пускает только по приглашениям; до 5 в сутки)
+        </label>
+      )}
       <ul className="invite-facts">
         <li>
           <KeyRound size={15} /> В ссылке — ваш ключ. Кто её откроет, сравнит его с ключом на сервере: подмену будет видно сразу.

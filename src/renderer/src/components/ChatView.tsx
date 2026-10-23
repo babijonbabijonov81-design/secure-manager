@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Shield,
   ShieldAlert,
+  UserPlus,
   ShieldCheck,
   Sticker,
   Trash2,
@@ -360,6 +361,7 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
         groupEnd={!continues(message, next)}
         highlighted={highlight === message.id}
         veiled={veiled}
+        closedMedia={!!contact.request}
         onContext={onContext}
         onOpenMedia={onOpenMedia}
         onRetry={onRetry}
@@ -518,6 +520,27 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
         </div>
       </div>
 
+      {contact.request && (
+        <div className="request-panel" role="region" aria-label="Запрос на переписку" data-testid="request-panel">
+          <UserPlus size={18} />
+          <span className="grow">
+            <b>{contact.group ? 'Вас добавили в группу незнакомые люди.' : `@${contact.username || contact.displayName} пишет вам впервые.`}</b> Пока вы не
+            примете запрос или не ответите, {contact.group ? 'участники не видят' : 'собеседник не видит'} «прочитано» и «в сети», не может дозвониться, а фото
+            закрыты.
+          </span>
+          <button className="btn btn-sm btn-primary" onClick={() => messenger.acceptRequest(contact.id)}>
+            Принять
+          </button>
+          {!contact.group && (
+            <button className="btn btn-sm btn-danger" onClick={() => messenger.setBlocked(contact.id, true)}>
+              Заблокировать
+            </button>
+          )}
+          <button className="btn btn-sm btn-ghost" onClick={() => void messenger.deleteChat(contact.id)}>
+            Удалить
+          </button>
+        </div>
+      )}
       {contact.keyWarning && !saved && feature(snapshot.settings, 'keyGuard') && (
         <div className={`key-banner${held ? ' held' : ''}`} role="alert" data-testid="key-banner">
           <ShieldAlert size={18} />
