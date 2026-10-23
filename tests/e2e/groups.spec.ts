@@ -48,7 +48,7 @@ test('group chat with roles, shield and member removal', async ({ browser }) => 
   await shot(alice.page, 'group');
 
   // Alice removes Vera: Vera's group goes read-only, she gets nothing new.
-  await members.getByRole('button', { name: new RegExp(`^${vera.username}, участник`) }).click();
+  await members.getByRole('button', { name: new RegExp(`^(Вера|${vera.username}), участник`) }).click();
   await alice.page.locator('.context-menu').getByText('Удалить из группы').click();
   await alice.page.getByRole('dialog').getByRole('button', { name: 'Удалить', exact: true }).click();
   await expect(alice.page.locator('.chat-header')).toContainText('2 участника');

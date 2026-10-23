@@ -2594,8 +2594,12 @@ export class Messenger {
     if (accepted.group) return;
     void this.sendControl(accepted, { t: 'prof', ...this.myProfile(accepted) });
     // What came while it was a request is reported delivered now; «прочитано» follows when read.
-    const ids = (this.conversations.get(contactId) ?? []).filter((m) => m.dir === 'in').map((m) => m.id);
+    const incoming = (this.conversations.get(contactId) ?? []).filter((m) => m.dir === 'in');
+    const read = this.shares(contactId, 'read') ? incoming.filter((m) => m.readSent).map((m) => m.id) : [];
+    const ids = incoming.filter((m) => !read.includes(m.id)).map((m) => m.id);
     if (ids.length) void this.sendControl(accepted, { t: 'rcpt', k: 'd', ids });
+    // Already seen in the open request: «прочитано» now that receipts flow.
+    if (read.length) void this.sendControl(accepted, { t: 'rcpt', k: 'r', ids: read });
   }
 
   /** Deleting never leaves a "message deleted" trace — on either side. */
