@@ -35,6 +35,13 @@ export interface UserRecord {
   recoveryHold?: { readyAt: number; requestedAt: number; claimHash: string };
 }
 
+export interface RegistrationInvite {
+  exp: number;
+  /** Who made it: '' for the server's owner, otherwise a user id (to count per day). */
+  by: string;
+  at: number;
+}
+
 export interface QueuedEnvelope {
   id: string;
   ts: number;
@@ -66,6 +73,8 @@ export class RelayStore {
   readonly users = new Map<string, UserRecord>();
   readonly usernames = new Map<string, string>();
   readonly queues = new Map<string, QueuedEnvelope[]>();
+  /** Registration tokens by SHA-256 (invite-only servers); the tokens themselves live in links. */
+  readonly invites = new Map<string, RegistrationInvite>();
   readonly limits: StoreLimits;
   private readonly dataDir: string | null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -113,7 +122,8 @@ export class RelayStore {
       await writeFile(join(this.dataDir, 'secret.key'), this.pepper, { mode: 0o600 });
     }
     try {
-      const raw = JSON.parse(await readFile(join(this.dataDir, 'users.json'), 'utf8')) as { users: UserRecord[] };
+      const raw = JSON.parse(await readFile(join(this.dataDir, 'users.json'), 'utf8')) as { users: UserRecord[]; invites?: [string, RegistrationInvite][] };
+      for (const [hash, invite] of raw.invites ?? []) if (invite.exp > Date.now()) this.invites.set(hash, invite);
       for (const user of raw.users ?? []) {
         // Usernames are case-insensitive: «Anna» and «anna» are one name, kept in lower case.
         user.username = user.username.toLowerCase();
@@ -315,7 +325,7 @@ export class RelayStore {
       this.saveTimer = null;
     }
     const dir = this.dataDir;
-    const snapshot = JSON.stringify({ users: [...this.users.values()] });
+    const snapshot = JSON.stringify({ users: [...this.users.values()], invites: [...this.invites] });
     this.saving = this.saving.then(async () => {
       const tmp = join(dir, `users.json.${process.pid}.tmp`);
       await writeFile(tmp, snapshot);

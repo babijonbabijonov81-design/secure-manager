@@ -168,7 +168,7 @@ export function anonymousRequest<T>(
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const PING_INTERVAL_MS = 25_000;
-const FATAL_CODES = new Set(['username_taken', 'replaced', 'deleted', 'device_revoked']);
+const FATAL_CODES = new Set(['username_taken', 'replaced', 'deleted', 'device_revoked', 'invite_required']);
 
 export class RelayClient {
   status: ConnectionStatus = 'offline';

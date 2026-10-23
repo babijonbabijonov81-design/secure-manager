@@ -10,6 +10,8 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   ACCESS_KEY_BYTES,
+  REGISTRATION_INVITE_DAYS,
+  REGISTRATION_TOKEN_RE,
   authStatement,
   dhKeyStatement,
   EMAIL_RE,
@@ -71,6 +73,11 @@ export interface RelayOptions {
   trustProxy?: number;
   /** SERVER_SECRET: the server's secret (and so its key and id) for servers without a data folder. */
   secret?: Uint8Array;
+  /**
+   * New accounts only with a one-time token from a veil:// invite (a server open to the internet
+   * would otherwise collect strangers and spammers). Can be changed later with setInviteOnly.
+   */
+  inviteOnly?: boolean;
   /** Serve tunnels for Veil servers behind NAT (/tunnel, /t/<id>/ws); off unless given. */
   tunnels?: Partial<TunnelLimits> | false;
 }
@@ -124,6 +131,10 @@ export interface RelayHandle {
   store: RelayStore;
   /** Serves a connection that arrived some other way (a virtual one from a tunnel). */
   accept(channel: Channel, ip: string, challenge: string | null): void;
+  setInviteOnly(on: boolean): void;
+  readonly inviteOnly: boolean;
+  /** A registration token from the server's owner (no daily limit). */
+  mintInvite(): string;
   close(): Promise<void>;
 }
 
@@ -141,6 +152,7 @@ const PAIR_SENDS_PER_MINUTE = 120;
 const PAIR_BYTES_PER_HOUR = 100 * 1024 * 1024;
 const SENDER_BYTES_PER_HOUR = 1024 * 1024 * 1024;
 const HOUR_MS = 60 * 60_000;
+const INVITES_PER_DAY = 5;
 const CODE_TTL_MS = 15 * 60 * 1000;
 const CODE_ATTEMPTS = 5;
 const EMAILS_PER_HOUR = 5;
@@ -540,6 +552,17 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     await deliverQueued(conn);
   };
 
+  let inviteOnly = !!options.inviteOnly;
+  const tokenHash = (token: string) => createHash('sha256').update(`veil-reg-v1|${token}`).digest('base64');
+  const mintInvite = (by: string): string => {
+    const token = b64(randomBytes(16));
+    const now = Date.now();
+    store.invites.set(tokenHash(token), { exp: now + REGISTRATION_INVITE_DAYS * 24 * 60 * 60_000, by, at: now });
+    for (const [hash, invite] of store.invites) if (invite.exp < now) store.invites.delete(hash);
+    store.touch();
+    return token;
+  };
+
   const handleRegister = async (conn: Connection, frame: RegisterFrame) => {
     const bucket = registrations.get(conn.ip) ?? new Bucket(options.registrationsPerHour ?? REGISTRATIONS_PER_HOUR, 3_600_000);
     registrations.set(conn.ip, bucket);
@@ -571,6 +594,14 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     }
     if (taken && taken.userId !== frame.userId) fail('username_taken', 'Это имя пользователя уже занято');
     const previous = store.users.get(frame.userId);
+    // Invite-only: a new account needs a token (an account the server knows, or a recovery, does not).
+    if (inviteOnly && !previous && !inherited.emailHash && !frame.recoveryToken) {
+      const hash = typeof frame.invite === 'string' && REGISTRATION_TOKEN_RE.test(frame.invite) ? tokenHash(frame.invite) : '';
+      const invite = hash ? store.invites.get(hash) : undefined;
+      if (!invite || invite.exp < Date.now()) fail('invite_required', 'На этом сервере регистрируются только по приглашению');
+      store.invites.delete(hash);
+      store.touch();
+    }
     if (previous && previous.username !== username) store.usernames.delete(previous.username);
 
     const user: UserRecord = {
@@ -796,6 +827,13 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         const seen = recentSends.get(userId) ?? new Map<string, { id: string; ts: number }>();
         recentSends.set(userId, seen);
         send(conn, { type: 'result', reqId: frame.reqId, data: await deliver(frame.to, body, cid, seen) });
+        return;
+      }
+      case 'invite_mint': {
+        const day = Date.now() - 24 * 60 * 60_000;
+        const made = [...store.invites.values()].filter((i) => i.by === userId && i.at > day).length;
+        if (made >= INVITES_PER_DAY) fail('rate_limited', 'Не больше 5 приглашений в сутки');
+        send(conn, { type: 'result', reqId: frame.reqId, data: { token: mintInvite(userId), days: REGISTRATION_INVITE_DAYS } });
         return;
       }
       case 'recovery_cancel': {
@@ -1074,6 +1112,13 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     server: http,
     store,
     accept: (channel, ip, challenge) => acceptConnection(channel, ip, challenge),
+    setInviteOnly: (on) => {
+      inviteOnly = on;
+    },
+    get inviteOnly() {
+      return inviteOnly;
+    },
+    mintInvite: () => mintInvite(''),
     async close() {
       clearInterval(heartbeat);
       clearInterval(janitor);

@@ -53,6 +53,8 @@ export interface RegisterFrame {
   sig: string;
   /** Proof of email (+2FA) recovery: lets new keys take over an existing username. */
   recoveryToken?: string;
+  /** A one-time registration token from a veil:// invite (invite-only servers). */
+  invite?: string;
   device?: DeviceHello;
 }
 
@@ -123,6 +125,8 @@ export type RequestFrame =
   | { type: 'send'; reqId: string; to: string; cid: string; ephemeral?: boolean }
   /** The hash of my delivery key (see SealedSendFrame); a new one replaces the old. */
   | { type: 'access_set'; reqId: string; hash: string }
+  /** A registration token for a friend (invite-only servers); up to 5 a day. */
+  | { type: 'invite_mint'; reqId: string }
   /** «Это не я»: stops a recovery that is waiting (see RecoveryHold). */
   | { type: 'recovery_cancel'; reqId: string }
   | { type: 'prekeys'; reqId: string; opks?: OneTimePreKeyPublic[]; spk?: SignedPreKeyPublic }
@@ -173,6 +177,9 @@ export interface SealedSendFrame {
 }
 
 export const ACCESS_KEY_BYTES = 16;
+
+export const REGISTRATION_TOKEN_RE = /^[A-Za-z0-9_-]{22}$/;
+export const REGISTRATION_INVITE_DAYS = 7;
 
 /** STUN/TURN server for calls, in the shape RTCPeerConnection expects. */
 export interface IceServer {
@@ -231,6 +238,7 @@ export type ErrorCode =
   | 'totp_required'
   | 'bad_totp'
   | 'recovery_wait'
+  | 'invite_required'
   | 'device_revoked'
   | 'server_error';
 

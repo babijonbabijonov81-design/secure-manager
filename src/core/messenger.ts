@@ -49,11 +49,11 @@ import {
   type VaultMeta,
 } from './crypto/vault.ts';
 import { generateIdentity, signPreKey, verifyDhKey, type IdentityKeys } from './crypto/x3dh.ts';
-import { INVITE_DAYS, inviteLink, MAX_INVITES, newInviteToken, parseInvite, serverKey } from './invite.ts';
+import { INVITE_DAYS, inviteAddresses, inviteLink, MAX_INVITES, newInviteToken, parseInvite, serverKey, type Invite } from './invite.ts';
 import { canApply, describeChange, groupChatId, isGroupChat, MAX_GROUP_MEMBERS, withoutMember, type GroupMember, type GroupRole, type GroupState } from './groups.ts';
 import { cleanPreview } from './link-preview.ts';
 import { searchMessages, type SearchFilter, type SearchHit } from './search.ts';
-import { anonymousRequest, RelayClient, RelayRequestError, SealedSender, type ConnectionStatus } from './relay-client.ts';
+import { anonymousRequest, probeServer, RelayClient, RelayRequestError, SealedSender, type ConnectionStatus } from './relay-client.ts';
 import { readVaultMeta, SecureStore, writeVaultMeta, type StorageBackend } from './storage.ts';
 import type { RecordSource } from './bridge.ts';
 import type { CloudApi } from './platform.ts';
@@ -127,6 +127,9 @@ export interface CreateAccountOptions {
   kdf?: { N: number; r: number; p: number };
   /** From email recovery: take over the username with brand-new keys. */
   recoveryToken?: string;
+  /** From a veil:// invite: the registration token (invite-only servers) and the server's key. */
+  inviteToken?: string;
+  serverKey?: string;
   onProgress?(stage: 'keys' | 'register' | 'vault', progress?: number): void;
 }
 
@@ -305,6 +308,8 @@ export async function createAccount(options: CreateAccountOptions, events: Messe
     nextOpkId: 1,
     nextSpkId: 2,
     serverUrl: options.serverUrl.trim(),
+    // Known from the invite: the very first connection must already prove it.
+    ...(options.serverKey ? { serverKey: options.serverKey } : {}),
     createdAt: now,
   };
   generateOneTimePreKeys(account, OPK_BATCH);
@@ -315,6 +320,7 @@ export async function createAccount(options: CreateAccountOptions, events: Messe
   messenger.loadState({ account, settings: { ...DEFAULT_SETTINGS }, contacts: {}, sessions: {}, outbox: [], seen: [], stickers: [] });
 
   options.onProgress?.('register');
+  messenger.registrationInvite = options.inviteToken;
   try {
     await messenger.registerFirstTime(options.recoveryToken);
   } catch (error) {
@@ -403,6 +409,23 @@ export async function importAccount(
   const messenger = await openVault(options.storage, meta, dataKey.slice(), events);
   messenger.logSecurity('transfer_in', options.from);
   return messenger;
+}
+
+/**
+ * The first address from an invite where the server answers and, if the invite names the
+ * server's key, proves it. Null: none of them works from here.
+ */
+export async function findInviteServer(invite: Invite): Promise<{ address: string; key?: string } | null> {
+  for (const address of inviteAddresses(invite)) {
+    try {
+      const probe = await probeServer(address, 5000);
+      if (invite.serverKey && probe.key !== invite.serverKey) continue;
+      return { address, ...(probe.key ? { key: probe.key } : {}) };
+    } catch {
+      // not reachable from here: try the next one
+    }
+  }
+  return null;
 }
 
 const DECOY_PREFIX = 'd.';
@@ -699,6 +722,8 @@ export class Messenger {
   private cloud: CloudRecord | null = null;
   /** A key the server showed that differs from the pinned one (no TLS): see pinServerKey. */
   private serverKeyChanged: string | null = null;
+  /** The registration token from an invite, for the first registration on an invite-only server. */
+  registrationInvite: string | undefined;
   /** A recovery of this account by email that waits for its time (see noteRecoveryHold). */
   private recoveryHold: RecoveryHold | null = null;
   /** Sends to contacts with a delivery key without logging in (sealed sender). */
@@ -1071,6 +1096,7 @@ export class Messenger {
         .map(([id, kp]) => ({ id: Number(id), pub: kp.pub })),
       sig: b64(sign(authStatement(nonce, 'register', registerExtra(frame)), this.identity.sign.priv)),
       ...(this.recoveryToken ? { recoveryToken: this.recoveryToken } : {}),
+      ...(this.registrationInvite ? { invite: this.registrationInvite } : {}),
       ...(this.deviceHello() ? { device: this.deviceHello()! } : {}),
       ...frame,
     };
@@ -1764,14 +1790,34 @@ export class Messenger {
   // ---- veil:// invites (features.invites) -------------------------------------------------
 
   /** A new invite link with my identity key and a one-time token (valid 7 days). */
-  createInvite(): string {
+  /** `addresses`: more ways to this server (tunnel, external); `registration`: a token for a newcomer. */
+  createInvite(extra: { addresses?: string[]; registration?: string } = {}): string {
     if (this.settings.features.invites === false) throw new MessengerError('disabled', 'Приглашения выключены в настройках');
     const now = Date.now();
     const token = newInviteToken();
     const active = (this.account.invites ?? []).filter((i) => i.exp > now);
     this.account.invites = [...active, { t: token, exp: now + INVITE_DAYS * DAY_MS }].slice(-MAX_INVITES);
     this.markDirty('account');
-    return inviteLink({ username: this.account.username, userId: this.account.userId, server: this.account.serverUrl, serverId: this.account.serverId, token });
+    return inviteLink({
+      username: this.account.username,
+      userId: this.account.userId,
+      server: this.account.serverUrl,
+      serverId: this.account.serverId,
+      serverKey: this.account.serverKey,
+      ...(extra.addresses?.length ? { addresses: extra.addresses } : {}),
+      ...(extra.registration ? { registration: extra.registration } : {}),
+      token,
+    });
+  }
+
+  /**
+   * A registration token for someone new (invite-only servers; up to 5 a day). The owner of a
+   * server on this computer gets them from the app instead, without the limit.
+   */
+  async mintRegistration(): Promise<string> {
+    if (!this.relay) throw new RelayRequestError('offline', 'Нет соединения с сервером');
+    const { token } = await this.relay.request<{ token: string }>({ type: 'invite_mint' });
+    return token;
   }
 
   /**
@@ -1785,11 +1831,12 @@ export class Messenger {
     if (invite.userId === this.account.userId) throw new MessengerError('own_invite', 'Это ваше собственное приглашение');
     // One server has many addresses (localhost on its own computer, 192.168.… for the others):
     // its id says whether it is the same one. Without ids, a different address is only a guess.
-    const sameId = !!invite.serverId && invite.serverId === this.account.serverId;
+    const sameId =
+      (!!invite.serverKey && invite.serverKey === this.account.serverKey) || (!!invite.serverId && invite.serverId === this.account.serverId);
     const otherAddress = !!invite.server && serverKey(invite.server) !== serverKey(this.account.serverUrl);
     const otherServer = () =>
       new MessengerError('other_server', `Приглашение для сервера ${invite.server}, а ваш аккаунт — на ${serverKey(this.account.serverUrl)}`);
-    if (otherAddress && !sameId && invite.serverId && this.account.serverId) throw otherServer();
+    if (otherAddress && !sameId && (invite.serverKey || invite.serverId) && (this.account.serverKey || this.account.serverId)) throw otherServer();
     if (this.decoy) return this.addContact(invite.username);
     // Compared before anything is stored: a swapped key must not replace a known contact's key.
     let info: UserInfo;
