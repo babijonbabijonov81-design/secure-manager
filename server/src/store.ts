@@ -29,6 +29,8 @@ export interface UserRecord {
   revoked?: string[];
   /** When the @name was changed (last few), to limit how often it can be. */
   renamedAt?: number[];
+  /** SHA-256 of the delivery key for anonymous (sealed) sends; the key itself only contacts know. */
+  accessHash?: string;
 }
 
 export interface QueuedEnvelope {

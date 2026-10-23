@@ -7,6 +7,7 @@ import {
   type ErrorCode,
   type RegisterFrame,
   type RequestFrame,
+  type SealedSendFrame,
   type ServerFrame,
   serverProofStatement,
 } from '../../server/src/shared/protocol.ts';
@@ -198,6 +199,23 @@ export class RelayClient {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.teardown();
     this.setStatus('offline');
+  }
+
+  /** Closes and waits (briefly) until the server has the connection closed too. */
+  closeAndWait(timeoutMs = 1000): Promise<void> {
+    const ws = this.ws;
+    const done =
+      ws && ws.readyState === WebSocket.OPEN
+        ? new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, timeoutMs);
+            ws.addEventListener('close', () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          })
+        : Promise.resolve();
+    this.close();
+    return done;
   }
 
   /** Signs a statement bound to the current connection (used for account deletion). */
@@ -393,3 +411,105 @@ export class RelayClient {
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/**
+ * Sealed sender, delivered anonymously: a second connection that never logs in. Envelopes for
+ * contacts who gave me their delivery key go here, so the server sees whom they are for but not
+ * who sent them. It opens on demand, checks the server's key like the main connection, and
+ * closes when idle.
+ */
+export class SealedSender {
+  private ws: WebSocket | null = null;
+  private ready: Promise<WebSocket> | null = null;
+  private readonly pending = new Map<string, { resolve(data: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
+  private idle: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(
+    private readonly url: () => string,
+    /** The pinned server key: a server that cannot prove it gets nothing. */
+    private readonly expectKey: () => string | undefined,
+  ) {}
+
+  async send<T>(frame: Omit<SealedSendFrame, 'reqId' | 'type'>, body: Uint8Array): Promise<T> {
+    const ws = await this.open();
+    const reqId = randomId(9);
+    this.touch();
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(reqId);
+        reject(new RelayRequestError('timeout', 'Сервер не отвечает'));
+      }, REQUEST_TIMEOUT_MS);
+      this.pending.set(reqId, { resolve: resolve as (data: unknown) => void, reject, timer });
+      ws.send(pack({ type: 'send_sealed', reqId, ...frame }, body));
+    });
+  }
+
+  close(): void {
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = null;
+    this.ws?.close();
+    this.ws = null;
+    this.ready = null;
+    for (const waiter of this.pending.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new RelayRequestError('offline', 'Соединение закрыто'));
+    }
+    this.pending.clear();
+  }
+
+  private touch(): void {
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = setTimeout(() => this.close(), SEALED_IDLE_MS);
+  }
+
+  private open(): Promise<WebSocket> {
+    if (this.ready) return this.ready;
+    this.ready = new Promise<WebSocket>((resolve, reject) => {
+      let target: { url: string; challenge: string };
+      try {
+        target = withChallenge(this.url());
+      } catch (error) {
+        this.ready = null;
+        reject(error);
+        return;
+      }
+      const ws = new WebSocket(target.url);
+      ws.binaryType = 'arraybuffer';
+      this.ws = ws;
+      let greeted = false;
+      ws.onmessage = (event) => {
+        let frame: ServerFrame;
+        try {
+          frame = unpack<ServerFrame>(new Uint8Array(event.data as ArrayBuffer)).header;
+        } catch {
+          return;
+        }
+        if (frame.type === 'hello') {
+          const expected = this.expectKey();
+          if (expected && provenServerKey(frame, target.challenge) !== expected) {
+            this.close();
+            reject(new RelayRequestError('unauthorized', 'Сервер не подтвердил свой ключ'));
+            return;
+          }
+          greeted = true;
+          resolve(ws);
+          return;
+        }
+        const reqId = (frame as { reqId?: string }).reqId;
+        const waiter = reqId ? this.pending.get(reqId) : undefined;
+        if (!waiter || !reqId) return;
+        clearTimeout(waiter.timer);
+        this.pending.delete(reqId);
+        if (frame.type === 'result') waiter.resolve(frame.data);
+        else if (frame.type === 'error') waiter.reject(new RelayRequestError(frame.code, frame.message));
+      };
+      ws.onclose = () => {
+        if (this.ws === ws) this.close();
+        if (!greeted) reject(new RelayRequestError('offline', 'Не удалось подключиться к серверу'));
+      };
+    });
+    return this.ready;
+  }
+}
+
+const SEALED_IDLE_MS = 60_000;

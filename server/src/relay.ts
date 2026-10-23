@@ -4,11 +4,12 @@
 // for user X". What it never knows: message contents, attachments, display names,
 // contact lists, or who sent an envelope (the sender is sealed inside the envelope).
 
-import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
+  ACCESS_KEY_BYTES,
   authStatement,
   dhKeyStatement,
   EMAIL_RE,
@@ -33,6 +34,7 @@ import {
   type IceServer,
   type OneTimePreKeyPublic,
   type RegisterFrame,
+  type SealedSendFrame,
   type ServerFrame,
   type SignedPreKeyPublic,
   type UserInfo,
@@ -511,6 +513,54 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     await goOnline(conn, user!);
   };
 
+  /** Queues an envelope (unless this client id was seen) and pushes it to the recipient's devices. */
+  const deliver = async (to: string, body: Uint8Array, cid: string, seen: Map<string, { id: string; ts: number }>) => {
+    const duplicate = cid ? seen.get(cid) : undefined;
+    if (duplicate) return duplicate;
+    const id = randomBytes(12).toString('hex');
+    const item = await store.enqueue(to, id, body.slice());
+    if (!item) fail('quota', 'Очередь получателя переполнена');
+    if (cid) {
+      seen.set(cid, { id, ts: item!.ts });
+      if (seen.size > 1000) seen.delete(seen.keys().next().value!);
+    }
+    for (const target of online.get(to) ?? []) send(target, { type: 'msg', id, ts: item!.ts }, body);
+    return { id, ts: item!.ts };
+  };
+
+  // Sealed sends: per IP (the sender is unknown) and per recipient.
+  const sealedBuckets = new Map<string, Bucket>();
+  const sealedAllowed = (key: string, limit: number) => {
+    let bucket = sealedBuckets.get(key);
+    if (!bucket) sealedBuckets.set(key, (bucket = new Bucket(limit, LOOKUP_WINDOW_MS)));
+    return bucket.take();
+  };
+  const sealedSeen = new Map<string, Map<string, { id: string; ts: number }>>();
+
+  /** An envelope from someone who is not logged in on this connection: the server never learns who. */
+  const handleSealedSend = async (conn: Connection, frame: SealedSendFrame, body: Uint8Array) => {
+    if (!sealedAllowed(`ip:${conn.ip}`, SENDS_PER_WINDOW) || !sealedAllowed(`to:${frame.to}`, SENDS_PER_WINDOW))
+      fail('rate_limited', 'Слишком много сообщений');
+    if (body.length === 0) fail('bad_request', 'Пустое сообщение');
+    if (body.length > MAX_ENVELOPE_BYTES) fail('too_large', 'Сообщение слишком большое');
+    const user = store.users.get(String(frame.to));
+    const key = unb64Len(frame.ak, ACCESS_KEY_BYTES);
+    const expected = user?.accessHash ? unb64Len(user.accessHash, 32) : null;
+    // One answer for «no such user» and «wrong key»: the server does not confirm who exists.
+    if (!user || !key || !expected || !timingSafeEqual(createHash('sha256').update(key).digest(), expected)) fail('unauthorized', 'Нет доступа');
+    if (frame.ephemeral) {
+      const id = randomBytes(12).toString('hex');
+      const recipients = online.get(frame.to);
+      for (const target of recipients ?? []) send(target, { type: 'msg', id, ts: Date.now() }, body);
+      send(conn, { type: 'result', reqId: frame.reqId, data: { id, delivered: !!recipients?.size } });
+      return;
+    }
+    const seen = sealedSeen.get(frame.to) ?? new Map<string, { id: string; ts: number }>();
+    sealedSeen.set(frame.to, seen);
+    const cid = typeof frame.cid === 'string' ? frame.cid.slice(0, 64) : '';
+    send(conn, { type: 'result', reqId: frame.reqId, data: await deliver(frame.to, body, cid, seen) });
+  };
+
   const handleRecovery = async (conn: Connection, frame: Extract<ClientFrame, { type: 'recover_start' | 'recover_finish' }>) => {
     const username = String(frame.username ?? '').toLowerCase().replace(/^@/, '');
     if (frame.type === 'recover_start') {
@@ -608,20 +658,15 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         const cid = typeof frame.cid === 'string' ? frame.cid.slice(0, 64) : '';
         const seen = recentSends.get(userId) ?? new Map<string, { id: string; ts: number }>();
         recentSends.set(userId, seen);
-        const duplicate = cid ? seen.get(cid) : undefined;
-        if (duplicate) {
-          send(conn, { type: 'result', reqId: frame.reqId, data: duplicate });
-          return;
-        }
-        const id = randomBytes(12).toString('hex');
-        const item = await store.enqueue(frame.to, id, body.slice());
-        if (!item) fail('quota', 'Очередь получателя переполнена');
-        if (cid) {
-          seen.set(cid, { id, ts: item!.ts });
-          if (seen.size > 1000) seen.delete(seen.keys().next().value!);
-        }
-        for (const target of recipients ?? []) send(target, { type: 'msg', id, ts: item!.ts }, body);
-        send(conn, { type: 'result', reqId: frame.reqId, data: { id, ts: item!.ts } });
+        send(conn, { type: 'result', reqId: frame.reqId, data: await deliver(frame.to, body, cid, seen) });
+        return;
+      }
+      case 'access_set': {
+        const hash = unb64Len(frame.hash, 32);
+        if (!hash) fail('bad_request', 'Неверный ключ доставки');
+        store.users.get(userId)!.accessHash = frame.hash;
+        store.touch();
+        send(conn, { type: 'result', reqId: frame.reqId, data: { ok: true } });
         return;
       }
       case 'prekeys': {
@@ -793,6 +838,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
             else if (header.type === 'auth') await handleAuth(conn, header);
             else if (header.type === 'recover_start' || header.type === 'recover_finish') await handleRecovery(conn, header);
             else if (header.type === 'bridge_open' || header.type === 'bridge_join' || header.type === 'bridge_data') handleBridge(conn, header, body);
+            else if (header.type === 'send_sealed') await handleSealedSend(conn, header, body);
             else if (header.type === 'ping') send(conn, { type: 'pong' });
             else fail('unauthorized', 'Требуется вход');
             return;
@@ -848,6 +894,8 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     void store.expire();
     // Old rate-limit counters: their windows are long over.
     lookupBuckets.clear();
+    sealedBuckets.clear();
+    for (const to of sealedSeen.keys()) if (!store.users.has(to)) sealedSeen.delete(to);
     const stale = Date.now() - OPK_REPEAT_MS;
     for (const [key, at] of opkGiven) if (at < stale) opkGiven.delete(key);
   }, 60 * 60 * 1000);

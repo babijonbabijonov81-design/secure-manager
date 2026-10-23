@@ -110,6 +110,8 @@ export type RequestFrame =
   | { type: 'resolve'; reqId: string; userId: string }
   | { type: 'bundle'; reqId: string; userId: string }
   | { type: 'send'; reqId: string; to: string; cid: string; ephemeral?: boolean }
+  /** The hash of my delivery key (see SealedSendFrame); a new one replaces the old. */
+  | { type: 'access_set'; reqId: string; hash: string }
   | { type: 'prekeys'; reqId: string; opks?: OneTimePreKeyPublic[]; spk?: SignedPreKeyPublic }
   | { type: 'unregister'; reqId: string; sig: string; totp?: string }
   | { type: 'account_status'; reqId: string }
@@ -139,8 +141,25 @@ export type ClientFrame =
   | RecoveryFrame
   | RequestFrame
   | BridgeFrame
+  | SealedSendFrame
   | { type: 'ack'; ids: string[] }
   | { type: 'ping' };
+
+/**
+ * Sealed sender, delivered anonymously: sent on a connection that is NOT logged in, so the server
+ * learns the recipient but not the sender. `ak` is the recipient's delivery key, which only their
+ * contacts get (inside end-to-end encrypted messages); the server keeps just its hash.
+ */
+export interface SealedSendFrame {
+  type: 'send_sealed';
+  reqId: string;
+  to: string;
+  ak: string;
+  cid?: string;
+  ephemeral?: boolean;
+}
+
+export const ACCESS_KEY_BYTES = 16;
 
 /** STUN/TURN server for calls, in the shape RTCPeerConnection expects. */
 export interface IceServer {

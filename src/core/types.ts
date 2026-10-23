@@ -170,6 +170,11 @@ export interface AccountRecord {
   serverId?: string;
   /** The relay's own key, pinned on first contact: it must sign every «@name → key» answer. */
   serverKey?: string;
+  /**
+   * Delivery key (16 random bytes): contacts get it inside encrypted messages and use it to send to
+   * me without logging in, so the server does not learn who wrote. A new one locks out the blocked.
+   */
+  accessKey?: string;
   createdAt: number;
   /** Base32 secret of the authenticator app (two-factor authentication). */
   totp?: string;
@@ -225,6 +230,8 @@ export interface Contact {
   group?: GroupState & { left?: boolean };
   /** Known only as a member of a group: not in the chat list until we talk directly. */
   groupOnly?: boolean;
+  /** Their delivery key: messages to them go on an anonymous connection (sealed sender). */
+  accessKey?: string;
 }
 
 export type PresenceKind = 'online' | 'read' | 'typing';
@@ -374,7 +381,8 @@ export type Content =
       /** Reply: quoted id, short snippet and who wrote it from the sender's point of view. */
       r?: { id: string; s: string; a: 'me' | 'you' };
       timer?: number;
-      p?: { n: string };
+      /** The sender's name, and the delivery key for sealed sends to them (contacts only). */
+      p?: { n: string; ak?: string };
       /** View-once: the key that opens the sealed attachment. */
       once?: { k: string };
       /** Time capsule: the text, sealed until `at`; the key follows then. */
@@ -405,7 +413,7 @@ export type Content =
   /** Sent after restoring from a backup to open fresh sessions with every contact. */
   | { t: 'hi' }
   /** My display name; `u`: my @name changed — ask the server which one it is now. */
-  | { t: 'prof'; n: string; u?: 1 }
+  | { t: 'prof'; n: string; u?: 1; ak?: string }
   | ({ t: 'call'; ts: number } & CallSignal);
 
 export interface OutboxItem {

@@ -13,7 +13,7 @@ import {
   type RegisterFrame,
   type UserInfo,
 } from '../../server/src/shared/protocol.ts';
-import { authStatement, registerExtra, userBindingStatement } from '../../server/src/shared/protocol.ts';
+import { ACCESS_KEY_BYTES, authStatement, registerExtra, userBindingStatement } from '../../server/src/shared/protocol.ts';
 import { base32Encode, otpauthUrl, verifyTotp } from '../../server/src/shared/totp.ts';
 import { b64, concat, fromUtf8, pack, randomId, unb64, unpack, utf8 } from '../../server/src/shared/wire.ts';
 import { BACKUP_SKIPPED, backupKey, createBackupFile, openBackupFile, sealBackupFile, type BackupHeader } from './backup-file.ts';
@@ -53,7 +53,7 @@ import { INVITE_DAYS, inviteLink, MAX_INVITES, newInviteToken, parseInvite, serv
 import { canApply, describeChange, groupChatId, isGroupChat, MAX_GROUP_MEMBERS, withoutMember, type GroupMember, type GroupRole, type GroupState } from './groups.ts';
 import { cleanPreview } from './link-preview.ts';
 import { searchMessages, type SearchFilter, type SearchHit } from './search.ts';
-import { anonymousRequest, normalizeServerUrl, RelayClient, RelayRequestError, type ConnectionStatus } from './relay-client.ts';
+import { anonymousRequest, normalizeServerUrl, RelayClient, RelayRequestError, SealedSender, type ConnectionStatus } from './relay-client.ts';
 import { readVaultMeta, SecureStore, writeVaultMeta, type StorageBackend } from './storage.ts';
 import type { RecordSource } from './bridge.ts';
 import type { CloudApi } from './platform.ts';
@@ -660,6 +660,8 @@ export class Messenger {
   private cloud: CloudRecord | null = null;
   /** A key the server showed that differs from the pinned one (no TLS): see pinServerKey. */
   private serverKeyChanged: string | null = null;
+  /** Sends to contacts with a delivery key without logging in (sealed sender). */
+  private sealed: SealedSender | null = null;
   private cloudBusy = false;
   private cloudTriedAt = 0;
   private resolvingContacts = new Map<string, Promise<UserInfo | null>>();
@@ -828,16 +830,28 @@ export class Messenger {
     this.closed = true;
     this.relay?.close();
     this.relay = null;
+    this.sealed?.close();
+    this.sealed = null;
     this.stopTimers();
     this.listeners.clear();
   }
 
   async lock(): Promise<void> {
     if (this.locked) return;
-    this.announcePresence('off');
+    // «Offline» to contacts without my delivery key goes on the logged-in connection before it
+    // closes; to the others on the anonymous one, but only once the server has this one closed —
+    // otherwise they could hear «offline» while the server still delivers to this device.
+    const sealed = this.presenceTargets('off').filter((t) => this.contacts[t.id]?.accessKey);
+    const direct = this.presenceTargets('off').filter((t) => !this.contacts[t.id]?.accessKey);
+    const later = <T>(work: Promise<T>) => Promise.race([work, new Promise((r) => setTimeout(r, 1500))]);
+    await later(Promise.all(direct.map((t) => this.sendEphemeral(t.id, t.content))));
+    if (this.locked) return;
     this.locked = true;
-    this.relay?.close();
+    await this.relay?.closeAndWait();
     this.relay = null;
+    await later(Promise.all(sealed.map((t) => this.sendEphemeral(t.id, t.content, true))));
+    this.sealed?.close();
+    this.sealed = null;
     this.stopTimers();
     for (const timer of this.typingTimers.values()) clearTimeout(timer);
     await this.flushNow();
@@ -1017,13 +1031,14 @@ export class Messenger {
       const newest = this.account.spks[0];
       if (Date.now() - newest.createdAt > SPK_ROTATE_MS || spkId !== newest.id) await this.rotateSignedPreKey();
       if (opkCount < OPK_LOW_WATER) await this.refillPreKeys(opkCount);
+      await this.publishAccessKey();
       await this.pumpOutbox();
       await this.retryUnsent();
       if (this.helloPending) {
         this.helloPending = false;
         for (const contact of Object.values(this.contacts)) if (!contact.blocked) void this.sendControl(contact, { t: 'hi' });
       }
-      this.announcePresence('on', true);
+      void this.announcePresence('on', true);
       void this.checkNewDevices();
       const recovery = this.account.recovery;
       if (recovery && Date.now() - recovery.lastBackupAt > BACKUP_STALE_MS) void this.backupNow().catch(() => {});
@@ -1132,7 +1147,7 @@ export class Messenger {
     this.logSecurity('username_change', `@${before} → @${username}`);
     this.changed();
     for (const contact of Object.values(this.contacts)) {
-      if (!contact.blocked && !contact.group && this.sessions[contact.id]?.length) void this.sendControl(contact, { t: 'prof', n: this.account.displayName, u: 1 });
+      if (!contact.blocked && !contact.group && this.sessions[contact.id]?.length) void this.sendControl(contact, { t: 'prof', ...this.myProfile(contact), u: 1 });
     }
   }
 
@@ -1664,6 +1679,7 @@ export class Messenger {
     // Their own name, as with a direct message.
     const sender = this.contacts[senderId];
     if (sender && typeof content.p?.n === 'string' && content.p.n.trim() && content.p.n !== sender.displayName) this.updateContact(senderId, { displayName: content.p.n.trim().slice(0, 64) });
+    if (sender && content.p?.ak) this.learnAccessKey(senderId, content.p.ak);
     const updated = this.updateContact(chat.id, { lastActivity: now, unread: chat.unread + 1, ...(chat.archived && !chat.muted ? { archived: false } : {}) })!;
     if (!updated.muted) this.events.onIncoming?.(updated, message);
   }
@@ -1724,7 +1740,7 @@ export class Messenger {
     const contact = await this.addFromInfo(info);
     if (!contact.verified || contact.verifiedBy !== 'invite') this.markInvited(contact.id, 'me');
     // My name (as with a first message) and the token: the inviter sees who came and verifies me.
-    await this.sendControl(this.contacts[contact.id], { t: 'prof', n: this.account.displayName });
+    await this.sendControl(this.contacts[contact.id], { t: 'prof', ...this.myProfile(this.contacts[contact.id]) });
     if (invite.token) await this.sendControl(this.contacts[contact.id], { t: 'inv', tok: invite.token });
     return this.contacts[contact.id];
   }
@@ -1744,7 +1760,7 @@ export class Messenger {
     this.markDirty('account');
     if (!match || isSavedChat(contact.id)) return;
     this.markInvited(contact.id, 'them');
-    void this.sendControl(contact, { t: 'prof', n: this.account.displayName });
+    void this.sendControl(contact, { t: 'prof', ...this.myProfile(contact) });
   }
 
   private shares(contactId: string, kind: PresenceKind): boolean {
@@ -1778,6 +1794,22 @@ export class Messenger {
 
   setBlocked(contactId: string, blocked: boolean): void {
     this.updateContact(contactId, { blocked });
+    if (blocked) void this.rotateAccessKey();
+  }
+
+  /**
+   * A blocked person keeps my old delivery key: a new one goes to the server and, inside encrypted
+   * messages, to everyone else, so they can go on writing without logging in.
+   */
+  private async rotateAccessKey(): Promise<void> {
+    if (this.decoy || !this.account.accessKey) return;
+    this.account.accessKey = b64(random(ACCESS_KEY_BYTES));
+    this.markDirty('account');
+    await this.publishAccessKey();
+    for (const contact of Object.values(this.contacts)) {
+      if (contact.blocked || contact.group || isSavedChat(contact.id) || !this.sessions[contact.id]?.length) continue;
+      void this.sendControl(contact, { t: 'prof', ...this.myProfile(contact) });
+    }
   }
 
   setPinned(contactId: string, pinned: boolean): void {
@@ -2210,7 +2242,7 @@ export class Messenger {
       ...(message.timer ? { timer: message.timer } : {}),
       ...(message.reply ? { r: { id: message.reply.id, s: message.reply.text, a: message.reply.out ? 'me' : 'you' } } : {}),
       ...(message.once?.k ? { once: { k: message.once.k } } : {}),
-      p: { n: this.account.displayName },
+      p: this.myProfile(contact),
     };
     let data: Uint8Array | undefined;
     const atts = attachmentsOf(message);
@@ -2337,6 +2369,58 @@ export class Messenger {
     this.markDirty('sessions');
   }
 
+  /**
+   * Hands an envelope to the server. To a contact who gave me their delivery key it goes on the
+   * anonymous connection, so the server does not see that it is from me; otherwise (a first
+   * message, an older contact) it goes on my logged-in connection as before.
+   */
+  private async transmit<T>(to: string, frame: { cid: string; ephemeral?: boolean }, body: Uint8Array): Promise<T> {
+    const ak = this.contacts[to]?.accessKey;
+    if (ak && !this.decoy) {
+      this.sealed ??= new SealedSender(
+        () => this.account.serverUrl,
+        () => this.account.serverKey,
+      );
+      try {
+        return await this.sealed.send<T>({ to, ak, ...frame }, body);
+      } catch (error) {
+        const code = error instanceof RelayRequestError ? error.code : 'offline';
+        // A key that no longer opens their door: forget it until they send the new one.
+        if (code === 'unauthorized') this.updateContact(to, { accessKey: undefined });
+        else if (code !== 'offline' && code !== 'timeout') throw error;
+      }
+    }
+    if (!this.relay) throw new RelayRequestError('offline', 'Нет соединения с сервером');
+    return this.relay.request<T>({ type: 'send', to, ...frame }, body);
+  }
+
+  /** My delivery key: made once, its hash told to the server on every login (it may have lost it). */
+  private async publishAccessKey(): Promise<void> {
+    if (this.decoy || !this.relay) return;
+    if (!this.account.accessKey) {
+      this.account.accessKey = b64(random(ACCESS_KEY_BYTES));
+      this.markDirty('account');
+    }
+    await this.relay.request({ type: 'access_set', hash: b64(sha256(unb64(this.account.accessKey))) }).catch(() => {});
+  }
+
+  /** Their delivery key, from inside an encrypted message. */
+  private learnAccessKey(contactId: string, ak: unknown): void {
+    if (typeof ak !== 'string' || ak === this.contacts[contactId]?.accessKey) return;
+    try {
+      if (unb64(ak).length !== ACCESS_KEY_BYTES) return;
+    } catch {
+      return;
+    }
+    this.updateContact(contactId, { accessKey: ak });
+  }
+
+  /** What goes with my profile to a contact: the name, and the delivery key unless they are blocked. */
+  private myProfile(contact: Contact | undefined): { n: string; ak?: string } {
+    const ak = this.account.accessKey;
+    return { n: this.account.displayName, ...(ak && contact && !contact.blocked ? { ak } : {}) };
+  }
+
   private async pumpOutbox(): Promise<void> {
     if (this.pumping || !this.relay || this.relay.status !== 'online') return;
     this.pumping = true;
@@ -2344,7 +2428,7 @@ export class Messenger {
       while (this.outbox.length && this.relay?.status === 'online') {
         const item = this.outbox[0];
         try {
-          await this.relay.request({ type: 'send', to: item.to, cid: item.qid }, unb64(item.env));
+          await this.transmit(item.to, { cid: item.qid }, unb64(item.env));
           this.outbox.shift();
           this.setStatus(item.chat ?? item.to, item.msgIds, 'sent');
         } catch (error) {
@@ -2420,14 +2504,16 @@ export class Messenger {
   }
 
   /** Typing/presence signals: never queued by the relay, never touch the ratchet. */
-  private async sendEphemeral(contactId: string, content: Content): Promise<boolean> {
+  /** `loggedOut`: the logged-in connection is already closed; only a sealed send can go. */
+  private async sendEphemeral(contactId: string, content: Content, loggedOut = false): Promise<boolean> {
     const contact = this.contacts[contactId];
     const session = this.confirmedSession(contactId);
     if (isSavedChat(contactId) || isGroupChat(contactId)) return false;
-    if (!this.relay || this.relay.status !== 'online' || !contact || contact.blocked || !session) return false;
+    if (!contact || contact.blocked || !session) return false;
+    if (loggedOut ? !contact.accessKey : !this.relay || this.relay.status !== 'online') return false;
     const envelope = sealEnvelope(unb64(contact.dhKey), this.senderInfo(), ephemeralEncrypt(session, pack(content)));
     try {
-      const result = await this.relay.request<{ delivered?: boolean }>({ type: 'send', to: contactId, cid: randomId(), ephemeral: true }, envelope);
+      const result = await this.transmit<{ delivered?: boolean }>(contactId, { cid: randomId(), ephemeral: true }, envelope);
       return !!result?.delivered;
     } catch {
       return false;
@@ -2522,17 +2608,25 @@ export class Messenger {
   // ---- presence ------------------------------------------------------------------------
 
   /** Tells contacts we came online (asking for their status) or are leaving. */
-  private announcePresence(state: 'on' | 'off', ask = false): void {
-    if (!this.relay || this.relay.status !== 'online') return;
+  /** Who hears that I am online / offline now, and what (hidden → «recently»). */
+  private presenceTargets(state: 'on' | 'off', ask = false): { id: string; content: Content }[] {
+    if (!this.relay || this.relay.status !== 'online') return [];
+    const targets: { id: string; content: Content }[] = [];
     for (const contact of Object.values(this.contacts)) {
       // People I only share a group with do not learn when I am online.
       if (contact.blocked || contact.groupOnly || contact.group) continue;
       if (state === 'off' && !this.online[contact.id]) continue;
       const hidden = !this.shares(contact.id, 'online');
       const content: Content = hidden ? { t: 'pres', s: 'hidden', ...(ask ? { ask: 1 } : {}) } : { t: 'pres', s: state, ...(ask ? { ask: 1 } : {}) };
-      void this.sendEphemeral(contact.id, content);
+      targets.push({ id: contact.id, content });
     }
+    return targets;
   }
+
+  private announcePresence(state: 'on' | 'off', ask = false): Promise<unknown> {
+    return Promise.all(this.presenceTargets(state, ask).map((t) => this.sendEphemeral(t.id, t.content)));
+  }
+
 
   private markOnline(contactId: string): void {
     const contact = this.contacts[contactId];
@@ -2771,6 +2865,7 @@ export class Messenger {
         this.clearTyping(contact.id);
         const patch: Partial<Contact> = { lastActivity: now, unread: contact.unread + 1, ...(contact.groupOnly ? { groupOnly: undefined } : {}) };
         if (content.p?.n && content.p.n !== contact.displayName) patch.displayName = String(content.p.n).slice(0, 64);
+        if (content.p?.ak) this.learnAccessKey(contact.id, content.p.ak);
         // Like Telegram: a new message brings an archived (not muted) chat back.
         if (contact.archived && !contact.muted) patch.archived = false;
         const updated = this.updateContact(contact.id, patch)!;
@@ -2852,6 +2947,7 @@ export class Messenger {
         return;
       case 'prof':
         if (typeof content.n === 'string' && content.n.trim()) this.updateContact(contact.id, { displayName: content.n.trim().slice(0, 64) });
+        this.learnAccessKey(contact.id, content.ak);
         // The new @name is taken from the server, never from the message itself.
         if (content.u === 1) await this.refreshUsername(contact.id);
         return;
@@ -2933,7 +3029,7 @@ export class Messenger {
     this.scheduleBackup();
     this.changed();
     for (const contact of Object.values(this.contacts)) {
-      if (!contact.blocked && this.sessions[contact.id]?.length) void this.sendControl(contact, { t: 'prof', n: name });
+      if (!contact.blocked && this.sessions[contact.id]?.length) void this.sendControl(contact, { t: 'prof', ...this.myProfile(contact), n: name });
     }
   }
 
@@ -2943,7 +3039,7 @@ export class Messenger {
     if (patch.typingIndicators === false) this.typing = {};
     if (patch.lastSeen && patch.lastSeen !== before) {
       if (patch.lastSeen === 'nobody') for (const id of Object.keys(this.online)) if (!this.shares(id, 'online')) delete this.online[id];
-      this.announcePresence('on', true);
+      void this.announcePresence('on', true);
     }
     this.markDirty('settings');
     this.scheduleBackup();
@@ -3019,7 +3115,7 @@ export class Messenger {
    */
   async bridgeSource(): Promise<RecordSource> {
     this.bridgePaused = true;
-    this.announcePresence('off');
+    void this.announcePresence('off');
     this.relay?.close();
     this.relay = null;
     this.status = 'offline';
