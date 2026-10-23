@@ -29,6 +29,7 @@ import { join } from 'node:path';
 import { startRelay, type RelayHandle } from '../../server/src/relay.ts';
 import { SecretClipboard } from '../core/secret-clipboard.ts';
 import { announceRelay, discoverBridges, discoverRelays, LanBridge, stopAnnouncingRelay } from './bridge.ts';
+import { ReachManager, type ReachConfig } from './reach/index.ts';
 import { findInvite, registerInviteProtocol } from './invite.ts';
 import { cancelModelDownload, deleteModel, downloadModel, modelStatus, registerModelScheme, serveModels } from './models.ts';
 import { CloudError, OneDrive } from './onedrive.ts';
@@ -99,7 +100,16 @@ const vaultDir = () => join(userData(), 'vault');
 const configFile = () => join(userData(), 'config.json');
 
 interface AppConfig {
-  embeddedServer?: { autoStart: boolean; port: number };
+  embeddedServer?: {
+    autoStart: boolean;
+    port: number;
+    /** «Доступен из интернета» and its settings (see src/main/reach). */
+    reach?: Partial<ReachConfig>;
+    /** «Не давать компьютеру засыпать, пока работает сервер». */
+    keepAwake?: boolean;
+    /** The tunnel relay's key seen last time. */
+    relayKey?: string;
+  };
   trayHintShown?: boolean;
   window?: { bounds?: Rectangle; maximized?: boolean; fullscreen?: boolean };
 }
@@ -580,15 +590,38 @@ function registerIpc(): void {
   });
   handle('server:stop', async () => {
     stopAnnouncingRelay();
+    await reach.stop();
+    applyKeepAwake(false);
     await relay?.close();
     relay = null;
     relayError = undefined;
     return relayStatus();
   });
   handle('server:status', () => relayStatus());
-  handle('server:autostart', (enabled: boolean, port?: number) =>
-    writeConfig({ embeddedServer: { autoStart: !!enabled, port: Number(port) || DEFAULT_PORT } }),
-  );
+  handle('server:autostart', async (enabled: boolean, port?: number) => {
+    const current = (await readConfig()).embeddedServer;
+    await writeConfig({ embeddedServer: { ...current, autoStart: !!enabled, port: Number(port) || DEFAULT_PORT } });
+  });
+  // «Доступен из интернета»
+  handle('server:reach-config', async () => ({ ...reachDefaults, ...(await readConfig()).embeddedServer?.reach, keepAwake: !!(await readConfig()).embeddedServer?.keepAwake }));
+  handle('server:reach-status', () => reach.current);
+  handle('server:configure', async (patch: Partial<ReachConfig> & { keepAwake?: boolean }) => {
+    const current = (await readConfig()).embeddedServer ?? { autoStart: false, port: DEFAULT_PORT };
+    const next: ReachConfig = { ...reachDefaults, ...current.reach };
+    if (typeof patch.internet === 'boolean') next.internet = patch.internet;
+    if (typeof patch.inviteOnly === 'boolean') next.inviteOnly = patch.inviteOnly;
+    if (typeof patch.publicRelay === 'string') next.publicRelay = patch.publicRelay.trim().slice(0, 300);
+    if (typeof patch.manual === 'string') next.manual = patch.manual.trim().slice(0, 300);
+    const keepAwake = typeof patch.keepAwake === 'boolean' ? patch.keepAwake : !!current.keepAwake;
+    await writeConfig({ embeddedServer: { ...current, reach: next, keepAwake } });
+    applyKeepAwake(keepAwake);
+    await reach.configure(next);
+    return reach.current;
+  });
+  handle('server:mint-invite', () => {
+    if (!relay) throw new Error('Сервер на этом компьютере не запущен');
+    return relay.mintInvite();
+  });
 }
 
 // ---- passwords on the clipboard ------------------------------------------------------------
@@ -622,6 +655,36 @@ const secretClipboard = new SecretClipboard({
 
 // ---- embedded relay ----------------------------------------------------------------------
 
+const reachDefaults: ReachConfig = { internet: false, publicRelay: '', manual: '', inviteOnly: true };
+let reachRelayKey: string | undefined;
+const reach = new ReachManager(
+  {
+    relay: () => relay,
+    // Invites name the Wi-Fi addresses too (for people on the same network), never localhost.
+    lanAddresses: () => (relay ? lanAddresses(relay.port).filter((a) => !a.startsWith('localhost')).map((a) => `ws://${a}`) : []),
+    onStatus: (status) => mainWindow?.webContents.send('server:reach', status),
+    get relayKey() {
+      return reachRelayKey;
+    },
+    onRelayKey: (key) => {
+      reachRelayKey = key;
+      void readConfig().then((config) => config.embeddedServer && writeConfig({ embeddedServer: { ...config.embeddedServer, relayKey: key } }));
+    },
+  },
+  reachDefaults,
+);
+
+/** While the server runs, the computer may be kept awake (messages wait while it sleeps). */
+let awakeBlocker: number | null = null;
+function applyKeepAwake(on: boolean): void {
+  const want = on && !!relay;
+  if (want && awakeBlocker === null) awakeBlocker = powerSaveBlocker.start('prevent-app-suspension');
+  if (!want && awakeBlocker !== null) {
+    powerSaveBlocker.stop(awakeBlocker);
+    awakeBlocker = null;
+  }
+}
+
 function lanAddresses(port: number): string[] {
   const addresses: string[] = [];
   for (const list of Object.values(networkInterfaces())) {
@@ -645,9 +708,20 @@ function relayStatus() {
 async function startEmbeddedRelay(port = DEFAULT_PORT) {
   if (relay) return relayStatus();
   try {
-    relay = await startRelay({ port, dataDir: join(userData(), 'relay'), name: 'Veil Relay (встроенный)' });
+    const config = (await readConfig()).embeddedServer;
+    const reachConfig = { ...reachDefaults, ...config?.reach };
+    // Listens on all interfaces (0.0.0.0): other computers of the Wi-Fi, and the router's mapping, need that.
+    relay = await startRelay({
+      port,
+      host: '0.0.0.0',
+      dataDir: join(userData(), 'relay'),
+      name: 'Veil Relay (встроенный)',
+      inviteOnly: reachConfig.internet && reachConfig.inviteOnly,
+    });
     relayError = undefined;
     announceRelay(relay.port, relay.store.serverId);
+    applyKeepAwake(!!config?.keepAwake);
+    void reach.configure(reachConfig);
   } catch (error) {
     relay = null;
     relayError =
@@ -689,8 +763,15 @@ app.on('will-quit', (event) => {
   if (!relay) return;
   event.preventDefault();
   const closing = relay;
-  relay = null;
-  void closing.close().finally(() => app.quit());
+  // The router's port mapping goes away with the app; the tunnel closes.
+  void reach
+    .stop()
+    .catch(() => {})
+    .then(() => {
+      relay = null;
+      return closing.close();
+    })
+    .finally(() => app.quit());
 });
 app.on('window-all-closed', () => {
   if (!isMac) app.quit();
@@ -742,6 +823,7 @@ app.whenReady().then(async () => {
     },
   );
   const config = await readConfig();
+  reachRelayKey = config.embeddedServer?.relayKey;
   if (config.embeddedServer?.autoStart) await startEmbeddedRelay(config.embeddedServer.port);
   createWindow(config.window);
   createTray();

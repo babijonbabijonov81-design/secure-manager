@@ -271,6 +271,11 @@ export function userBindingStatement(info: Pick<UserInfo, 'userId' | 'username' 
   return utf8(`veil-user-v1|${info.userId}|${info.username}|${info.dhKey}`);
 }
 
+/** What a home server signs to ask a public relay «am I reachable on this port from outside?». */
+export function reachStatement(port: number, ts: number): Uint8Array {
+  return utf8(`veil-reach-v1|${port}|${ts}`);
+}
+
 export const SERVER_CHALLENGE_RE = /^[A-Za-z0-9_-]{22,64}$/;
 
 export function signedPreKeyStatement(id: number, pub: Uint8Array): Uint8Array {

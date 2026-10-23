@@ -24,6 +24,7 @@ import {
   PROTOCOL_VERSION,
   registerExtra,
   SERVER_CHALLENGE_RE,
+  reachStatement,
   serverProofStatement,
   signedPreKeyStatement,
   userBindingStatement,
@@ -153,6 +154,7 @@ const PAIR_BYTES_PER_HOUR = 100 * 1024 * 1024;
 const SENDER_BYTES_PER_HOUR = 1024 * 1024 * 1024;
 const HOUR_MS = 60 * 60_000;
 const INVITES_PER_DAY = 5;
+const REACH_PER_HOUR = 3;
 const CODE_TTL_MS = 15 * 60 * 1000;
 const CODE_ATTEMPTS = 5;
 const EMAILS_PER_HOUR = 5;
@@ -477,11 +479,58 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     mail: !!mailer,
   });
 
+  // «Доступен ли мой сервер снаружи?» A Veil server at home asks; this relay looks at ITS OWN
+  // address (the one the request came from), at the one port named, and only for /health with the
+  // same server key. It cannot be pointed at anyone else, so it is no port scanner.
+  const reachBuckets = new Map<string, Bucket>();
+  const handleReach = async (req: IncomingMessage, res: ServerResponse) => {
+    const reply = (status: number, data: object) => {
+      res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(data));
+    };
+    const ip = clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, options.trustProxy ?? 0);
+    let raw = '';
+    for await (const chunk of req) {
+      raw += chunk;
+      if (raw.length > 2048) return reply(413, { error: 'too large' });
+    }
+    let body: { port?: unknown; key?: unknown; ts?: unknown; sig?: unknown };
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return reply(400, { error: 'bad request' });
+    }
+    const port = Number(body.port);
+    const key = unb64Len(body.key, 32);
+    const ts = Number(body.ts);
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || !key || Math.abs(Date.now() - ts) > 60_000) return reply(400, { error: 'bad request' });
+    if (!verifySig(body.sig, reachStatement(port, ts), key)) return reply(401, { error: 'bad signature' });
+    for (const bucketKey of [`ip:${ip}`, `key:${String(body.key)}`]) {
+      let bucket = reachBuckets.get(bucketKey);
+      if (!bucket) reachBuckets.set(bucketKey, (bucket = new Bucket(REACH_PER_HOUR, HOUR_MS)));
+      if (!bucket.take()) return reply(429, { error: 'Слишком много проверок, попробуйте через час', ip });
+    }
+    const host = ip.replace(/^::ffff:/, '');
+    const target = host.includes(':') ? `[${host}]` : host;
+    let reachable = false;
+    try {
+      const answer = await fetch(`http://${target}:${port}/health`, { signal: AbortSignal.timeout(5000), redirect: 'error' });
+      const text = (await answer.text()).slice(0, 4096);
+      reachable = answer.ok && (JSON.parse(text) as { key?: string }).key === body.key;
+    } catch {
+      reachable = false;
+    }
+    reply(200, { reachable, ip: host });
+  };
+
   const http = createServer((req: IncomingMessage, res: ServerResponse) => {
     const path = (req.url ?? '/').split('?')[0];
     if (req.method === 'GET' && path === '/health') {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ ok: true, name, version: PROTOCOL_VERSION }));
+      // id and key: a reachability check knows it reached this very server.
+      res.end(JSON.stringify({ ok: true, name, version: PROTOCOL_VERSION, id: store.serverId, key: b64(store.serverPublicKey) }));
+    } else if (req.method === 'POST' && path === '/reach' && tunnelHost) {
+      void handleReach(req, res);
     } else if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(statusPage(name));
@@ -1091,6 +1140,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     // Old rate-limit counters: their windows are long over.
     lookupBuckets.clear();
     sealedBuckets.clear();
+    reachBuckets.clear();
     sendBytes.clear();
     for (const to of sealedSeen.keys()) if (!store.users.has(to)) sealedSeen.delete(to);
     const stale = Date.now() - OPK_REPEAT_MS;
