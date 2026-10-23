@@ -40,7 +40,9 @@ test('audio calls: ring, answer, talk, mute, hang up, decline, missed', async ({
   const aliceComposer = alice.page.getByLabel('Сообщение', { exact: true });
   await aliceComposer.fill('Созвонимся?');
   await aliceComposer.press('Enter');
+  await bob.page.getByTestId('requests-row').click();
   await bob.page.getByTestId(`chat-${alice.username}`).click();
+  await bob.page.getByRole('button', { name: 'Принять' }).click();
   const bobComposer = bob.page.getByLabel('Сообщение', { exact: true });
   await bobComposer.fill('Давай!');
   await bobComposer.press('Enter');

@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
+import { acceptRequest } from './helpers.ts';
 
 const SERVER = '127.0.0.1:8790';
 const APP = 'http://127.0.0.1:5179';
@@ -52,7 +53,7 @@ test('reaction picker opens from the button and stays usable', async ({ browser 
     await composer.fill(text);
     await composer.press('Enter');
   }
-  await bob.page.getByTestId(`chat-${alice.username}`).click();
+  await acceptRequest(bob.page, alice.username);
   await expect(bob.page.locator('.messages').getByText('Привет! Как дела?')).toBeVisible();
 
   // The bar slides out of the button and survives moving the mouse onto it.

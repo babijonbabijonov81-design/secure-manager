@@ -81,7 +81,9 @@ test('two people chat end-to-end through the relay', async ({ browser }) => {
   await composer.fill('Даже сервер не может его прочитать.');
   await composer.press('Enter');
 
-  // Bob receives it, opens the chat and replies.
+  // Bob receives it as a request from someone new, opens the chat and replies (which accepts it).
+  await expect(bob.page.getByTestId('requests-row')).toContainText('Алиса');
+  await bob.page.getByTestId('requests-row').click();
   const chatItem = bob.page.getByTestId(`chat-${alice.username}`);
   await expect(chatItem).toContainText('Даже сервер не может его прочитать.');
   await expect(chatItem).toContainText('Алиса');

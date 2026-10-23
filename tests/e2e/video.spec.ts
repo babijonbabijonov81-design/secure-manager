@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openChat, register, send, shot } from './helpers.ts';
+import { acceptRequest, openChat, register, send, shot } from './helpers.ts';
 
 // The fake camera (a moving test pattern) and an automatically picked screen.
 test.use({
@@ -22,7 +22,7 @@ test('video call: camera both ways, then screen sharing with Veil on', async ({ 
   const bob = await register(browser, 'vidbob', 'Борис', suffix);
   await openChat(alice.page, bob.username);
   await send(alice.page, 'Созвонимся с видео?');
-  await bob.page.getByTestId(`chat-${alice.username}`).click();
+  await acceptRequest(bob.page, alice.username);
   await send(bob.page, 'Да');
   await expect(alice.page.locator('.messages').getByText('Да', { exact: true })).toBeVisible();
 

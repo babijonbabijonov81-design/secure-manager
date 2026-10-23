@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openChat, register, send, shot } from './helpers.ts';
+import { acceptRequest, openChat, register, send, shot } from './helpers.ts';
 
 const suffix = Date.now().toString(36).slice(-5);
 
@@ -54,7 +54,7 @@ test('«Избранное»: notes, passwords with clipboard clearing, links, t
   // Bob sends something worth keeping; Alice saves it via the context menu.
   await openChat(bob.page, alice.username);
   await send(bob.page, 'Встречаемся у фонтана в 18:00');
-  await page.getByTestId(`chat-${bob.username}`).click();
+  await acceptRequest(page, bob.username);
   await page.locator('.messages').getByText('Встречаемся у фонтана в 18:00').click({ button: 'right' });
   await page.locator('.context-menu').getByRole('button', { name: 'В избранное' }).click();
   await expect(page.getByText('Сохранено в «Избранное»')).toBeVisible();

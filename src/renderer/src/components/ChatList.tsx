@@ -25,7 +25,7 @@ import {
   Users,
   UserPlus,
 } from 'lucide-react';
-import { forwardRef, useDeferredValue, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
+import { forwardRef, useDeferredValue, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { snippetOf, type Messenger } from '../../../core/messenger.ts';
 import type { SearchFilter, SearchHit } from '../../../core/search.ts';
 import { isSavedChat, type Contact, type Message, type MessengerSnapshot } from '../../../core/types.ts';
@@ -74,6 +74,10 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
   // «Запросы на переписку»: strangers who wrote first live apart until accepted.
   const requests = listed.filter((c) => c.request);
   const archived = listed.filter((c) => c.archived && !c.request);
+  // The last request accepted or deleted: back to the chats.
+  useEffect(() => {
+    if (showRequests && requests.length === 0) setShowRequests(false);
+  }, [showRequests, requests.length]);
   const contacts = useMemo(() => {
     const q = query.trim().toLowerCase().replace(/^@/, '');
     if (q) return listed.filter((c) => c.displayName.toLowerCase().includes(q) || c.username.toLowerCase().includes(q));

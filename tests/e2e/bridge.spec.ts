@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { APP, bubble, openChat, register, send, SERVER, shot } from './helpers.ts';
+import { acceptRequest, APP, bubble, openChat, register, send, SERVER, shot } from './helpers.ts';
 
 const suffix = Date.now().toString(36).slice(-5);
 
@@ -9,7 +9,7 @@ test('«Мост»: move the account to another computer through the relay', asy
   const bob = await register(browser, 'bb', 'Борис', suffix);
   await openChat(alice.page, bob.username);
   await send(alice.page, 'Сообщение до переезда');
-  await bob.page.getByTestId(`chat-${alice.username}`).click();
+  await acceptRequest(bob.page, alice.username);
   await expect(bubble(bob.page, 'Сообщение до переезда')).toBeVisible();
 
   // Old computer: Settings → Устройства → Мост.

@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
+import { acceptRequest } from './helpers.ts';
 import { base32Decode, totp } from '../../server/src/shared/totp.ts';
 
 const SERVER = '127.0.0.1:8790';
@@ -77,7 +78,7 @@ test('replies, reactions, copy, albums, stickers, voice, archive and 2FA', async
   await aliceComposer.fill('Как прошли выходные?');
   await aliceComposer.press('Enter');
 
-  await bob.page.getByTestId(`chat-${alice.username}`).click();
+  await acceptRequest(bob.page, alice.username);
   await expect(bob.page.locator('.messages').getByText('Как прошли выходные?')).toBeVisible();
 
   // Presence: both are online.

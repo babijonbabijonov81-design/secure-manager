@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { bubble, openChat, picture, register, send, shot } from './helpers.ts';
+import { acceptRequest, bubble, openChat, picture, register, send, shot } from './helpers.ts';
 
 const suffix = Date.now().toString(36).slice(-5);
 
@@ -10,7 +10,7 @@ test('Вуаль, Щит чата and view-once photos', async ({ browser }) => 
 
   await openChat(alice.page, bob.username);
   await send(alice.page, 'Привет! Проверим новую защиту?');
-  await bob.page.getByTestId(`chat-${alice.username}`).click();
+  await acceptRequest(bob.page, alice.username);
   await send(bob.page, 'Конечно, присылай');
   await expect(bubble(alice.page, 'Конечно, присылай')).toBeVisible();
 

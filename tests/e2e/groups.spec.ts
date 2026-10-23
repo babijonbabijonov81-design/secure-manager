@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openChat, register, send, shot } from './helpers.ts';
+import { acceptRequest, openChat, register, send, shot } from './helpers.ts';
 
 // Группы: create, talk among three, the group shield, remove a member, leave.
 test('group chat with roles, shield and member removal', async ({ browser }) => {
@@ -15,6 +15,8 @@ test('group chat with roles, shield and member removal', async ({ browser }) => 
     await send(alice.page, 'Привет!');
     await expect(alice.page.locator('.messages').getByText('Привет!')).toBeVisible();
   }
+
+  for (const other of [bob, vera]) await acceptRequest(other.page, alice.username);
 
   await alice.page.getByRole('button', { name: 'Новый чат' }).first().click();
   await alice.page.getByRole('button', { name: 'Новая группа' }).click();

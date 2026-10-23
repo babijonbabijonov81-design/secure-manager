@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { bubble, openChat, register, send } from './helpers.ts';
+import { acceptRequest, bubble, openChat, register, send } from './helpers.ts';
 
 const suffix = Date.now().toString(36).slice(-5);
 
@@ -9,7 +9,7 @@ test('hidden chats: out of the list, opened with the secret phrase and a PIN', a
   const bob = await register(browser, 'hb', 'Борис', suffix);
   await openChat(alice.page, bob.username);
   await send(alice.page, 'Это личное');
-  await bob.page.getByTestId(`chat-${alice.username}`).click();
+  await acceptRequest(bob.page, alice.username);
   await expect(bubble(bob.page, 'Это личное')).toBeVisible();
   const page = alice.page;
 

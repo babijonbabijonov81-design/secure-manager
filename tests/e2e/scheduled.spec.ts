@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { bubble, openChat, register, send, shot } from './helpers.ts';
+import { acceptRequest, bubble, openChat, register, send, shot } from './helpers.ts';
 
 const suffix = Date.now().toString(36).slice(-5);
 
@@ -8,7 +8,7 @@ test('scheduled messages and time capsules', async ({ browser }) => {
   const bob = await register(browser, 'tb', 'Борис', suffix);
   await openChat(alice.page, bob.username);
   await send(alice.page, 'Привет!');
-  await bob.page.getByTestId(`chat-${alice.username}`).click();
+  await acceptRequest(bob.page, alice.username);
   await expect(bubble(bob.page, 'Привет!')).toBeVisible();
 
   const composer = alice.page.getByLabel('Сообщение', { exact: true });

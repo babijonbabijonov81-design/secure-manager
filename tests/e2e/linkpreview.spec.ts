@@ -22,6 +22,7 @@ test('a link preview made by the sender', async ({ browser }) => {
   });
 
   const page = bob.page;
+  await page.getByTestId('requests-row').click();
   await page.getByText('Алиса').first().click();
   const card = page.getByTestId('link-preview');
   await expect(card).toBeVisible();

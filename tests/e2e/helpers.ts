@@ -34,6 +34,14 @@ export async function openChat(page: Page, username: string) {
   await page.getByRole('button', { name: 'Найти и открыть чат' }).click();
 }
 
+/** The first message from someone new lands in «Запросы на переписку»: open it and accept. */
+export async function acceptRequest(page: Page, username: string) {
+  await page.getByTestId('requests-row').click({ timeout: 20_000 });
+  await page.getByTestId(`chat-${username}`).click();
+  await page.getByTestId('request-panel').getByRole('button', { name: 'Принять' }).click();
+  await expect(page.getByTestId('request-panel')).toHaveCount(0);
+}
+
 export async function send(page: Page, text: string) {
   const composer = page.getByLabel('Сообщение', { exact: true });
   await composer.fill(text);

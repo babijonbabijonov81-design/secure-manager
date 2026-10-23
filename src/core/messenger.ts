@@ -1876,7 +1876,9 @@ export class Messenger {
     this.markDirty('account');
     if (!match || isSavedChat(contact.id)) return;
     this.markInvited(contact.id, 'them');
-    void this.sendControl(contact, { t: 'prof', ...this.myProfile(contact) });
+    // I invited them myself: not a stranger's request.
+    if (this.contacts[contact.id]?.request) this.acceptRequest(contact.id);
+    else void this.sendControl(contact, { t: 'prof', ...this.myProfile(contact) });
   }
 
   private shares(contactId: string, kind: PresenceKind): boolean {
