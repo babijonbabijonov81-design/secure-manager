@@ -78,7 +78,18 @@ export interface AccountStatus {
 /** Requests allowed before login, used to recover an account on a new device. */
 export type RecoveryFrame =
   | { type: 'recover_start'; reqId: string; username: string; email: string }
-  | { type: 'recover_finish'; reqId: string; username: string; code: string; totp?: string };
+  | { type: 'recover_finish'; reqId: string; username: string; code: string; totp?: string }
+  /** After the waiting period: the claim from recover_finish turns into a recovery ticket. */
+  | { type: 'recover_claim'; reqId: string; username: string; claim: string };
+
+/**
+ * Recovery by email alone (no authenticator) waits this long. Meanwhile the owner's devices are
+ * told and can cancel it: whoever got into the mailbox does not get the @name at once.
+ */
+export interface RecoveryHold {
+  readyAt: number;
+  requestedAt: number;
+}
 
 export interface AuthFrame {
   type: 'auth';
@@ -112,6 +123,8 @@ export type RequestFrame =
   | { type: 'send'; reqId: string; to: string; cid: string; ephemeral?: boolean }
   /** The hash of my delivery key (see SealedSendFrame); a new one replaces the old. */
   | { type: 'access_set'; reqId: string; hash: string }
+  /** «Это не я»: stops a recovery that is waiting (see RecoveryHold). */
+  | { type: 'recovery_cancel'; reqId: string }
   | { type: 'prekeys'; reqId: string; opks?: OneTimePreKeyPublic[]; spk?: SignedPreKeyPublic }
   | { type: 'unregister'; reqId: string; sig: string; totp?: string }
   | { type: 'account_status'; reqId: string }
@@ -181,7 +194,19 @@ export type ServerFrame =
       /** Signature of serverProofStatement(the `c` challenge in the WebSocket URL). */
       proof?: string;
     }
-  | { type: 'ready'; userId: string; username: string; opkCount: number; spkId: number | null; queued: number; ice?: IceServer[] }
+  | {
+      type: 'ready';
+      userId: string;
+      username: string;
+      opkCount: number;
+      spkId: number | null;
+      queued: number;
+      ice?: IceServer[];
+      /** Someone is restoring this account by email: it goes through at `readyAt` unless cancelled. */
+      recoveryHold?: RecoveryHold;
+    }
+  /** Pushed to the owner's online devices the moment such a recovery starts. */
+  | { type: 'recovery_hold'; hold: RecoveryHold }
   | { type: 'error'; reqId?: string; code: ErrorCode; message: string }
   | { type: 'result'; reqId: string; data?: unknown }
   | { type: 'msg'; id: string; ts: number }
@@ -205,6 +230,7 @@ export type ErrorCode =
   | 'bad_code'
   | 'totp_required'
   | 'bad_totp'
+  | 'recovery_wait'
   | 'device_revoked'
   | 'server_error';
 

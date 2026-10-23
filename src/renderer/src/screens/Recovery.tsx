@@ -1,20 +1,27 @@
 import { ArrowLeft, AtSign, Globe, KeyRound, LifeBuoy, Mail, Smartphone } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { WrongPasswordError } from '../../../core/crypto/vault.ts';
 import {
+  claimRecovery,
+  isRecoveryWait,
   resetAccount,
   restoreAccount,
+  savedRecoveryWait,
+  saveRecoveryWait,
   startRecovery,
   verifyRecovery,
   type Messenger,
   type MessengerEvents,
   type RecoveryTicket,
+  type RecoveryWait,
 } from '../../../core/messenger.ts';
 import { RelayRequestError } from '../../../core/relay-client.ts';
 import type { StorageBackend } from '../../../core/storage.ts';
 import { CodeInput } from '../components/SecurityDialogs.tsx';
 
-type Step = 'start' | 'code' | 'password' | 'reset' | 'working';
+type Step = 'start' | 'code' | 'wait' | 'password' | 'reset' | 'working';
+
+const when = (ts: number) => new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
 /** Restores an account on a new device: email code (+ 2FA) → encrypted backup → password. */
 export function RecoveryFlow({
@@ -38,6 +45,17 @@ export function RecoveryFlow({
   const [totp, setTotp] = useState('');
   const [needsTotp, setNeedsTotp] = useState(false);
   const [ticket, setTicket] = useState<RecoveryTicket | null>(null);
+  const [wait, setWait] = useState<RecoveryWait | null>(null);
+  // A recovery started earlier on this device that waits for its date.
+  useEffect(() => {
+    void savedRecoveryWait(storage).then((saved) => {
+      if (!saved) return;
+      setWait(saved);
+      setServer(saved.serverUrl);
+      setUsername(saved.username);
+      setStep('wait');
+    });
+  }, [storage]);
   const [password, setPassword] = useState('');
   const [password2, setPassword2] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -72,8 +90,40 @@ export function RecoveryFlow({
     e.preventDefault();
     void run(async () => {
       const result = await verifyRecovery(server, username, code, needsTotp ? totp : undefined);
+      if (isRecoveryWait(result)) {
+        await saveRecoveryWait(storage, result);
+        setWait(result);
+        setStep('wait');
+        return;
+      }
       setTicket(result);
       setStep(result.backup ? 'password' : 'reset');
+    });
+  };
+
+  const claim = () => {
+    if (!wait) return;
+    void run(async () => {
+      try {
+        const result = await claimRecovery(wait);
+        await saveRecoveryWait(storage, null);
+        setTicket(result);
+        setStep(result.backup ? 'password' : 'reset');
+      } catch (err) {
+        // Cancelled by the owner or expired: nothing left to wait for.
+        if (err instanceof RelayRequestError && err.code === 'bad_code') {
+          await saveRecoveryWait(storage, null);
+          setWait(null);
+        }
+        throw err;
+      }
+    });
+  };
+
+  const forget = () => {
+    void saveRecoveryWait(storage, null).then(() => {
+      setWait(null);
+      setStep('start');
     });
   };
 
@@ -120,6 +170,13 @@ export function RecoveryFlow({
         {step === 'code' && (
           <p>
             Если почта совпадает с привязанной к @{username.replace(/^@/, '')}, на неё пришёл 6-значный код. Проверьте и папку «Спам».
+          </p>
+        )}
+        {step === 'wait' && wait && (
+          <p>
+            Код подтверждён. На аккаунте @{wait.username} нет Google Authenticator, поэтому восстановление по одной почте станет доступно{' '}
+            <b>{when(wait.readyAt)}</b>. Пока владелец может отменить его на своих устройствах — так почта сама по себе не отдаёт аккаунт
+            чужому.
           </p>
         )}
         {step === 'password' && <p>Код подтверждён. Введите пароль Veil, которым зашифрована резервная копия.</p>}
@@ -182,6 +239,27 @@ export function RecoveryFlow({
             </button>
           </div>
         </form>
+      )}
+
+      {step === 'wait' && wait && (
+        <div className="form" data-testid="recovery-wait">
+          <span className="field-hint">
+            Veil запомнил это восстановление. Закройте приложение и вернитесь после указанного времени: «У меня уже есть аккаунт — восстановить
+            по почте» откроет этот шаг.
+          </span>
+          {error && <span className="field-error">{error}</span>}
+          <button className="btn btn-primary btn-lg btn-block" disabled={busy || Date.now() < wait.readyAt} onClick={claim}>
+            {busy ? <span className="spinner" /> : Date.now() < wait.readyAt ? `Доступно ${when(wait.readyAt)}` : 'Продолжить восстановление'}
+          </button>
+          <div className="form-actions">
+            <button type="button" className="btn btn-secondary" onClick={onBack}>
+              <ArrowLeft size={18} />
+            </button>
+            <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={forget}>
+              Отказаться от восстановления
+            </button>
+          </div>
+        </div>
       )}
 
       {step === 'password' && (

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { b64 } from '../../../../server/src/shared/wire.ts';
 import type { Messenger } from '../../../core/messenger.ts';
 import { bridge, type QuickUnlockStatus } from '../../../core/platform.ts';
-import { PIN_RE, wrapWithPin } from '../../../core/quick-unlock.ts';
+import { isOldPin, isTrivialPin, PIN_RE, wrapWithPin, type PinBlob } from '../../../core/quick-unlock.ts';
 import { Modal, Toggle, useToast } from '../lib/ui.tsx';
 
 const KEYCHAIN_TEXT: Record<QuickUnlockStatus['keychain'], string> = {
@@ -26,7 +26,19 @@ export function useQuickUnlockStatus(): [QuickUnlockStatus | null, () => void] {
 export function QuickUnlockSection({ messenger }: { messenger: Messenger }) {
   const [status, refresh] = useQuickUnlockStatus();
   const [dialog, setDialog] = useState(false);
+  const [oldPin, setOldPin] = useState(false);
   const toast = useToast();
+  // A PIN from before 2.2.3 (maybe 4 digits, faster scrypt): suggest a new one.
+  useEffect(() => {
+    if (!status?.pin) return setOldPin(false);
+    void bridge?.quickUnlock.loadPin().then((blob) => {
+      try {
+        setOldPin(!!blob && isOldPin(JSON.parse(blob) as PinBlob));
+      } catch {
+        setOldPin(false);
+      }
+    });
+  }, [status?.pin]);
 
   if (!bridge) {
     return (
@@ -59,8 +71,10 @@ export function QuickUnlockSection({ messenger }: { messenger: Messenger }) {
       ) : (
         <>
           <p>
-            PIN из 4–8 цифр вместо пароля. {KEYCHAIN_TEXT[status.keychain]} Пять неверных PIN подряд — и войти можно только по паролю. PIN защищает от
-            того, кто сел за ваш компьютер, но не от вредоносной программы на нём.
+            PIN из 6–12 цифр вместо пароля. {KEYCHAIN_TEXT[status.keychain]} Пять неверных PIN подряд — и войти можно только по паролю. PIN
+            защищает от того, кто сел за ваш компьютер. От вредоносной программы, запущенной под вашим пользователем, — нет: она может скопировать
+            зашифрованный ключ и перебирать PIN у себя, без счётчика попыток. Поэтому PIN не бывает короче 6 цифр, а каждая проверка нарочно
+            занимает около секунды. Если на компьютере могут быть чужие программы, входите по паролю.
           </p>
           <div className="setting-row" style={{ padding: 0, border: 0 }}>
             <div className="grow">
@@ -78,6 +92,17 @@ export function QuickUnlockSection({ messenger }: { messenger: Messenger }) {
               }}
             />
           </div>
+          {oldPin && (
+            <div className="callout danger" data-testid="old-pin">
+              <KeyRound size={16} />
+              <div>
+                Этот PIN задан в прежней версии Veil: он может быть из 4 цифр и проверяется быстро, поэтому подобрать его легче.{' '}
+                <button type="button" className="link-btn" onClick={() => setDialog(true)}>
+                  Задать новый PIN
+                </button>
+              </div>
+            </div>
+          )}
           {status.fingerprint.available && (
             <div className="setting-row" style={{ padding: 0, border: 0 }}>
               <div className="grow">
@@ -142,9 +167,9 @@ function PinDialog({ messenger, onClose, onDone }: { messenger: Messenger; onClo
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!PIN_RE.test(pin)) return setError('PIN — от 4 до 8 цифр');
+    if (!PIN_RE.test(pin)) return setError('PIN — от 6 до 12 цифр');
     if (pin !== repeat) return setError('PIN не совпадает');
-    if (/^(\d)\1+$/.test(pin) || '0123456789'.includes(pin) || '9876543210'.includes(pin)) return setError('Слишком простой PIN');
+    if (isTrivialPin(pin)) return setError('Слишком простой PIN: не повторяйте цифры и не идите подряд');
     setBusy(true);
     try {
       if (!(await messenger.checkPassword(password))) {
@@ -174,8 +199,8 @@ function PinDialog({ messenger, onClose, onDone }: { messenger: Messenger; onClo
           className="input pin-input"
           type="password"
           inputMode="numeric"
-          maxLength={8}
-          placeholder="Новый PIN, 4–8 цифр"
+          maxLength={12}
+          placeholder="Новый PIN, 6–12 цифр"
           aria-label="Новый PIN"
           value={pin}
           onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
@@ -184,7 +209,7 @@ function PinDialog({ messenger, onClose, onDone }: { messenger: Messenger; onClo
           className="input pin-input"
           type="password"
           inputMode="numeric"
-          maxLength={8}
+          maxLength={12}
           placeholder="Повторите PIN"
           aria-label="Повторите PIN"
           value={repeat}

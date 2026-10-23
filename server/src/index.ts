@@ -40,6 +40,10 @@ const relay = await startRelay({
   ice,
   // Behind Render, nginx or another proxy: TRUST_PROXY=1 (the number of proxies in front).
   trustProxy: Math.max(0, Math.floor(Number(process.env.TRUST_PROXY) || 0)),
+  // RECOVERY_DELAY_HOURS: how long recovery by email alone waits for the owner to object (default 168 = 7 days).
+  ...(process.env.RECOVERY_DELAY_HOURS !== undefined && Number(process.env.RECOVERY_DELAY_HOURS) >= 0
+    ? { recoveryDelayMs: Number(process.env.RECOVERY_DELAY_HOURS) * 60 * 60_000 }
+    : {}),
   ...(Number(process.env.REGISTRATIONS_PER_HOUR) > 0 ? { registrationsPerHour: Number(process.env.REGISTRATIONS_PER_HOUR) } : {}),
 });
 

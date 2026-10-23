@@ -233,13 +233,15 @@ const EVENT_TEXT: Record<SecurityEventKind, (detail?: string) => string> = {
   cloud_on: () => 'Включена копия в OneDrive',
   cloud_off: () => 'Копия в OneDrive выключена',
   server_key: (d) => `Новый ключ сервера${d ? `: ${d}` : ''}`,
+  recovery_hold: (d) => `Кто-то восстанавливает аккаунт по почте${d ? ` — сработает ${d}` : ''}`,
+  recovery_cancel: () => 'Восстановление по почте отменено',
   backup_import: () => 'Аккаунт восстановлен из файла .veil',
   username_change: (d) => `Имя пользователя изменено${d ? `: ${d}` : ''}`,
   invite_mismatch: (d) => `Ключ ${d ?? 'контакта'} не совпал с приглашением — контакт не добавлен`,
 };
 
 /** Events someone else could have caused: they get «Это не я». */
-const SUSPICIOUS = new Set<SecurityEventKind>(['login', 'username_change', 'login_failed', 'device_new', 'password_change', 'totp_off', 'email_on', 'email_off', 'duress_off', 'backup_export', 'cloud_on', 'server_key']);
+const SUSPICIOUS = new Set<SecurityEventKind>(['login', 'username_change', 'login_failed', 'device_new', 'password_change', 'totp_off', 'email_on', 'email_off', 'duress_off', 'backup_export', 'cloud_on', 'server_key', 'recovery_hold']);
 
 /** «Журнал безопасности»: local, encrypted, with «Это не я» on each event. */
 export function SecurityLogSection({ messenger, snapshot, onDevices }: { messenger: Messenger; snapshot: MessengerSnapshot; onDevices(): void }) {

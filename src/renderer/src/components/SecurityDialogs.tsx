@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import { useEffect, useState, type FormEvent } from 'react';
 import { WrongPasswordError } from '../../../core/crypto/vault.ts';
 import type { Messenger } from '../../../core/messenger.ts';
+import { passwordStrength } from '../lib/format.ts';
 import { copyText } from '../lib/media.ts';
 import { Modal, useToast } from '../lib/ui.tsx';
 
@@ -136,8 +137,12 @@ export function RecoveryEmailDialog({ messenger, onClose }: { messenger: Messeng
 
   const sendCode = async (e: FormEvent) => {
     e.preventDefault();
-    setBusy(true);
     setError('');
+    // The server copy is encrypted with this password: whoever gets the mailbox can try guesses
+    // offline, so a weak password must not protect it.
+    if (passwordStrength(password) < 3)
+      return setError('Пароль Veil слишком простой для копии на сервере: её можно перебирать без ограничений. Сначала смените пароль на более длинный');
+    setBusy(true);
     try {
       await messenger.setRecoveryEmail(email, password);
       setStep('code');

@@ -453,6 +453,8 @@ export type SecurityEventKind =
   | 'cloud_on'
   | 'cloud_off'
   | 'server_key'
+  | 'recovery_hold'
+  | 'recovery_cancel'
   | 'invite_mismatch'
   | 'username_change';
 
@@ -473,6 +475,8 @@ export interface MessengerSnapshot {
   decoy?: boolean;
   /** The server answered with another key than the pinned one (no TLS): new contacts wait for a decision. */
   serverKeyChanged?: boolean;
+  /** Someone is restoring this account by email: it goes through at `readyAt` unless cancelled. */
+  recoveryHold?: { readyAt: number; requestedAt: number };
   /** «Копия в OneDrive», when connected: no tokens or keys here, just how it is going. */
   cloud?: { lastAt?: number; size?: number; error?: string; busy?: boolean };
   settings: Settings;

@@ -2311,6 +2311,12 @@ button:disabled {
   color: var(--warning);
   border-bottom-color: rgba(var(--amber-rgb), 0.24);
 }
+.banner.danger {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+  border-bottom-color: color-mix(in srgb, var(--danger) 30%, transparent);
+  font-weight: 600;
+}
 .banner button {
   text-decoration: underline;
   text-underline-offset: 3px;

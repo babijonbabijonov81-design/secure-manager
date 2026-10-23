@@ -5,6 +5,7 @@ import {
   type AuthFrame,
   type DeviceHello,
   type ErrorCode,
+  type RecoveryHold,
   type RegisterFrame,
   type RequestFrame,
   type SealedSendFrame,
@@ -38,6 +39,8 @@ export interface RelayClientOptions {
   onReady(frame: ReadyFrame): void;
   onMessage(id: string, ts: number, body: Uint8Array): void;
   onPrekeysLow(count: number): void;
+  /** Someone started restoring this account by email (see RecoveryHold). */
+  onRecoveryHold?(hold: RecoveryHold): void;
   /** Errors that stop reconnecting, e.g. a taken username or another device took over. */
   onFatal(code: string, message: string): void;
   /** This computer, for Settings → «Устройства» (only when the feature is on). */
@@ -313,6 +316,9 @@ export class RelayClient {
         this.ws?.send(pack(message));
         return;
       }
+      case 'recovery_hold':
+        this.options.onRecoveryHold?.(frame.hold);
+        return;
       case 'ready':
         this.register = false;
         this.attempt = 0;

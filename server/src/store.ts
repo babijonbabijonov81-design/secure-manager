@@ -31,6 +31,8 @@ export interface UserRecord {
   renamedAt?: number[];
   /** SHA-256 of the delivery key for anonymous (sealed) sends; the key itself only contacts know. */
   accessHash?: string;
+  /** A recovery by email that waits (see RecoveryHold); `claimHash` is SHA-256 of the requester's claim. */
+  recoveryHold?: { readyAt: number; requestedAt: number; claimHash: string };
 }
 
 export interface QueuedEnvelope {

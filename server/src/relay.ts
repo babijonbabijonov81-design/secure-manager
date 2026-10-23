@@ -60,6 +60,8 @@ export interface RelayOptions {
   tap?: (direction: 'in' | 'out', bytes: Uint8Array) => void;
   /** New accounts per IP address and hour (default 20). */
   registrationsPerHour?: number;
+  /** How long a recovery by email without an authenticator waits (default 7 days; 0 = at once). */
+  recoveryDelayMs?: number;
   /**
    * Proxies in front of the relay (Render, nginx) that add X-Forwarded-For: the client's address
    * is taken from that many hops from the right. 0 (default): the header is ignored, since anyone
@@ -127,6 +129,7 @@ const SENDS_PER_WINDOW = 1200;
 const REGISTRATIONS_PER_HOUR = 20;
 const RENAMES_PER_DAY = 3;
 const OPK_REPEAT_MS = 10 * 60_000;
+const RECOVERY_DELAY_MS = 7 * 24 * 60 * 60_000;
 const CODE_TTL_MS = 15 * 60 * 1000;
 const CODE_ATTEMPTS = 5;
 const EMAILS_PER_HOUR = 5;
@@ -445,6 +448,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       spkId: user.spk?.id ?? null,
       queued: store.queueOf(user.userId).length,
       ice: iceServersFor(options.ice, user.userId),
+      ...(user.recoveryHold ? { recoveryHold: { readyAt: user.recoveryHold.readyAt, requestedAt: user.recoveryHold.requestedAt } } : {}),
     });
     await deliverQueued(conn);
   };
@@ -588,18 +592,49 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       if (!totpOk(user!, frame.totp)) fail('bad_totp', 'Неверный код из Google Authenticator');
     }
     recoverPending.delete(username);
+    // Email and authenticator: two factors, at once. Email alone: the owner gets time to object.
+    const delay = options.recoveryDelayMs ?? RECOVERY_DELAY_MS;
+    if (!user!.totp && delay > 0) {
+      const claim = b64(randomBytes(24));
+      const hold = { readyAt: Date.now() + delay, requestedAt: Date.now() };
+      user!.recoveryHold = { ...hold, claimHash: createHash('sha256').update(claim).digest('base64') };
+      store.touch();
+      for (const owner of online.get(user!.userId) ?? []) send(owner, { type: 'recovery_hold', hold });
+      log(`recovery of @${username} waits until ${new Date(hold.readyAt).toISOString()}`);
+      send(conn, { type: 'result', reqId: frame.reqId, data: { hold: { ...hold, claim } } });
+      return;
+    }
+    await sendTicket(conn, frame.reqId, user!);
+  };
+
+  /** The recovery ticket: lets a new device take over the @name, plus the encrypted backup. */
+  const sendTicket = async (conn: Connection, reqId: string, user: UserRecord) => {
     const token = b64(randomBytes(24));
-    recoveryTokens.set(token, { username, expires: Date.now() + TOKEN_TTL_MS });
-    const backup = user!.backup ? await store.getBackup(user!.userId) : null;
+    recoveryTokens.set(token, { username: user.username, expires: Date.now() + TOKEN_TTL_MS });
+    const backup = user.backup ? await store.getBackup(user.userId) : null;
     send(
       conn,
       {
         type: 'result',
-        reqId: frame.reqId,
-        data: { token, userId: user!.userId, backup: backup && user!.backup ? { ...user!.backup } : null },
+        reqId,
+        data: { token, userId: user.userId, backup: backup && user.backup ? { ...user.backup } : null },
       },
       backup ?? undefined,
     );
+  };
+
+  const handleRecoveryClaim = async (conn: Connection, frame: Extract<ClientFrame, { type: 'recover_claim' }>) => {
+    if (!sealedAllowed(`claim:${conn.ip}`, 30)) fail('rate_limited', 'Слишком много попыток, попробуйте позже');
+    const user = store.byUsername(String(frame.username ?? '').toLowerCase().replace(/^@/, ''));
+    const hold = user?.recoveryHold;
+    const claim = typeof frame.claim === 'string' ? frame.claim : '';
+    const matches = !!hold && createHash('sha256').update(claim).digest('base64') === hold.claimHash;
+    if (!user || !hold || !matches) fail('bad_code', 'Восстановление отменено владельцем аккаунта или устарело');
+    if (Date.now() < hold!.readyAt) fail('recovery_wait', `Восстановление станет доступно ${new Date(hold!.readyAt).toLocaleString('ru-RU')}`);
+    delete user!.recoveryHold;
+    store.touch();
+    log(`recovery of @${user!.username} claimed after waiting`);
+    await sendTicket(conn, frame.reqId, user!);
   };
 
   const handleRequest = async (conn: Connection, frame: ClientFrame, body: Uint8Array) => {
@@ -659,6 +694,15 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         const seen = recentSends.get(userId) ?? new Map<string, { id: string; ts: number }>();
         recentSends.set(userId, seen);
         send(conn, { type: 'result', reqId: frame.reqId, data: await deliver(frame.to, body, cid, seen) });
+        return;
+      }
+      case 'recovery_cancel': {
+        const user = store.users.get(userId)!;
+        const had = !!user.recoveryHold;
+        delete user.recoveryHold;
+        store.touch();
+        if (had) log('a waiting recovery was cancelled by the owner');
+        send(conn, { type: 'result', reqId: frame.reqId, data: { cancelled: had } });
         return;
       }
       case 'access_set': {
@@ -837,6 +881,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
             if (header.type === 'register') await handleRegister(conn, header);
             else if (header.type === 'auth') await handleAuth(conn, header);
             else if (header.type === 'recover_start' || header.type === 'recover_finish') await handleRecovery(conn, header);
+            else if (header.type === 'recover_claim') await handleRecoveryClaim(conn, header);
             else if (header.type === 'bridge_open' || header.type === 'bridge_join' || header.type === 'bridge_data') handleBridge(conn, header, body);
             else if (header.type === 'send_sealed') await handleSealedSend(conn, header, body);
             else if (header.type === 'ping') send(conn, { type: 'pong' });

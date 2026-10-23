@@ -10,6 +10,8 @@ import {
   startRecovery,
   unlock,
   verifyRecovery,
+  claimRecovery,
+  isRecoveryWait,
   type Messenger,
 } from '../src/core/messenger.ts';
 import { MemoryStorage } from '../src/core/storage.ts';
@@ -66,6 +68,8 @@ beforeAll(async () => {
     mailer: async ({ to, text }) => {
       mail.push({ to, text });
     },
+    // Recovery by email alone waits; here a moment instead of 7 days.
+    recoveryDelayMs: 800,
   });
   url = `ws://127.0.0.1:${relay.port}`;
 });
@@ -212,7 +216,9 @@ describe('account security', () => {
     await waitFor(() => mail.length > before);
     await expect(verifyRecovery(url, alice.username, '000000')).rejects.toMatchObject({ code: 'bad_code' });
     await expect(verifyRecovery(url, alice.username, lastCode(email))).rejects.toMatchObject({ code: 'totp_required' });
+    // Email + authenticator: no waiting.
     const ticket = await verifyRecovery(url, alice.username, lastCode(email), codeFor(secret, 1));
+    if (isRecoveryWait(ticket)) throw new Error('two factors must not wait');
     expect(ticket.backup).not.toBeNull();
 
     const storage = new MemoryStorage();
@@ -232,18 +238,35 @@ describe('account security', () => {
     bob.messenger.dispose();
   });
 
-  it('a forgotten password keeps the username with new keys', async () => {
+  it('email alone waits, the owner can cancel, then a forgotten password keeps the username with new keys', async () => {
     const user = await makeUser('forgot');
     const email = `forgot${counter}@example.com`;
     await user.messenger.setRecoveryEmail(email, user.password);
     await waitFor(() => lastCode(email));
     await user.messenger.confirmRecoveryEmail(lastCode(email));
+
+    // Someone with the mailbox starts a recovery: it waits, and the owner hears of it at once.
+    await startRecovery(url, user.username, email);
+    await waitFor(() => lastCode(email));
+    const intruder = await verifyRecovery(url, user.username, lastCode(email));
+    if (!isRecoveryWait(intruder)) throw new Error('email alone must wait');
+    await expect(claimRecovery(intruder)).rejects.toMatchObject({ code: 'recovery_wait' });
+    await waitFor(() => user.messenger.getSnapshot().recoveryHold);
+    expect(user.messenger.getSnapshot().securityLog.some((e) => e.kind === 'recovery_hold')).toBe(true);
+    // «Это не я»: even after the wait the claim is worthless.
+    await user.messenger.cancelRecovery();
+    await new Promise((r) => setTimeout(r, 900));
+    await expect(claimRecovery(intruder)).rejects.toMatchObject({ code: 'bad_code' });
     user.messenger.dispose();
 
-    await startRecovery(url, user.username, email);
+    // The real owner, who forgot the password, waits it out.
     const sent = mail.length;
-    await waitFor(() => mail.length >= sent);
-    const ticket = await verifyRecovery(url, user.username, lastCode(email));
+    await startRecovery(url, user.username, email);
+    await waitFor(() => mail.length > sent);
+    const wait = await verifyRecovery(url, user.username, lastCode(email));
+    if (!isRecoveryWait(wait)) throw new Error('email alone must wait');
+    await new Promise((r) => setTimeout(r, 900));
+    const ticket = await claimRecovery(wait);
     const fresh = await resetAccount({ storage: new MemoryStorage(), ticket, displayName: 'New', password: 'new-password', kdf: FAST_KDF });
     await waitFor(() => fresh.getSnapshot().status === 'online');
     expect(fresh.getSnapshot().me.username).toBe(user.username);

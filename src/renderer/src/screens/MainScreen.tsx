@@ -473,6 +473,23 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           <button onClick={() => messenger.reconnect()}>Повторить</button>
         </div>
       )}
+      {snapshot.recoveryHold && (
+        <div className="banner danger" data-testid="recovery-hold">
+          <ShieldCheck size={14} />
+          Кто-то восстанавливает ваш аккаунт по почте. {new Date(snapshot.recoveryHold.readyAt).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}{' '}
+          он получит @{snapshot.me.username}. Если это не вы — отмените и смените пароль от почты.
+          <button
+            onClick={() =>
+              void messenger.cancelRecovery().then(
+                () => toast('Восстановление отменено', 'success'),
+                (e: Error) => toast(e.message, 'error'),
+              )
+            }
+          >
+            Это не я — отменить
+          </button>
+        </div>
+      )}
       {snapshot.serverKeyChanged && (
         <div className="banner warn" data-testid="server-key-banner">
           <ShieldCheck size={14} />

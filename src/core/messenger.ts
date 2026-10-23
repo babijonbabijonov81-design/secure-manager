@@ -13,7 +13,7 @@ import {
   type RegisterFrame,
   type UserInfo,
 } from '../../server/src/shared/protocol.ts';
-import { ACCESS_KEY_BYTES, authStatement, registerExtra, userBindingStatement } from '../../server/src/shared/protocol.ts';
+import { ACCESS_KEY_BYTES, authStatement, registerExtra, userBindingStatement, type RecoveryHold } from '../../server/src/shared/protocol.ts';
 import { base32Encode, otpauthUrl, verifyTotp } from '../../server/src/shared/totp.ts';
 import { b64, concat, fromUtf8, pack, randomId, unb64, unpack, utf8 } from '../../server/src/shared/wire.ts';
 import { BACKUP_SKIPPED, backupKey, createBackupFile, openBackupFile, sealBackupFile, type BackupHeader } from './backup-file.ts';
@@ -488,15 +488,51 @@ export async function startRecovery(serverUrl: string, username: string, email: 
 }
 
 /** Step 2: email code (+ authenticator code) → recovery ticket with the encrypted backup. */
-export async function verifyRecovery(serverUrl: string, username: string, code: string, totp?: string): Promise<RecoveryTicket> {
-  const { data, body } = await anonymousRequest<{ token: string; userId: string; backup: RecoveryTicket['backup'] }>(serverUrl, {
+/**
+ * Recovery by email alone waits (7 days by default) so the owner can object: the server hands out
+ * a claim instead of a ticket. Keep it on this device and claim after `readyAt`.
+ */
+export interface RecoveryWait {
+  serverUrl: string;
+  username: string;
+  readyAt: number;
+  claim: string;
+}
+
+type TicketData = { token: string; userId: string; backup: RecoveryTicket['backup'] };
+
+/** Step 2: email code (+ authenticator code) → a recovery ticket, or a wait without an authenticator. */
+export async function verifyRecovery(serverUrl: string, username: string, code: string, totp?: string): Promise<RecoveryTicket | RecoveryWait> {
+  const { data, body } = await anonymousRequest<TicketData | { hold: { readyAt: number; claim: string } }>(serverUrl, {
     type: 'recover_finish',
     username: cleanUsername(username),
     code: code.trim(),
     ...(totp ? { totp: totp.trim() } : {}),
   });
+  if ('hold' in data) return { serverUrl, username: cleanUsername(username), readyAt: data.hold.readyAt, claim: data.hold.claim };
   return { serverUrl, username: cleanUsername(username), token: data.token, userId: data.userId, backup: data.backup, data: body };
 }
+
+/** Step 2b, after the wait: the claim becomes a recovery ticket (unless the owner cancelled). */
+export async function claimRecovery(wait: RecoveryWait): Promise<RecoveryTicket> {
+  const { data, body } = await anonymousRequest<TicketData>(wait.serverUrl, { type: 'recover_claim', username: wait.username, claim: wait.claim });
+  return { serverUrl: wait.serverUrl, username: wait.username, token: data.token, userId: data.userId, backup: data.backup, data: body };
+}
+
+export const isRecoveryWait = (value: RecoveryTicket | RecoveryWait): value is RecoveryWait => 'claim' in value;
+
+/** The waiting recovery, kept on this device (not in a vault: there is none yet). */
+const WAIT_KEY = 'recovery.wait';
+export async function savedRecoveryWait(storage: StorageBackend): Promise<RecoveryWait | null> {
+  const raw = await storage.get(WAIT_KEY);
+  try {
+    return raw ? (JSON.parse(fromUtf8(raw)) as RecoveryWait) : null;
+  } catch {
+    return null;
+  }
+}
+export const saveRecoveryWait = (storage: StorageBackend, wait: RecoveryWait | null) =>
+  wait ? storage.set(WAIT_KEY, utf8(JSON.stringify(wait))) : storage.delete(WAIT_KEY);
 
 /** Step 3a: decrypt the server backup with the password and continue on this device. */
 export async function restoreAccount(
@@ -660,6 +696,8 @@ export class Messenger {
   private cloud: CloudRecord | null = null;
   /** A key the server showed that differs from the pinned one (no TLS): see pinServerKey. */
   private serverKeyChanged: string | null = null;
+  /** A recovery of this account by email that waits for its time (see noteRecoveryHold). */
+  private recoveryHold: RecoveryHold | null = null;
   /** Sends to contacts with a delivery key without logging in (sealed sender). */
   private sealed: SealedSender | null = null;
   private cloudBusy = false;
@@ -800,6 +838,7 @@ export class Messenger {
           this.snapshot = null;
         }
         this.pinServerKey(this.relay?.serverKey);
+        this.noteRecoveryHold(frame.recoveryHold);
         pendingHooks?.ready();
         pendingHooks = undefined;
         void this.afterReady(frame.opkCount, frame.spkId);
@@ -809,6 +848,7 @@ export class Messenger {
         void this.drainInbox();
       },
       onPrekeysLow: (count) => void this.refillPreKeys(count),
+      onRecoveryHold: (hold) => this.noteRecoveryHold(hold),
       device: () => this.deviceHello(),
       onFatal: (code, message) => {
         if (pendingHooks) {
@@ -908,6 +948,7 @@ export class Messenger {
         },
         ...(this.decoy ? { decoy: true } : {}),
         ...(this.serverKeyChanged ? { serverKeyChanged: true } : {}),
+        ...(this.recoveryHold ? { recoveryHold: this.recoveryHold } : {}),
         ...(this.cloud
           ? { cloud: { lastAt: this.cloud.lastAt, size: this.cloud.size, error: this.cloud.error, ...(this.cloudBusy ? { busy: true } : {}) } }
           : {}),
@@ -1182,6 +1223,26 @@ export class Messenger {
     this.serverKeyChanged = null;
     this.markDirty('account');
     if (pinned) this.logSecurity('server_key', fingerprintOf(key));
+    this.changed();
+  }
+
+  /**
+   * Someone is restoring this account by email and will get the @name at `readyAt` unless I cancel.
+   * Shown as a red banner and written to the security log once per attempt.
+   */
+  private noteRecoveryHold(hold: RecoveryHold | undefined): void {
+    const before = this.recoveryHold;
+    this.recoveryHold = hold ?? null;
+    if (hold && before?.requestedAt !== hold.requestedAt) this.logSecurity('recovery_hold', new Date(hold.readyAt).toLocaleString('ru-RU'));
+    if (hold || before) this.changed();
+  }
+
+  /** «Это не я»: the waiting recovery is called off on the server. */
+  async cancelRecovery(): Promise<void> {
+    if (!this.relay) throw new RelayRequestError('offline', 'Нет соединения с сервером');
+    await this.relay.request({ type: 'recovery_cancel' });
+    this.recoveryHold = null;
+    this.logSecurity('recovery_cancel');
     this.changed();
   }
 

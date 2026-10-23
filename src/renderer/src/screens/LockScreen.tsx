@@ -247,7 +247,7 @@ export function LockScreen({
                 type="password"
                 inputMode="numeric"
                 autoComplete="off"
-                maxLength={8}
+                maxLength={12}
                 placeholder="PIN"
                 aria-label="PIN"
                 autoFocus
