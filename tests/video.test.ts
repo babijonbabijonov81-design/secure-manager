@@ -19,6 +19,7 @@ describe('video call signals', () => {
     await alice.messenger.addContact(bob.username);
     await alice.messenger.sendText(bob.id, 'привет');
     await waitFor(() => bob.messenger.getSnapshot().conversations[alice.id]?.length);
+    bob.messenger.acceptRequest(alice.id);
     const got: CallSignal[] = [];
     bob.messenger.callHandler = (_c: Contact, signal: CallSignal) => {
       got.push(signal);
@@ -41,6 +42,7 @@ describe('video call signals', () => {
     await alice.messenger.addContact(bob.username);
     await alice.messenger.sendText(bob.id, 'привет');
     await waitFor(() => bob.messenger.getSnapshot().conversations[alice.id]?.length);
+    bob.messenger.acceptRequest(alice.id);
     const got: CallSignal[] = [];
     bob.messenger.callHandler = (_c: Contact, signal: CallSignal) => {
       got.push(signal);

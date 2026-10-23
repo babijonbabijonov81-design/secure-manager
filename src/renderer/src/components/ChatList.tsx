@@ -23,6 +23,7 @@ import {
   Trash2,
   TriangleAlert,
   Users,
+  UserPlus,
 } from 'lucide-react';
 import { forwardRef, useDeferredValue, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { snippetOf, type Messenger } from '../../../core/messenger.ts';
@@ -61,6 +62,7 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
 ) {
   const [query, setQuery] = useState('');
   const [showArchive, setShowArchive] = useState(false);
+  const [showRequests, setShowRequests] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; contact: Contact } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Contact | null>(null);
 
@@ -69,12 +71,15 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
     () => snapshot.contacts.filter((c) => !c.groupOnly && (!c.group || feature(snapshot.settings, 'groups'))),
     [snapshot.contacts, snapshot.settings],
   );
-  const archived = listed.filter((c) => c.archived);
+  // «Запросы на переписку»: strangers who wrote first live apart until accepted.
+  const requests = listed.filter((c) => c.request);
+  const archived = listed.filter((c) => c.archived && !c.request);
   const contacts = useMemo(() => {
     const q = query.trim().toLowerCase().replace(/^@/, '');
     if (q) return listed.filter((c) => c.displayName.toLowerCase().includes(q) || c.username.toLowerCase().includes(q));
-    return listed.filter((c) => !!c.archived === showArchive);
-  }, [listed, query, showArchive]);
+    if (showRequests) return listed.filter((c) => c.request);
+    return listed.filter((c) => !c.request && !!c.archived === showArchive);
+  }, [listed, query, showArchive, showRequests]);
   const archivedUnread = archived.reduce((n, c) => n + c.unread, 0);
 
   // «Поиск по всей переписке»: messages too, from 2 letters or with a filter.
@@ -126,12 +131,19 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
     <aside className="sidebar">
       <div className="sidebar-head">
         <div className="sidebar-title">
-          {showArchive && !query ? (
+          {(showArchive || showRequests) && !query ? (
             <>
-              <button className="icon-btn" onClick={() => setShowArchive(false)} aria-label="Назад к чатам">
+              <button
+                className="icon-btn"
+                onClick={() => {
+                  setShowArchive(false);
+                  setShowRequests(false);
+                }}
+                aria-label="Назад к чатам"
+              >
                 <ArrowLeft size={20} />
               </button>
-              <h2 style={{ flex: 1, marginLeft: 6 }}>Архив</h2>
+              <h2 style={{ flex: 1, marginLeft: 6 }}>{showRequests ? 'Запросы на переписку' : 'Архив'}</h2>
             </>
           ) : (
             <>
@@ -190,7 +202,29 @@ export const ChatList = forwardRef<HTMLInputElement, Props>(function ChatList(
         </div>
       )}
       <div className="chat-list" role="list">
-        {!showArchive && !query && archived.length > 0 && (
+        {!showArchive && !showRequests && !query && requests.length > 0 && (
+          <button className="chat-item archive-row" data-testid="requests-row" onClick={() => setShowRequests(true)}>
+            <div className="archive-icon">
+              <UserPlus size={22} />
+            </div>
+            <div className="body">
+              <div className="row">
+                <span className="name">Запросы на переписку</span>
+              </div>
+              <div className="row">
+                <span className="preview">{requests.map((c) => c.displayName).join(', ')}</span>
+                <span className="badge">{requests.length}</span>
+              </div>
+            </div>
+          </button>
+        )}
+        {showRequests && !query && (
+          <p className="list-note">
+            Эти люди написали первыми. Пока вы не примете запрос, они не видят «прочитано» и «в сети», не могут дозвониться, а картинки от них
+            закрыты.
+          </p>
+        )}
+        {!showArchive && !showRequests && !query && archived.length > 0 && (
           <button className="chat-item archive-row" onClick={() => setShowArchive(true)}>
             <div className="archive-icon">
               <Archive size={22} />

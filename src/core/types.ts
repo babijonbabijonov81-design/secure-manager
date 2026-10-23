@@ -32,6 +32,7 @@ export const FEATURE_NAMES = [
   'video',
   'transcribe',
   'search',
+  'requests',
 ] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 export type Features = Record<FeatureName, boolean>;
@@ -232,6 +233,11 @@ export interface Contact {
   groupOnly?: boolean;
   /** Their delivery key: messages to them go on an anonymous connection (sealed sender). */
   accessKey?: string;
+  /**
+   * «Запрос на переписку»: a stranger wrote first. Until I accept (or reply), they get no receipts,
+   * no presence, no delivery key, calls do not ring and pictures stay closed.
+   */
+  request?: boolean;
 }
 
 export type PresenceKind = 'online' | 'read' | 'typing';

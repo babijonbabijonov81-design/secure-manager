@@ -60,6 +60,7 @@ describe('scheduled send and time capsules (P1-5)', () => {
     const contact = await alice.messenger.addContact(bob.username);
     await alice.messenger.sendText(contact.id, 'Сначала просто привет');
     await waitFor(() => lastText(bob.messenger, alice.id) === 'Сначала просто привет');
+    bob.messenger.acceptRequest(alice.id);
     const openAt = Date.now() + 30 * 86_400_000;
     await alice.messenger.sendText(contact.id, 'Письмо в будущее: открой через месяц', { capsule: openAt });
 

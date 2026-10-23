@@ -130,6 +130,12 @@ const REGISTRATIONS_PER_HOUR = 20;
 const RENAMES_PER_DAY = 3;
 const OPK_REPEAT_MS = 10 * 60_000;
 const RECOVERY_DELAY_MS = 7 * 24 * 60 * 60_000;
+// Logged-in sends (strangers write this way: they have no delivery key): one sender cannot flood
+// one recipient, nor everyone, with envelopes of up to 25 MB.
+const PAIR_SENDS_PER_MINUTE = 120;
+const PAIR_BYTES_PER_HOUR = 100 * 1024 * 1024;
+const SENDER_BYTES_PER_HOUR = 1024 * 1024 * 1024;
+const HOUR_MS = 60 * 60_000;
 const CODE_TTL_MS = 15 * 60 * 1000;
 const CODE_ATTEMPTS = 5;
 const EMAILS_PER_HOUR = 5;
@@ -204,6 +210,26 @@ class Bucket {
       this.count = 0;
     }
     return ++this.count <= this.limit;
+  }
+}
+
+/** Like Bucket, but counts bytes: a flood of big envelopes runs out before the recipient's queue. */
+class ByteBucket {
+  private used = 0;
+  private windowStart = Date.now();
+  constructor(
+    private readonly limit: number,
+    private readonly windowMs: number,
+  ) {}
+  take(bytes: number): boolean {
+    const now = Date.now();
+    if (now - this.windowStart > this.windowMs) {
+      this.windowStart = now;
+      this.used = 0;
+    }
+    if (this.used + bytes > this.limit) return false;
+    this.used += bytes;
+    return true;
   }
 }
 
@@ -540,11 +566,25 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     return bucket.take();
   };
   const sealedSeen = new Map<string, Map<string, { id: string; ts: number }>>();
+  const sendBytes = new Map<string, ByteBucket>();
+  const sendAllowed = (from: string, to: string, bytes: number): boolean => {
+    if (!sealedAllowed(`pair:${from}>${to}`, PAIR_SENDS_PER_MINUTE)) return false;
+    for (const [key, limit] of [
+      [`pair:${from}>${to}`, PAIR_BYTES_PER_HOUR],
+      [`from:${from}`, SENDER_BYTES_PER_HOUR],
+    ] as const) {
+      let bucket = sendBytes.get(key);
+      if (!bucket) sendBytes.set(key, (bucket = new ByteBucket(limit, HOUR_MS)));
+      if (!bucket.take(bytes)) return false;
+    }
+    return true;
+  };
 
   /** An envelope from someone who is not logged in on this connection: the server never learns who. */
   const handleSealedSend = async (conn: Connection, frame: SealedSendFrame, body: Uint8Array) => {
     if (!sealedAllowed(`ip:${conn.ip}`, SENDS_PER_WINDOW) || !sealedAllowed(`to:${frame.to}`, SENDS_PER_WINDOW))
       fail('rate_limited', 'Слишком много сообщений');
+    if (!sendAllowed(`ip:${conn.ip}`, String(frame.to), body.length)) fail('rate_limited', 'Слишком много сообщений, попробуйте позже');
     if (body.length === 0) fail('bad_request', 'Пустое сообщение');
     if (body.length > MAX_ENVELOPE_BYTES) fail('too_large', 'Сообщение слишком большое');
     const user = store.users.get(String(frame.to));
@@ -682,6 +722,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         if (body.length === 0) fail('bad_request', 'Пустое сообщение');
         if (body.length > MAX_ENVELOPE_BYTES) fail('too_large', 'Сообщение слишком большое');
         if (!store.users.has(frame.to)) fail('not_found', 'Получатель не найден');
+        if (!sendAllowed(userId, frame.to, body.length)) fail('rate_limited', 'Слишком много сообщений этому человеку, попробуйте позже');
         const recipients = online.get(frame.to);
         if (frame.ephemeral) {
           // Ephemeral signals (typing indicators) are never stored.
@@ -940,6 +981,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     // Old rate-limit counters: their windows are long over.
     lookupBuckets.clear();
     sealedBuckets.clear();
+    sendBytes.clear();
     for (const to of sealedSeen.keys()) if (!store.users.has(to)) sealedSeen.delete(to);
     const stale = Date.now() - OPK_REPEAT_MS;
     for (const [key, at] of opkGiven) if (at < stale) opkGiven.delete(key);

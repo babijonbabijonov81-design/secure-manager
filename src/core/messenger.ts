@@ -1347,6 +1347,11 @@ export class Messenger {
     const contact = this.requireContact(contactId);
     if (this.isHeld(contactId))
       throw new MessengerError('key_changed', 'Ключ собеседника изменился. Сверьте код безопасности, чтобы отправить сообщение');
+    // Replying to a stranger accepts the request.
+    if (contact.request) {
+      this.acceptRequest(contactId);
+      return this.contacts[contactId];
+    }
     return contact;
   }
 
@@ -1586,6 +1591,10 @@ export class Messenger {
     this.storeGroup(next, !inGroup);
     if (!base) {
       if (senderId !== this.account.userId) this.addSystem(chatId, { kind: 'group', what: 'joined', by, value: next.name });
+      // Added by someone I never talked to: the group is a request too.
+      const adder = this.contacts[senderId];
+      if (senderId !== this.account.userId && (!adder || adder.groupOnly || adder.request) && this.settings.features.requests !== false)
+        this.updateContact(chatId, { request: true });
       return true;
     }
     const change = describeChange(base, next);
@@ -2479,7 +2488,7 @@ export class Messenger {
   /** What goes with my profile to a contact: the name, and the delivery key unless they are blocked. */
   private myProfile(contact: Contact | undefined): { n: string; ak?: string } {
     const ak = this.account.accessKey;
-    return { n: this.account.displayName, ...(ak && contact && !contact.blocked ? { ak } : {}) };
+    return { n: this.account.displayName, ...(ak && contact && !contact.blocked && !contact.request ? { ak } : {}) };
   }
 
   private async pumpOutbox(): Promise<void> {
@@ -2526,7 +2535,19 @@ export class Messenger {
     if (!unreported.length) return;
     const ids = unreported.map((m) => m.id);
     this.patchMessages(contactId, new Set(ids), (m) => ({ ...m, readSent: true }));
-    if (this.shares(contactId, 'read') && !contact.blocked) void this.sendControl(contact, { t: 'rcpt', k: 'r', ids });
+    if (this.shares(contactId, 'read') && !contact.blocked && !contact.request) void this.sendControl(contact, { t: 'rcpt', k: 'r', ids });
+  }
+
+  /** «Принять»: the stranger becomes a contact — they get my name and delivery key, receipts flow. */
+  acceptRequest(contactId: string): void {
+    const contact = this.contacts[contactId];
+    if (!contact?.request) return;
+    const accepted = this.updateContact(contactId, { request: undefined })!;
+    if (accepted.group) return;
+    void this.sendControl(accepted, { t: 'prof', ...this.myProfile(accepted) });
+    // What came while it was a request is reported delivered now; «прочитано» follows when read.
+    const ids = (this.conversations.get(contactId) ?? []).filter((m) => m.dir === 'in').map((m) => m.id);
+    if (ids.length) void this.sendControl(accepted, { t: 'rcpt', k: 'd', ids });
   }
 
   /** Deleting never leaves a "message deleted" trace — on either side. */
@@ -2634,6 +2655,11 @@ export class Messenger {
   private handleCall(contact: Contact, content: Extract<Content, { t: 'call' }>, queued: boolean): void {
     const id = typeof content.id === 'string' && content.id.length <= 64 ? content.id : '';
     if (!id) return;
+    // A stranger's call does not ring: it shows up as a missed call in the request.
+    if (contact.request) {
+      if (content.k === 'offer' && !this.endedCalls.has(id)) this.logCall(contact.id, 'in', { status: 'missed' }, id);
+      return;
+    }
     let signal: CallSignal;
     switch (content.k) {
       case 'offer':
@@ -2675,7 +2701,7 @@ export class Messenger {
     const targets: { id: string; content: Content }[] = [];
     for (const contact of Object.values(this.contacts)) {
       // People I only share a group with do not learn when I am online.
-      if (contact.blocked || contact.groupOnly || contact.group) continue;
+      if (contact.blocked || contact.groupOnly || contact.group || contact.request) continue;
       if (state === 'off' && !this.online[contact.id]) continue;
       const hidden = !this.shares(contact.id, 'online');
       const content: Content = hidden ? { t: 'pres', s: 'hidden', ...(ask ? { ask: 1 } : {}) } : { t: 'pres', s: state, ...(ask ? { ask: 1 } : {}) };
@@ -2714,7 +2740,7 @@ export class Messenger {
       if (contact.presenceHidden) this.updateContact(contact.id, { presenceHidden: false });
       this.markOnline(contact.id);
     }
-    if (content.ask) void this.sendEphemeral(contact.id, { t: 'pres', s: mine ? 'on' : 'hidden' });
+    if (content.ask && !contact.request) void this.sendEphemeral(contact.id, { t: 'pres', s: mine ? 'on' : 'hidden' });
   }
 
   // ---- receiving -----------------------------------------------------------------------
@@ -2775,6 +2801,8 @@ export class Messenger {
       const contact = this.contacts[contactId];
       if (!session || !contact) return;
       const { header: content } = unpack<Content>(ephemeralDecrypt(session, header, body));
+      // A stranger's «typing» and «online» say nothing to me; a call does not ring (handleCall).
+      if (contact.request && content.t !== 'call') return;
       if (content.t === 'typ') {
         this.markOnline(contactId);
         this.setTyping(contactId, content.on);
@@ -2826,6 +2854,8 @@ export class Messenger {
         : this.createContact(fresh, content.t === 'msg' && content.p?.n ? content.p.n : (info?.username ?? 'Неизвестный'));
       // Someone from a group I am in: no chat in the list until we talk directly.
       if (!previous && ['skd', 'skreq', 'gst', 'gleave'].includes(content.t)) contact = this.updateContact(contactId, { groupOnly: true })!;
+      // A stranger writes first: «Запрос на переписку» until I accept or reply.
+      else if (!previous && this.settings.features.requests !== false) contact = this.updateContact(contactId, { request: true })!;
     } else if (contact.dhKey !== sender.fd) {
       contact = this.updateContact(contactId, { dhKey: sender.fd, dhSig: sender.fs })!;
     }
@@ -2930,7 +2960,8 @@ export class Messenger {
         // Like Telegram: a new message brings an archived (not muted) chat back.
         if (contact.archived && !contact.muted) patch.archived = false;
         const updated = this.updateContact(contact.id, patch)!;
-        delivered.set(contact.id, [...(delivered.get(contact.id) ?? []), message.id]);
+        // A stranger does not learn that the message arrived (or that I exist and am online).
+        if (!updated.request) delivered.set(contact.id, [...(delivered.get(contact.id) ?? []), message.id]);
         if (!updated.muted) this.events.onIncoming?.(updated, message);
         return;
       }

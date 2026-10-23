@@ -68,6 +68,9 @@ describe('messenger end-to-end', () => {
     expect(bobView.username).toBe(alice.username);
     expect(bobView.displayName).toBe('Alice');
     expect(bobView.unread).toBe(1);
+    // A stranger wrote first: Bob accepts the request, then receipts flow.
+    expect(bobView.request).toBe(true);
+    bob.messenger.acceptRequest(aliceId);
 
     // delivered receipt
     await waitFor(() => messages(alice.messenger, contact.id).at(-1)?.status === 'delivered');
