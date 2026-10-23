@@ -43,6 +43,7 @@ import { verifyTotp } from './shared/totp.ts';
 import { b64, pack, unb64Len, unpack } from './shared/wire.ts';
 import { codeEmail, type Mailer } from './mailer.ts';
 import { RelayStore, type StoreLimits, type UserRecord } from './store.ts';
+import { createTunnelHost, type TunnelLimits } from './tunnel.ts';
 
 export interface RelayOptions {
   port?: number;
@@ -70,6 +71,8 @@ export interface RelayOptions {
   trustProxy?: number;
   /** SERVER_SECRET: the server's secret (and so its key and id) for servers without a data folder. */
   secret?: Uint8Array;
+  /** Serve tunnels for Veil servers behind NAT (/tunnel, /t/<id>/ws); off unless given. */
+  tunnels?: Partial<TunnelLimits> | false;
 }
 
 /**
@@ -119,6 +122,8 @@ export interface RelayHandle {
   port: number;
   server: Server;
   store: RelayStore;
+  /** Serves a connection that arrived some other way (a virtual one from a tunnel). */
+  accept(channel: Channel, ip: string, challenge: string | null): void;
   close(): Promise<void>;
 }
 
@@ -167,8 +172,43 @@ function validBackupMeta(meta: unknown): meta is BackupMeta {
   );
 }
 
+/**
+ * One client connection, whatever carries it: a WebSocket, or a virtual connection that a public
+ * relay forwards through a tunnel to this server (server/src/tunnel.ts).
+ */
+export interface Channel {
+  readonly open: boolean;
+  send(bytes: Uint8Array): void;
+  close(code: number, reason: string): void;
+  /** Drops it at once (a dead peer). */
+  terminate(): void;
+  onMessage(callback: (bytes: Uint8Array, binary: boolean) => void): void;
+  onClose(callback: () => void): void;
+  /** WebSockets answer pings; a tunnel watches its virtual connections itself. */
+  ping?(onPong: () => void): void;
+}
+
+/** A WebSocket as a Channel. */
+export function webSocketChannel(ws: WebSocket): Channel {
+  return {
+    get open() {
+      return ws.readyState === ws.OPEN;
+    },
+    send: (bytes) => ws.send(bytes),
+    close: (code, reason) => ws.close(code, reason),
+    terminate: () => ws.terminate(),
+    onMessage: (callback) =>
+      ws.on('message', (raw, binary) => callback(raw instanceof Buffer ? new Uint8Array(raw) : new Uint8Array(raw as ArrayBuffer), binary)),
+    onClose: (callback) => ws.on('close', callback),
+    ping: (onPong) => {
+      ws.once('pong', onPong);
+      ws.ping();
+    },
+  };
+}
+
 interface Connection {
-  ws: WebSocket;
+  channel: Channel;
   ip: string;
   nonce: string;
   userId: string | null;
@@ -313,7 +353,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
   const opkGiven = new Map<string, number>();
 
   const online = new Map<string, Set<Connection>>();
-  const connections = new Map<WebSocket, Connection>();
+  const connections = new Set<Connection>();
   const registrations = new Map<string, Bucket>();
   // Client-side ids of recently accepted envelopes, so a retried send is not queued twice.
   const recentSends = new Map<string, Map<string, { id: string; ts: number }>>();
@@ -439,13 +479,34 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     }
   });
 
-  const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: MAX_FRAME_BYTES });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
+  const tunnelHost =
+    options.tunnels === undefined || options.tunnels === false
+      ? null
+      : createTunnelHost({ secretKey: store.serverSecretKey, publicKey: store.serverPublicKey, limits: options.tunnels, log });
+  // A tunnel carries client frames plus a little framing.
+  const tunnelWss = tunnelHost ? new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES + 4096 }) : null;
+  http.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url ?? '/', 'http://relay');
+    const ip = clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, options.trustProxy ?? 0);
+    const tunnel = /^\/t\/([a-z2-7]{16})\/ws$/.exec(url.pathname);
+    if (url.pathname === '/ws') {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    } else if (tunnelHost && tunnelWss && url.pathname === '/tunnel') {
+      tunnelWss.handleUpgrade(req, socket, head, (ws) => tunnelHost.acceptTunnel(ws, ip));
+    } else if (tunnelHost && tunnelWss && tunnel && tunnelHost.has(tunnel[1])) {
+      const challenge = url.searchParams.get('c') ?? '';
+      tunnelWss.handleUpgrade(req, socket, head, (ws) => tunnelHost.acceptClient(ws, ip, tunnel[1], SERVER_CHALLENGE_RE.test(challenge) ? challenge : ''));
+    } else {
+      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+    }
+  });
 
   const send = (conn: Connection, frame: ServerFrame, body?: Uint8Array) => {
-    if (conn.ws.readyState !== conn.ws.OPEN) return;
+    if (!conn.channel.open) return;
     const bytes = pack(frame, body);
     options.tap?.('out', bytes);
-    conn.ws.send(bytes);
+    conn.channel.send(bytes);
   };
 
   const sendError = (conn: Connection, code: ErrorCode, message: string, reqId?: string) =>
@@ -464,7 +525,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     conn.userId = user.userId;
     // One active connection per account: a newer login replaces older ones.
     const existing = online.get(user.userId);
-    if (existing) for (const old of existing) old.ws.close(4001, 'replaced');
+    if (existing) for (const old of existing) old.channel.close(4001, 'replaced');
     online.set(user.userId, new Set([conn]));
     send(conn, {
       type: 'ready',
@@ -503,7 +564,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       if (!token || token.username !== username || token.expires < Date.now()) fail('bad_code', 'Срок восстановления истёк');
       recoveryTokens.delete(frame.recoveryToken);
       inherited = { emailHash: taken.emailHash, totp: taken.totp, totpLast: taken.totpLast };
-      for (const old of online.get(taken.userId) ?? []) old.ws.close(4002, 'deleted');
+      for (const old of online.get(taken.userId) ?? []) old.channel.close(4002, 'deleted');
       await store.removeUser(taken.userId);
       log(`account reset @${username}`);
       taken = undefined;
@@ -857,7 +918,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         recentSends.delete(userId);
         log('account deleted');
         send(conn, { type: 'result', reqId: frame.reqId, data: { deleted: true } });
-        conn.ws.close(4002, 'deleted');
+        conn.channel.close(4002, 'deleted');
         return;
       }
       case 'devices': {
@@ -875,7 +936,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
         user.devices = (user.devices ?? []).filter((d) => d.id !== id);
         user.revoked = [id, ...(user.revoked ?? []).filter((r) => r !== id)].slice(0, MAX_REVOKED);
         store.touch();
-        for (const other of online.get(userId) ?? []) if (other.deviceId === id) other.ws.close(4003, 'revoked');
+        for (const other of online.get(userId) ?? []) if (other.deviceId === id) other.channel.close(4003, 'revoked');
         send(conn, { type: 'result', reqId: frame.reqId, data: { revoked: true } });
         return;
       }
@@ -887,7 +948,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
           store.touch();
         }
         send(conn, { type: 'result', reqId: frame.reqId, data: { signedOut: true } });
-        conn.ws.close(1000, 'signed out');
+        conn.channel.close(1000, 'signed out');
         return;
       }
       default:
@@ -895,26 +956,28 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     }
   };
 
-  wss.on('connection', (ws, req) => {
+  /**
+   * Serves one client connection. `ip` is who it comes from (for limits), `challenge` the random
+   * string the client wants signed with this server's key in the hello.
+   */
+  const acceptConnection = (channel: Channel, ip: string, challenge: string | null) => {
     const conn: Connection = {
-      ws,
-      ip: clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, options.trustProxy ?? 0),
+      channel,
+      ip,
       nonce: b64(randomBytes(32)),
       userId: null,
       alive: true,
       sends: new Bucket(SENDS_PER_WINDOW, LOOKUP_WINDOW_MS),
     };
-    connections.set(ws, conn);
-    ws.on('pong', () => (conn.alive = true));
+    connections.add(conn);
 
     // Frames from one connection are handled strictly in order.
     let chain = Promise.resolve();
-    ws.on('message', (raw, isBinary) => {
+    channel.onMessage((bytes, isBinary) => {
       chain = chain.then(async () => {
         let reqId: string | undefined;
         try {
           if (!isBinary) fail('bad_request', 'Ожидается бинарный кадр');
-          const bytes = raw instanceof Buffer ? new Uint8Array(raw) : new Uint8Array(raw as ArrayBuffer);
           options.tap?.('in', bytes);
           const { header, body } = unpack<ClientFrame>(bytes);
           reqId = typeof (header as { reqId?: unknown }).reqId === 'string' ? (header as { reqId: string }).reqId : undefined;
@@ -940,8 +1003,8 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       });
     });
 
-    ws.on('close', () => {
-      connections.delete(ws);
+    channel.onClose(() => {
+      connections.delete(conn);
       if (conn.bridge) closeBridge(conn.bridge, conn);
       if (!conn.userId) return;
       const device = conn.deviceId ? store.users.get(conn.userId)?.devices?.find((d) => d.id === conn.deviceId) : undefined;
@@ -954,7 +1017,6 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       if (set && set.size === 0) online.delete(conn.userId);
     });
 
-    const challenge = new URL(req.url ?? '/', 'http://relay').searchParams.get('c');
     send(conn, {
       type: 'hello',
       nonce: conn.nonce,
@@ -964,16 +1026,26 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
       key: b64(store.serverPublicKey),
       ...(challenge && SERVER_CHALLENGE_RE.test(challenge) ? { proof: b64(ed25519.sign(serverProofStatement(challenge), store.serverSecretKey)) } : {}),
     });
+  };
+
+  wss.on('connection', (ws, req) => {
+    acceptConnection(
+      webSocketChannel(ws),
+      clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, options.trustProxy ?? 0),
+      new URL(req.url ?? '/', 'http://relay').searchParams.get('c'),
+    );
   });
 
+
   const heartbeat = setInterval(() => {
-    for (const conn of connections.values()) {
+    for (const conn of connections) {
+      if (!conn.channel.ping) continue;
       if (!conn.alive) {
-        conn.ws.terminate();
+        conn.channel.terminate();
         continue;
       }
       conn.alive = false;
-      conn.ws.ping();
+      conn.channel.ping(() => (conn.alive = true));
     }
   }, 30_000);
   const janitor = setInterval(() => {
@@ -1001,10 +1073,14 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
     port,
     server: http,
     store,
+    accept: (channel, ip, challenge) => acceptConnection(channel, ip, challenge),
     async close() {
       clearInterval(heartbeat);
       clearInterval(janitor);
+      tunnelHost?.close();
+      for (const ws of tunnelWss?.clients ?? []) ws.terminate();
       for (const ws of wss.clients) ws.terminate();
+      for (const conn of connections) conn.channel.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => http.close(() => resolve()));
       await store.flush();

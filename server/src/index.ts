@@ -29,8 +29,23 @@ const secretText = process.env.SERVER_SECRET?.trim();
 const secret = secretText && secretText.length >= 32 ? new Uint8Array(createHash('sha256').update(secretText).digest()) : undefined;
 if (secretText && !secret) log('SERVER_SECRET is shorter than 32 characters: ignored');
 
+// Tunnels for Veil servers at home behind NAT (TUNNELS=0 turns them off). The traffic limit keeps
+// a free plan (Render: 100 GB a month) within bounds.
+const envNumber = (name: string) => (Number(process.env[name]) > 0 ? Number(process.env[name]) : undefined);
+const tunnels =
+  process.env.TUNNELS === '0'
+    ? false
+    : {
+        ...(envNumber('TUNNELS_PER_IP') ? { perIp: envNumber('TUNNELS_PER_IP') } : {}),
+        ...(envNumber('TUNNELS_MAX') ? { maxTunnels: envNumber('TUNNELS_MAX') } : {}),
+        ...(envNumber('TUNNEL_CONNS') ? { connsPerTunnel: envNumber('TUNNEL_CONNS') } : {}),
+        ...(envNumber('TUNNEL_MB_PER_DAY') ? { bytesPerDay: envNumber('TUNNEL_MB_PER_DAY')! * 1024 * 1024 } : {}),
+        ...(envNumber('TUNNEL_IDLE_MINUTES') ? { idleMs: envNumber('TUNNEL_IDLE_MINUTES')! * 60_000 } : {}),
+      };
+
 const relay = await startRelay({
   secret,
+  tunnels,
   port,
   host: process.env.HOST ?? '0.0.0.0',
   dataDir,
