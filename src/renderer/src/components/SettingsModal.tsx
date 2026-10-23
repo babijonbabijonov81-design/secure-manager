@@ -1117,7 +1117,7 @@ function AboutTab() {
         <h1 style={{ fontSize: 24 }}>
           <span className="gradient-text">Veil</span>
         </h1>
-        <p>Версия {bridge?.version ?? '2.2.2'} · открытый исходный код</p>
+        <p>Версия {bridge?.version ?? '2.3.0'} · открытый исходный код</p>
       </div>
       <UpdatesSection />
       <div className="section">
