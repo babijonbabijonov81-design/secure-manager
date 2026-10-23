@@ -1,4 +1,4 @@
-import { Clock, CornerUpLeft, Link2, LockKeyhole, Mic, Paperclip, SendHorizontal, Smile, Square, Trash2, X } from 'lucide-react';
+import { CircleDot, Clock, CornerUpLeft, Link2, LockKeyhole, Mic, Paperclip, SendHorizontal, Smile, Square, Trash2, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { snippetOf, type Messenger } from '../../../core/messenger.ts';
 import { bridge } from '../../../core/platform.ts';
@@ -12,6 +12,7 @@ import { autocorrect, ignoreWord } from '../lib/text.ts';
 import { useToast } from '../lib/ui.tsx';
 import { formatDate, formatWhen } from '../lib/format.ts';
 import { feature } from '../lib/hooks.ts';
+import { CircleRecorder, type RecordedCircle } from './CircleRecorder.tsx';
 import { SchedulePopover, type ScheduleChoice } from './SchedulePopover.tsx';
 import { StickerPanel } from './StickerPanel.tsx';
 
@@ -57,6 +58,7 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
   const [emojiTab, setEmojiTab] = useState(0);
   const [hint, setHint] = useState<{ from: string; to: string } | null>(null);
   const [recording, setRecording] = useState<Recording | null>(null);
+  const [circle, setCircle] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [levels, setLevels] = useState<number[]>([]);
   const area = useRef<HTMLTextAreaElement>(null);
@@ -266,8 +268,19 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
     onCancelReply();
   };
 
+  // ---- «кружки» ----
+
+  const sendCircle = (recorded: RecordedCircle) => {
+    setCircle(false);
+    void messenger.sendCircle(contactId, recorded, { replyTo: replyTo?.id }).catch((e) => toast((e as Error).message, 'error'));
+    onCancelReply();
+  };
+
   return (
     <div className="composer-wrap">
+      {circle && (
+        <CircleRecorder audio={settings.audio} onSend={sendCircle} onCancel={() => setCircle(false)} onError={(text) => toast(text, 'error')} />
+      )}
       {panel !== 'closed' && (
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 19 }} onMouseDown={() => setPanel('closed')} />
@@ -393,9 +406,16 @@ export function Composer({ messenger, contact, settings, stickers, replyTo, onCa
               <SendHorizontal size={19} />
             </button>
           ) : (
+            <>
+              {feature(settings as Settings, 'circles') && (
+                <button className={`icon-btn${circle ? ' active' : ''}`} onClick={() => setCircle(true)} disabled={circle} aria-label="Записать кружок" title="Записать кружок — видео до минуты">
+                  <CircleDot size={20} />
+                </button>
+              )}
             <button className="send-btn mic" onClick={() => void startRecording()} aria-label="Записать голосовое" title="Записать голосовое сообщение">
               <Mic size={19} />
             </button>
+            </>
           )}
         </div>
       )}

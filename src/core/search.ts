@@ -44,7 +44,7 @@ function indexed(m: Message): string {
 
 function kindOf(m: Message): SearchHit['kind'] {
   const atts = attachmentsOf(m);
-  if (atts.some((a) => a.kind === 'voice')) return 'voice';
+  if (atts.some((a) => a.kind === 'voice' || a.kind === 'circle')) return 'voice';
   if (atts.some((a) => a.kind === 'image')) return 'photo';
   if (atts.some((a) => a.kind === 'file')) return 'file';
   if (m.preview || m.note?.kind === 'link' || (m.text && LINK.test(m.text))) return 'link';
@@ -79,7 +79,7 @@ function snippetFor(m: Message, words: string[]): Pick<SearchHit, 'snippet' | 'm
   const raw =
     m.note?.kind === 'password'
       ? (m.note.title ?? 'Пароль')
-      : (m.text || m.transcript || m.preview?.title || atts.find((a) => a.kind === 'file')?.name || (atts.some((a) => a.kind === 'voice') ? 'Голосовое' : 'Фото'));
+      : (m.text || m.transcript || m.preview?.title || atts.find((a) => a.kind === 'file')?.name || (atts.some((a) => a.kind === 'voice') ? 'Голосовое' : atts.some((a) => a.kind === 'circle') ? 'Кружок' : 'Фото'));
   const flat = raw.replace(/\s+/g, ' ').trim();
   const all = marksIn(normalize(flat), words);
   if (!all.length) return { snippet: flat.slice(0, 120), marks: [] };

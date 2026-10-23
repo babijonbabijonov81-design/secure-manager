@@ -31,6 +31,7 @@ import { attachmentsOf, type Attachment, type Message } from '../../../core/type
 import { saveAttachment, useAttachmentUrl } from '../lib/attachments.ts';
 import { avatarColor, formatCallDuration, formatDate, formatDay, formatSize, formatTime, formatWhen, isEmojiOnly, remaining } from '../lib/format.ts';
 import { ReactionPicker } from './ReactionPicker.tsx';
+import { CirclePlayer } from './CirclePlayer.tsx';
 import { VoicePlayer } from './VoicePlayer.tsx';
 
 const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/g;
@@ -245,6 +246,7 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
   const files = atts.filter((a) => a.kind === 'file');
   const voice = atts.find((a) => a.kind === 'voice');
   const sticker = atts.find((a) => a.kind === 'sticker');
+  const circle = atts.find((a) => a.kind === 'circle');
   const out = message.dir === 'out';
 
   const meta = (
@@ -258,7 +260,7 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
   let bubbleClass = 'bubble';
   const mediaOnly = images.length > 0 && !message.text && !files.length && !message.reply && !message.fwd && !message.once;
   if (message.once) bubbleClass += ' once-bubble';
-  else if (sticker) bubbleClass += ' sticker-bubble';
+  else if (sticker || (circle && !message.text && !message.reply && !message.fwd)) bubbleClass += ' sticker-bubble';
   else if (mediaOnly) bubbleClass += ' media';
   else if (images.length) bubbleClass += ' with-media';
   else if (!atts.length && isEmojiOnly(message.text)) bubbleClass += ' emoji-only';
@@ -347,6 +349,14 @@ export const Bubble = memo(function Bubble(props: BubbleProps) {
                 </div>
               </div>
             ))}
+            {circle &&
+              (props.closedMedia && !out ? (
+                <div className="closed-media" data-testid="closed-media">
+                  Кружок — откроется, когда вы примете запрос
+                </div>
+              ) : (
+                <CirclePlayer messenger={messenger} att={circle} />
+              ))}
             {voice && <VoicePlayer messenger={messenger} att={voice} />}
             {voice && props.transcribe && (
               <VoiceText message={message} busy={!!props.transcribing} onTranscribe={() => props.onTranscribe?.(message)} />

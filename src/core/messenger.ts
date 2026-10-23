@@ -62,6 +62,7 @@ import {
   DEFAULT_SETTINGS,
   MAX_ALBUM_ITEMS,
   MAX_ATTACHMENT_BYTES,
+  MAX_CIRCLE_SECONDS,
   type AccountRecord,
   type Attachment,
   type AttachmentKind,
@@ -200,6 +201,7 @@ export function snippetOf(message: Message): string {
   const first = atts[0];
   if (!first) return '';
   if (first.kind === 'voice') return first.dur ? `Голосовое · ${formatSeconds(first.dur)}` : 'Голосовое';
+  if (first.kind === 'circle') return first.dur ? `Кружок · ${formatSeconds(first.dur)}` : 'Кружок';
   if (first.kind === 'sticker') return 'Стикер';
   if (first.kind === 'image') return atts.length > 1 ? `Фото · ${atts.length}` : 'Фото';
   return `Файл · ${first.name}`;
@@ -2165,7 +2167,7 @@ export class Messenger {
     let current: OutgoingFile[] = [];
     let size = 0;
     for (const file of files) {
-      const alone = file.kind === 'voice' || file.kind === 'sticker';
+      const alone = file.kind === 'voice' || file.kind === 'sticker' || file.kind === 'circle';
       if (current.length && (alone || current.length >= MAX_ALBUM_ITEMS || size + file.data.length > MAX_ATTACHMENT_BYTES)) {
         groups.push(current);
         current = [];
@@ -2335,6 +2337,14 @@ export class Messenger {
   sendVoice(contactId: string, voice: { data: Uint8Array; mime: string; dur: number; wave: number[] }, options: SendOptions = {}) {
     const ext = voice.mime.includes('ogg') ? 'ogg' : 'webm';
     return this.sendMedia(contactId, [{ name: `voice.${ext}`, kind: 'voice', ...voice }], options);
+  }
+
+  /** «Кружок»: a square video from the camera, shown round. */
+  sendCircle(contactId: string, circle: { data: Uint8Array; mime: string; dur: number; size: number }, options: SendOptions = {}) {
+    if (!/^video\/(webm|mp4)\b/.test(circle.mime)) throw new MessengerError('bad_circle', 'Кружок должен быть видео');
+    const ext = circle.mime.includes('mp4') ? 'mp4' : 'webm';
+    const dur = Math.min(MAX_CIRCLE_SECONDS, circle.dur);
+    return this.sendMedia(contactId, [{ name: `circle.${ext}`, kind: 'circle', data: circle.data, mime: circle.mime, dur, w: circle.size, h: circle.size }], options);
   }
 
   async sendSticker(contactId: string, stickerId: string, options: SendOptions = {}): Promise<void> {
@@ -2944,9 +2954,11 @@ export class Messenger {
       if (!Number.isInteger(len) || len <= 0 || offset + len > data.length) break;
       const bytes = data.subarray(offset, offset + len);
       offset += len;
-      const kind: AttachmentKind = (['image', 'file', 'voice', 'sticker'] as const).includes(meta.kind as AttachmentKind)
+      let kind: AttachmentKind = (['image', 'file', 'voice', 'sticker', 'circle'] as const).includes(meta.kind as AttachmentKind)
         ? (meta.kind as AttachmentKind)
         : 'file';
+      // A circle is played inline, so it has to be a video; anything else is just a file.
+      if (kind === 'circle' && !/^video\/(webm|mp4)\b/.test(String(meta.mime))) kind = 'file';
       const w = Number(meta.w);
       const h = Number(meta.h);
       const att: Attachment = {
@@ -2957,6 +2969,7 @@ export class Messenger {
         kind,
         ...(w > 0 && h > 0 && w < 100_000 && h < 100_000 ? { w, h } : {}),
         ...(kind === 'voice' && Number(meta.dur) > 0 ? { dur: Math.min(3600, Number(meta.dur)) } : {}),
+        ...(kind === 'circle' && Number(meta.dur) > 0 ? { dur: Math.min(MAX_CIRCLE_SECONDS, Number(meta.dur)) } : {}),
         ...(kind === 'voice' && Array.isArray(meta.wave)
           ? { wave: meta.wave.slice(0, 64).map((v) => Math.max(0, Math.min(31, Number(v) || 0))) }
           : {}),

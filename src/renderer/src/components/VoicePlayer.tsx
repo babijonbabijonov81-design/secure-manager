@@ -5,7 +5,13 @@ import type { Attachment } from '../../../core/types.ts';
 import { useAttachmentUrl } from '../lib/attachments.ts';
 import { formatDuration } from '../lib/media.ts';
 
-let playing: HTMLAudioElement | null = null;
+let playing: HTMLMediaElement | null = null;
+
+/** One voice message or circle sounds at a time: starting one pauses the other. */
+export function takePlayback(el: HTMLMediaElement): void {
+  if (playing && playing !== el) playing.pause();
+  playing = el;
+}
 
 export function VoicePlayer({ messenger, att }: { messenger: Messenger; att: Attachment }) {
   const url = useAttachmentUrl(messenger, att);
@@ -43,8 +49,7 @@ export function VoicePlayer({ messenger, att }: { messenger: Messenger; att: Att
     const el = audio.current;
     if (!el) return;
     if (el.paused) {
-      if (playing && playing !== el) playing.pause();
-      playing = el;
+      takePlayback(el);
       void el.play();
     } else el.pause();
   };

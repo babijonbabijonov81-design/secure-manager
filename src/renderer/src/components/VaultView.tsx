@@ -37,6 +37,7 @@ import { copyText, prepareFile } from '../lib/media.ts';
 import { ConfirmDialog, Toggle, useToast } from '../lib/ui.tsx';
 import { AttachmentPreview } from './AttachmentPreview.tsx';
 import { Lightbox } from './ChatView.tsx';
+import { CirclePlayer } from './CirclePlayer.tsx';
 import { VoicePlayer } from './VoicePlayer.tsx';
 
 type Filter = 'all' | 'notes' | 'passwords' | 'files' | 'links' | 'chats';
@@ -301,7 +302,7 @@ function VaultCard({
   const remove = () => void messenger.deleteMessage(SAVED_ID, message.id, false);
   const type = kind === 'password' ? 'password' : atts.length ? 'file' : link ? 'link' : 'note';
   const Icon = { password: KeyRound, file: FileText, link: Link2, note: StickyNote }[type];
-  const title = { password: message.note?.title || 'Пароль', file: atts.length > 1 ? `Файлы · ${atts.length}` : 'Файл', link: 'Ссылка', note: 'Заметка' }[type];
+  const title = { password: message.note?.title || 'Пароль', file: atts.length > 1 ? `Файлы · ${atts.length}` : atts[0]?.kind === 'circle' ? 'Кружок' : 'Файл', link: 'Ссылка', note: 'Заметка' }[type];
 
   return (
     <article className={`vault-card ${type}${temp ? ' temp' : ''}`} data-testid="vault-card" data-kind={type} id={`msg-${message.id}`}>
@@ -322,6 +323,8 @@ function VaultCard({
           <VaultImage key={att.id} messenger={messenger} att={att} onOpen={() => onOpenImage(att)} />
         ) : att.kind === 'voice' ? (
           <VoicePlayer key={att.id} messenger={messenger} att={att} />
+        ) : att.kind === 'circle' ? (
+          <CirclePlayer key={att.id} messenger={messenger} att={att} />
         ) : (
           <div className="file-card" key={att.id}>
             <button className="file-icon" onClick={() => void saveAttachment(messenger, att)} aria-label={`Сохранить «${att.name}»`}>

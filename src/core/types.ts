@@ -33,6 +33,7 @@ export const FEATURE_NAMES = [
   'transcribe',
   'search',
   'requests',
+  'circles',
 ] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 export type Features = Record<FeatureName, boolean>;
@@ -254,7 +255,8 @@ export function sharesWith(settings: Settings, contact: Pick<Contact, 'privacy'>
 
 export type MessageStatus = 'scheduled' | 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
 
-export type AttachmentKind = 'image' | 'file' | 'voice' | 'sticker';
+/** `circle`: a round video message («кружок»), up to a minute from the camera. */
+export type AttachmentKind = 'image' | 'file' | 'voice' | 'sticker' | 'circle';
 
 export interface Attachment {
   id: string;
@@ -264,7 +266,7 @@ export interface Attachment {
   kind: AttachmentKind;
   w?: number;
   h?: number;
-  /** Voice messages: duration in seconds and a coarse waveform (0–31 per bar). */
+  /** Voice messages and circles: duration in seconds; voice also has a coarse waveform (0–31 per bar). */
   dur?: number;
   wave?: number[];
   /** Stickers: content hash, lets the recipient save it to their collection. */
@@ -498,5 +500,7 @@ export interface MessengerSnapshot {
 
 export const TIMER_OPTIONS = [0, 30, 300, 3600, 28800, 86400, 604800] as const;
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+/** «Кружок»: at most a minute. */
+export const MAX_CIRCLE_SECONDS = 60;
 export const MAX_ALBUM_ITEMS = 10;
 export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'] as const;

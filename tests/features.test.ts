@@ -12,6 +12,7 @@ import {
   verifyRecovery,
   claimRecovery,
   isRecoveryWait,
+  snippetOf,
   type Messenger,
 } from '../src/core/messenger.ts';
 import { MemoryStorage } from '../src/core/storage.ts';
@@ -130,6 +131,25 @@ describe('conversation features', () => {
     const saved = await bob.messenger.saveSticker(got.atts![0]);
     expect(saved.id).toBe(sticker.id);
     expect(bob.messenger.getSnapshot().stickers.map((s) => s.id)).toContain(sticker.id);
+
+    alice.messenger.dispose();
+    bob.messenger.dispose();
+  });
+
+  it('«кружки»: round video messages up to a minute; anything but video arrives as a file', async () => {
+    const { alice, bob } = await pair();
+    const video = new Uint8Array(5000).fill(9);
+    await alice.messenger.sendCircle(bob.id, { data: video, mime: 'video/webm', dur: 75, size: 384 });
+    const circle = await waitFor(() => conv(bob.messenger, alice.id).find((m) => m.atts?.[0]?.kind === 'circle'));
+    expect(circle.atts![0]).toMatchObject({ kind: 'circle', mime: 'video/webm', dur: 60, w: 384, h: 384, size: 5000 });
+    expect((await bob.messenger.getAttachment(circle.atts![0].id))![0]).toBe(9);
+    expect(snippetOf(circle)).toBe('Кружок · 1:00');
+    expect(() => alice.messenger.sendCircle(bob.id, { data: video, mime: 'image/png', dur: 3, size: 384 })).toThrow('видео');
+
+    // A circle that is not a video (a forged one) is just a file on the other side.
+    await alice.messenger.sendMedia(bob.id, [{ name: 'x.png', mime: 'image/png', data: new Uint8Array([1, 2]), kind: 'circle' }]);
+    const forged = await waitFor(() => conv(bob.messenger, alice.id).find((m) => m.atts?.[0]?.name === 'x.png'));
+    expect(forged.atts![0].kind).toBe('file');
 
     alice.messenger.dispose();
     bob.messenger.dispose();
