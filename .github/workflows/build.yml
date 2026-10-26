@@ -48,8 +48,9 @@ jobs:
     steps:
       - id: matrix
         run: |
-          # Apple Silicon and Intel: .dmg and .zip, ad-hoc signed (no Apple Developer ID).
-          mac='{"os":"macos-latest","target":"--mac"}'
+          # Apple Silicon and Intel: .dmg and .zip, ad-hoc signed (no Apple Developer ID). Built on an
+          # Intel runner: the arm64 ones are often out of capacity, and electron-builder makes both.
+          mac='{"os":"macos-15-intel","target":"--mac"}'
           win='{"os":"windows-latest","target":"--win"}'
           linux='{"os":"ubuntu-latest","target":"--linux"}'
           case "${{ inputs.platforms }}" in
