@@ -55,7 +55,9 @@ import { QuickUnlockSection } from './QuickUnlock.tsx';
 import { BridgeCard, DuressSection, ProtectionBar, SafetyCodeCard, SecurityLogSection } from './SecurityCards.tsx';
 import { CodeInput, RecoveryEmailDialog, TotpDisableDialog, TotpSetupDialog } from './SecurityDialogs.tsx';
 
-export type SettingsTab = 'profile' | 'username' | 'accounts' | 'privacy' | 'appearance' | 'audio' | 'server' | 'security' | 'devices' | 'features' | 'about';
+import type { SettingsTab } from '../lib/settings-tabs.ts';
+
+export type { SettingsTab };
 
 const TABS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: 'profile', label: 'Профиль', icon: <UserRound size={18} /> },
@@ -1192,7 +1194,7 @@ function AboutTab() {
         <h1 style={{ fontSize: 24 }}>
           <span className="gradient-text">Veil</span>
         </h1>
-        <p>Версия {bridge?.version ?? '2.3.1'} · открытый исходный код</p>
+        <p>Версия {bridge?.version ?? '2.4.0'} · открытый исходный код</p>
       </div>
       <UpdatesSection />
       <div className="section">

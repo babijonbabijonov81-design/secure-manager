@@ -1,0 +1,103 @@
+name: iPhone app
+
+# Veil for iPhone (mobile/): an unsigned .ipa to install without the App Store (Sideloadly or
+# AltStore sign it with your Apple ID or developer account), and a build for the iOS Simulator.
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish as a pre-release (tag ios-v<version>)'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - 'src/core/**'
+      - 'server/src/shared/**'
+      - 'src/renderer/src/lib/format.ts'
+      - 'src/renderer/src/lib/shield.ts'
+      - 'src/renderer/src/lib/text.ts'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit -p tsconfig.json
+      # The JavaScript bundle (with the shared core) compiles to Hermes bytecode.
+      - run: npx expo export --platform ios --output-dir /tmp/ios-bundle
+
+  build:
+    needs: check
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Newest Xcode on the runner
+        run: |
+          XCODE=$(ls -d /Applications/Xcode*.app | grep -v -i beta | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+      - run: npm ci
+      - name: Native project
+        run: npx expo prebuild --platform ios --clean
+      - id: version
+        run: echo "version=$(node -p "require('./app.json').expo.version")" >> "$GITHUB_OUTPUT"
+      - name: Device build (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -workspace ios/Veil.xcworkspace -scheme Veil -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Veil.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" archive | tail -n 60
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/Veil.xcarchive/Products/Applications/Veil.app" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry "$GITHUB_WORKSPACE/Veil-iPhone-${{ steps.version.outputs.version }}-unsigned.ipa" Payload)
+      - name: Simulator build
+        run: |
+          set -o pipefail
+          xcodebuild -workspace ios/Veil.xcworkspace -scheme Veil -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/sim" \
+            CODE_SIGNING_ALLOWED=NO build | tail -n 40
+          (cd "$RUNNER_TEMP/sim/Build/Products/Release-iphonesimulator" && zip -qry "$GITHUB_WORKSPACE/Veil-iPhone-${{ steps.version.outputs.version }}-simulator.zip" Veil.app)
+      - name: Checksums
+        working-directory: ${{ github.workspace }}
+        run: shasum -a 256 Veil-iPhone-* > SHA256SUMS-iPhone.txt && cat SHA256SUMS-iPhone.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veil-iphone
+          path: |
+            Veil-iPhone-*
+            SHA256SUMS-iPhone.txt
+      - name: Pre-release
+        if: ${{ inputs.release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ios-v${{ steps.version.outputs.version }}
+          name: Veil для iPhone ${{ steps.version.outputs.version }}
+          prerelease: true
+          make_latest: false
+          body_path: mobile/RELEASE_NOTES.md
+          files: |
+            Veil-iPhone-*
+            SHA256SUMS-iPhone.txt

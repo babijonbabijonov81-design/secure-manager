@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Veil",
+    "slug": "veil",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#0C0A09",
+    "ios": {
+      "bundleIdentifier": "app.veil.messenger",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "icon": {
+        "light": "./assets/icon.png",
+        "dark": "./assets/icon-dark.png",
+        "tinted": "./assets/icon-tinted.png"
+      },
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Чтобы открывать Veil по лицу",
+        "NSPhotoLibraryUsageDescription": "Чтобы отправлять фото и ставить фото профиля и обои",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        },
+        "ITSAppUsesNonExemptEncryption": true
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      ["expo-secure-store", { "faceIDPermission": "Чтобы открывать Veil по лицу" }],
+      ["expo-image-picker", { "photosPermission": "Чтобы отправлять фото и ставить фото профиля и обои", "cameraPermission": false, "microphonePermission": false }],
+      "expo-sqlite",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 120,
+          "backgroundColor": "#0C0A09"
+        }
+      ]
+    ]
+  }
+}

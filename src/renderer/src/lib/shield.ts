@@ -1,6 +1,6 @@
 // «Щит чата»: what protects one conversation right now, as a score out of six.
 
-import type { SettingsTab } from '../components/SettingsModal.tsx';
+import type { SettingsTab } from './settings-tabs.ts';
 import type { Contact, MessengerSnapshot } from '../../../core/types.ts';
 import { platform } from '../../../core/platform.ts';
 import { formatDay, timerLabel } from './format.ts';

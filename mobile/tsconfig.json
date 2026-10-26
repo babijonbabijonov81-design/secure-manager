@@ -1,0 +1,15 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "noUnusedLocals": true,
+    // The shared core lives outside this folder: its packages are this app's (Metro reads these too).
+    "paths": {
+      "@noble/*": ["./node_modules/@noble/*"],
+      "fflate": ["./node_modules/fflate"]
+    }
+  },
+  "include": ["index.ts", "src", "expo-env.d.ts"]
+}
