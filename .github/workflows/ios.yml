@@ -43,7 +43,8 @@ jobs:
 
   build:
     needs: check
-    runs-on: macos-latest
+    # Intel macOS: the arm64 runners are often out of capacity; an iOS build is the same on either.
+    runs-on: macos-15-intel
     defaults:
       run:
         working-directory: mobile
