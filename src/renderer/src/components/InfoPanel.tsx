@@ -8,6 +8,7 @@ import {
   Eraser,
   EyeOff,
   Hourglass,
+  ImageIcon,
   Phone,
   Pin,
   PinOff,
@@ -25,6 +26,7 @@ import { formatSafetyNumber } from '../../../core/crypto/fingerprint.ts';
 import type { Messenger } from '../../../core/messenger.ts';
 import { isSavedChat, sharesWith, TIMER_OPTIONS, type Contact, type MessengerSnapshot, type PresenceKind } from '../../../core/types.ts';
 import { timerLabel } from '../lib/format.ts';
+import { WallpaperPicker } from './WallpaperPicker.tsx';
 import { feature } from '../lib/hooks.ts';
 import { chatShield, SHIELD_SUMMARY, type ShieldItem } from '../lib/shield.ts';
 import { presenceText } from '../lib/text.ts';
@@ -151,7 +153,7 @@ export function InfoPanel({
         ) : (
           <>
         <div className="profile-hero">
-          <Avatar name={contact.displayName} seed={contact.id} size={96} />
+          <Avatar name={contact.displayName} seed={contact.id} photo={contact.avatar} size={96} />
           <h4>
             {contact.displayName}
             {contact.verified && <ShieldCheck size={18} style={{ color: 'var(--success)' }} />}
@@ -229,6 +231,16 @@ export function InfoPanel({
 
         {feature(settings, 'presence') && <ContactPrivacy messenger={messenger} snapshot={snapshot} contact={contact} />}
           </>
+        )}
+
+        {feature(settings, 'wallpapers') && (
+          <div className="section">
+            <div className="section-title">
+              <ImageIcon size={16} /> Обои этого чата
+            </div>
+            <WallpaperPicker messenger={messenger} scope={contact.id} current={contact.wallpaper} inherited={!!settings.wallpaper} />
+            <p>Только на этом устройстве, собеседник их не видит.</p>
+          </div>
         )}
 
         <div className="section action-list">
@@ -387,7 +399,7 @@ function SavedInfo({ messenger, contact, overlay, onClose }: { messenger: Messen
       </div>
       <div className="panel-body">
         <div className="profile-hero">
-          <Avatar name={contact.displayName} seed={contact.id} size={96} />
+          <Avatar name={contact.displayName} seed={contact.id} photo={contact.avatar} size={96} />
           <h4>{contact.displayName}</h4>
           <span className="handle">
             {count} {count % 10 === 1 && count % 100 !== 11 ? 'запись' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 10 || count % 100 >= 20) ? 'записи' : 'записей'}

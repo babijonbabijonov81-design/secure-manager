@@ -20,7 +20,44 @@ export function Logo({ size = 44, plate = true }: { size?: number; plate?: boole
   );
 }
 
-export function Avatar({ name, seed, size = 44 }: { name: string; seed: string; size?: number }) {
+/** Where Avatar takes photos from: the messenger's getAvatar ('me' or a contact id). */
+export const PhotoSource = createContext<((id: string) => Promise<Uint8Array | null>) | null>(null);
+
+const photoUrls = new Map<string, Promise<string | null>>();
+
+function usePhoto(id: string, rev: string | undefined): string | null {
+  const source = useContext(PhotoSource);
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    setUrl(null);
+    if (!rev || !source) return;
+    const key = `${id}:${rev}`;
+    let pending = photoUrls.get(key);
+    if (!pending) {
+      pending = source(id).then((bytes) => (bytes ? URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/jpeg' })) : null));
+      photoUrls.set(key, pending);
+    }
+    let alive = true;
+    void pending.then((u) => alive && setUrl(u));
+    return () => {
+      alive = false;
+    };
+  }, [source, id, rev]);
+  return url;
+}
+
+/**
+ * Initials on a colour, or the photo when there is one: `photo` is its version (Contact.avatar,
+ * or me.avatar with `photoId` 'me').
+ */
+export function Avatar({ name, seed, size = 44, photo, photoId }: { name: string; seed: string; size?: number; photo?: string; photoId?: string }) {
+  const url = usePhoto(photoId ?? seed, photo);
+  if (url)
+    return (
+      <div className="avatar photo" style={{ width: size, height: size }}>
+        <img src={url} alt="" draggable={false} />
+      </div>
+    );
   if (seed === SAVED_ID)
     return (
       <div className="avatar saved" style={{ width: size, height: size }}>

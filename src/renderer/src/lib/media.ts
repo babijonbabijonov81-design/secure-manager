@@ -67,6 +67,33 @@ export async function prepareFile(file: File, compressImages: boolean, strip = f
   return { name, mime: type, data: new Uint8Array(await blob.arrayBuffer()), w, h };
 }
 
+/**
+ * A profile photo: the middle square of the picture at 512×512, as JPEG. Drawing it anew leaves
+ * no EXIF or geotag behind.
+ */
+export async function squarePicture(file: Blob, size = 512): Promise<Uint8Array> {
+  const bitmap = await loadBitmap(file);
+  const side = Math.min(bitmap.width, bitmap.height);
+  const canvas = canvasFor(size, size);
+  canvas.getContext('2d')!.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size);
+  bitmap.close();
+  for (const quality of [0.86, 0.75, 0.6]) {
+    const blob = await toBlob(canvas, 'image/jpeg', quality);
+    if (blob.size <= 240 * 1024) return new Uint8Array(await blob.arrayBuffer());
+  }
+  throw new Error('Не удалось уменьшить фото');
+}
+
+/** A wallpaper: at most 2560 px on the long side, JPEG without metadata. */
+export async function wallpaperPicture(file: Blob): Promise<Uint8Array> {
+  const bitmap = await loadBitmap(file);
+  const scale = Math.min(1, 2560 / Math.max(bitmap.width, bitmap.height));
+  const canvas = canvasFor(Math.round(bitmap.width * scale), Math.round(bitmap.height * scale));
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return new Uint8Array(await (await toBlob(canvas, 'image/jpeg', 0.85)).arrayBuffer());
+}
+
 /** Stickers: fit into 512×512 WebP (animated GIFs are kept as they are). */
 export async function prepareSticker(file: File): Promise<{ data: Uint8Array; mime: string; w: number; h: number }> {
   const bitmap = await loadBitmap(file);

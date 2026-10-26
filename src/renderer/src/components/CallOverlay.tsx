@@ -201,7 +201,7 @@ function CallCard({ calls, call, contact, showWords, video }: { calls: CallManag
             />
           ) : (
             <div className="call-main placeholder">
-              <Avatar name={contact.displayName} seed={contact.id} size={116} />
+              <Avatar name={contact.displayName} seed={contact.id} photo={contact.avatar} size={116} />
               <span>Камера собеседника выключена</span>
             </div>
           )}
@@ -250,7 +250,7 @@ function CallCard({ calls, call, contact, showWords, video }: { calls: CallManag
           <span className="ring" />
           <span className="ring" />
           <span className="ring" />
-          <Avatar name={contact.displayName} seed={contact.id} size={116} />
+          <Avatar name={contact.displayName} seed={contact.id} photo={contact.avatar} size={116} />
         </div>
         <h2 className="call-name">{contact.displayName}</h2>
         <p className={`call-status${call.phase === 'active' ? ' clock' : ''}`} data-testid="call-status">
@@ -308,7 +308,7 @@ function CallBar({ calls, call, contact }: { calls: CallManager; call: CallState
     <div className={`call-bar ${call.phase}`} role="status">
       <button className="call-bar-main" onClick={() => calls.setMinimized(false)} aria-label="Развернуть звонок">
         <span className="call-bar-dot" />
-        <Avatar name={contact.displayName} seed={contact.id} size={26} />
+        <Avatar name={contact.displayName} seed={contact.id} photo={contact.avatar} size={26} />
         <b>{contact.displayName}</b>
         <span className="call-bar-status">{statusText(call, clock)}</span>
         <Maximize2 size={14} />

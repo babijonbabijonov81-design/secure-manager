@@ -34,6 +34,8 @@ export const FEATURE_NAMES = [
   'search',
   'requests',
   'circles',
+  'avatars',
+  'wallpapers',
 ] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 export type Features = Record<FeatureName, boolean>;
@@ -51,6 +53,23 @@ export interface AudioSettings {
   autoGainControl: boolean;
   /** Camera deviceId for video calls; '' is the system default. */
   camera: string;
+}
+
+/** Who gets my photo: everyone I write to, only contacts whose key I verified, or nobody. */
+export type AvatarVisibility = 'chats' | 'verified' | 'nobody';
+
+/**
+ * Chat background, only on this device: a built-in pattern or my own photo (kept encrypted
+ * in the vault), dimmed so the messages stay readable.
+ */
+export interface Wallpaper {
+  kind: 'preset' | 'photo';
+  /** Built-in: its id (see the renderer's list). */
+  preset?: string;
+  /** Own photo: changes whenever a new picture is chosen. */
+  rev?: string;
+  /** 0 … 0.8: how much the picture is darkened (or lightened in the light theme). */
+  dim?: number;
 }
 
 export interface Settings {
@@ -97,6 +116,10 @@ export interface Settings {
   transcribeModel: TranscribeModel;
   /** When a .veil backup file was last saved (monthly reminder). */
   backupFileAt?: number;
+  /** Who sees my photo (features.avatars). */
+  avatarVisibility: AvatarVisibility;
+  /** Background of every chat; a chat can have its own (Contact.wallpaper). */
+  wallpaper?: Wallpaper;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -125,6 +148,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lockOnHide: false,
   linkPreviews: true,
   transcribeModel: 'base',
+  avatarVisibility: 'chats',
 };
 
 /** Stored settings from any version, completed with defaults (new feature flags start on). */
@@ -136,6 +160,7 @@ export function normalizeSettings(stored: Partial<Settings> | null | undefined):
     features: { ...DEFAULT_FEATURES, ...rest.features },
     audio: { ...DEFAULT_SETTINGS.audio, ...rest.audio },
     transcribeModel: rest.transcribeModel && ['tiny', 'base', 'small'].includes(rest.transcribeModel) ? rest.transcribeModel : DEFAULT_SETTINGS.transcribeModel,
+    avatarVisibility: rest.avatarVisibility && ['chats', 'verified', 'nobody'].includes(rest.avatarVisibility) ? rest.avatarVisibility : DEFAULT_SETTINGS.avatarVisibility,
   };
 }
 
@@ -189,6 +214,8 @@ export interface AccountRecord {
   hiddenChats?: { salt: string; phrase: string; pin: string };
   /** veil:// invites not used yet: one-time tokens and when they expire (features.invites). */
   invites?: { t: string; exp: number }[];
+  /** My photo: changes with every new picture; the picture itself is in the vault («avatar.me»). */
+  avatar?: string;
 }
 
 /** «Избранное»: a chat with yourself that never leaves this device. */
@@ -239,6 +266,10 @@ export interface Contact {
    * no presence, no delivery key, calls do not ring and pictures stay closed.
    */
   request?: boolean;
+  /** Their photo as they last sent it (the picture is in the vault, «cav.<id>»). */
+  avatar?: string;
+  /** This chat's own background instead of Settings.wallpaper. */
+  wallpaper?: Wallpaper;
 }
 
 export type PresenceKind = 'online' | 'read' | 'typing';
@@ -390,7 +421,7 @@ export type Content =
       r?: { id: string; s: string; a: 'me' | 'you' };
       timer?: number;
       /** The sender's name, and the delivery key for sealed sends to them (contacts only). */
-      p?: { n: string; ak?: string };
+      p?: Profile;
       /** View-once: the key that opens the sealed attachment. */
       once?: { k: string };
       /** Time capsule: the text, sealed until `at`; the key follows then. */
@@ -421,8 +452,21 @@ export type Content =
   /** Sent after restoring from a backup to open fresh sessions with every contact. */
   | { t: 'hi' }
   /** My display name; `u`: my @name changed — ask the server which one it is now. */
-  | { t: 'prof'; n: string; u?: 1; ak?: string }
+  | ({ t: 'prof'; u?: 1 } & Profile)
+  /** «Send me your photo» (their `av` is new to me), and the answer with the picture as data. */
+  | { t: 'avreq' }
+  | { t: 'av'; rev: string }
   | ({ t: 'call'; ts: number } & CallSignal);
+
+/**
+ * What goes with my messages: the name, the delivery key, and `av` — which photo I have
+ * ('' = none for you). The picture itself is asked for separately, only when `av` is new.
+ */
+export interface Profile {
+  n: string;
+  ak?: string;
+  av?: string;
+}
 
 export interface OutboxItem {
   qid: string;
@@ -477,7 +521,7 @@ export interface MessengerSnapshot {
   status: ConnectionStatus;
   statusError?: string;
   fatal?: string;
-  me: { userId: string; username: string; displayName: string; serverUrl: string; serverId?: string; serverKey?: string; createdAt: number };
+  me: { userId: string; username: string; displayName: string; serverUrl: string; serverId?: string; serverKey?: string; createdAt: number; avatar?: string };
   security: { totp: boolean; recoveryEmail?: string; lastBackupAt?: number; duress?: { wipe: boolean }; hiddenChats: boolean };
   /** This is the empty Veil opened by the duress password (never shown in the interface). */
   decoy?: boolean;
@@ -503,4 +547,6 @@ export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 /** «Кружок»: at most a minute. */
 export const MAX_CIRCLE_SECONDS = 60;
 export const MAX_ALBUM_ITEMS = 10;
+/** A profile photo as sent: a small square picture. */
+export const MAX_AVATAR_BYTES = 256 * 1024;
 export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'] as const;

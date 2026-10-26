@@ -36,7 +36,7 @@ export function ContactPicker({ contacts, chosen, onChange, max }: { contacts: C
                 disabled={!on && chosen.length >= max}
                 onChange={() => onChange(on ? chosen.filter((id) => id !== c.id) : [...chosen, c.id])}
               />
-              <Avatar name={c.displayName} seed={c.id} size={34} />
+              <Avatar name={c.displayName} seed={c.id} photo={c.avatar} size={34} />
               <span className="grow">
                 <b>{c.displayName}</b>
                 <span>@{c.username}</span>
@@ -158,7 +158,7 @@ export function GroupDetails({
     <>
       <div className="profile-hero">
         <div className="group-avatar">
-          <Avatar name={contact.displayName} seed={contact.id} size={96} />
+          <Avatar name={contact.displayName} seed={contact.id} photo={contact.avatar} size={96} />
           <span className="group-badge" aria-hidden="true">
             <Users size={16} />
           </span>
@@ -199,7 +199,13 @@ export function GroupDetails({
                   onClick={(e) => setMenu({ x: e.clientX, y: e.clientY, member: m })}
                   aria-label={`${nameOf(m)}, ${ROLE_LABEL[m.role].toLowerCase()}${k?.verified ? ', ключ сверен' : ''}`}
                 >
-                  <Avatar name={m.id === me ? snapshot.me.displayName : nameOf(m)} seed={m.id} size={36} />
+                  <Avatar
+                    name={m.id === me ? snapshot.me.displayName : nameOf(m)}
+                    seed={m.id}
+                    size={36}
+                    photo={m.id === me ? snapshot.me.avatar : snapshot.contacts.find((c) => c.id === m.id)?.avatar}
+                    photoId={m.id === me ? 'me' : m.id}
+                  />
                   <span className="grow">
                     <b>{nameOf(m)}</b>
                     <span>@{m.username}</span>

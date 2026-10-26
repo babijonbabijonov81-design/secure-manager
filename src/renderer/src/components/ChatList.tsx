@@ -349,7 +349,7 @@ function SearchItem({ hit, contact, veiled, onClick }: { hit: SearchHit; contact
   text.push(hit.snippet.slice(at));
   return (
     <button className={`chat-item search-hit${veiled ? ' veiled' : ''}`} role="listitem" data-testid="search-hit" onClick={onClick}>
-      <Avatar name={name} seed={contact?.id ?? hit.contactId} size={42} />
+      <Avatar name={name} seed={contact?.id ?? hit.contactId} size={42} photo={contact?.avatar} />
       <div className="body">
         <div className="row">
           <span className="name">{name}</span>
@@ -418,7 +418,7 @@ function ChatItem({
       onContextMenu={onMenu}
     >
       <span className="avatar-wrap">
-        <Avatar name={contact.displayName} seed={contact.id} size={50} />
+        <Avatar name={contact.displayName} seed={contact.id} photo={contact.avatar} size={50} />
         {online && <i className="online-dot" />}
         {contact.group && (
           <i className="group-dot" aria-label="Группа">

@@ -48,7 +48,7 @@ export function CallsList({
               onClick={() => onSelect(contact.id)}
               onKeyDown={(e) => e.key === 'Enter' && onSelect(contact.id)}
             >
-              <Avatar name={contact.displayName} seed={contact.id} size={46} />
+              <Avatar name={contact.displayName} seed={contact.id} photo={contact.avatar} size={46} />
               <div className="body">
                 <div className="row">
                   <span className="name">{contact.displayName}</span>

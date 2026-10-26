@@ -155,6 +155,46 @@ describe('conversation features', () => {
     bob.messenger.dispose();
   });
 
+  it('profile photo: sent inside the profile, only to those allowed, withdrawn on «nobody»', async () => {
+    const { alice, bob } = await pair();
+    const photo = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(500).fill(7)]);
+    const photoOf = (id: string) => bob.messenger.getSnapshot().contacts.find((c) => c.id === id)?.avatar;
+    await expect(alice.messenger.setAvatar(new Uint8Array([1, 2, 3]))).rejects.toThrow('картинкой');
+
+    await alice.messenger.setAvatar(photo);
+    const rev = alice.messenger.getSnapshot().me.avatar!;
+    await waitFor(() => photoOf(alice.id) === rev);
+    expect([...(await bob.messenger.getAvatar(alice.id))!]).toEqual([...photo]);
+
+    // Only verified contacts: Bob is not verified, so the photo is withdrawn.
+    alice.messenger.updateSettings({ avatarVisibility: 'verified' });
+    await waitFor(() => !photoOf(alice.id));
+    expect(await bob.messenger.getAvatar(alice.id)).toBeNull();
+    alice.messenger.setVerified(bob.id, true);
+    await waitFor(() => photoOf(alice.id) === rev);
+
+    alice.messenger.updateSettings({ avatarVisibility: 'nobody' });
+    await waitFor(() => !photoOf(alice.id));
+    alice.messenger.updateSettings({ avatarVisibility: 'chats' });
+    await waitFor(() => photoOf(alice.id) === rev);
+    await alice.messenger.setAvatar(null);
+    await waitFor(() => !photoOf(alice.id));
+
+    // Backgrounds stay on this device: a built-in one for all chats, a photo for one chat.
+    await alice.messenger.setWallpaper('all', { kind: 'preset', preset: 'ember', dim: 2 });
+    expect(alice.messenger.getSnapshot().settings.wallpaper).toEqual({ kind: 'preset', preset: 'ember', dim: 0.8 });
+    await alice.messenger.setWallpaper(bob.id, { kind: 'photo', dim: 0.3 }, photo);
+    const own = alice.messenger.getSnapshot().contacts.find((c) => c.id === bob.id)!.wallpaper!;
+    expect(own).toMatchObject({ kind: 'photo', dim: 0.3 });
+    expect((await alice.messenger.getWallpaperPhoto(bob.id))!.length).toBe(photo.length);
+    await alice.messenger.setWallpaper(bob.id, null);
+    expect(alice.messenger.getSnapshot().contacts.find((c) => c.id === bob.id)!.wallpaper).toBeUndefined();
+    expect(await alice.messenger.getWallpaperPhoto(bob.id)).toBeNull();
+
+    alice.messenger.dispose();
+    bob.messenger.dispose();
+  });
+
   it('archived chats come back on a new message unless muted', async () => {
     const { alice, bob } = await pair();
     alice.messenger.setArchived(bob.id, true);

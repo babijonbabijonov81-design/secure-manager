@@ -1,6 +1,7 @@
 import {
   ArrowRightLeft,
   AtSign,
+  Camera,
   Copy,
   DownloadCloud,
   Info,
@@ -33,9 +34,11 @@ import { fingerprintOf, type DeviceInfo, type Messenger } from '../../../core/me
 import type { AccountStatus } from '../../../../server/src/shared/protocol.ts';
 import { bridge, type EmbeddedServerStatus, type UpdateState } from '../../../core/platform.ts';
 import { probeServer } from '../../../core/relay-client.ts';
-import { FEATURE_NAMES, type AudioSettings, type FeatureName, type MessengerSnapshot, type Settings, type Theme } from '../../../core/types.ts';
+import { FEATURE_NAMES, type AudioSettings, type AvatarVisibility, type FeatureName, type MessengerSnapshot, type Settings, type Theme } from '../../../core/types.ts';
 import { canChooseOutput, meterStream, openMicrophone, Tones, useAudioDevices } from '../lib/audio.ts';
 import { formatDay, formatTime } from '../lib/format.ts';
+import { squarePicture } from '../lib/media.ts';
+import { WallpaperPicker } from './WallpaperPicker.tsx';
 import { feature } from '../lib/hooks.ts';
 import { transcribeAvailable } from '../lib/transcribe.ts';
 import { TranscribeSettings } from './Transcribe.tsx';
@@ -267,6 +270,13 @@ export function SettingsModal({ messenger, snapshot, initialTab = 'profile', onC
                     ))}
                   </div>
                 </div>
+                {feature(s, 'wallpapers') && (
+                  <div className="field" style={{ marginBottom: 18 }}>
+                    <span className="field-label">Обои всех чатов</span>
+                    <WallpaperPicker messenger={messenger} scope="all" current={s.wallpaper} />
+                    <span className="field-hint">Только на этом устройстве, собеседник их не видит. Для одного чата — в его карточке справа.</span>
+                  </div>
+                )}
                 <Row title="Отправка по Enter" text="Иначе — Ctrl+Enter (⌘+Enter на Mac), а Enter переносит строку.">
                   <Toggle label="Отправка по Enter" on={s.enterToSend} onChange={(v) => set({ enterToSend: v })} />
                 </Row>
@@ -457,18 +467,80 @@ function AudioTab({ messenger, snapshot }: { messenger: Messenger; snapshot: Mes
   );
 }
 
+const AVATAR_WHO: [AvatarVisibility, string][] = [
+  ['chats', 'Всем собеседникам'],
+  ['verified', 'Только сверенным'],
+  ['nobody', 'Никому'],
+];
+
 function ProfileTab({ messenger, snapshot }: { messenger: Messenger; snapshot: MessengerSnapshot }) {
   const [name, setName] = useState(snapshot.me.displayName);
+  const photoInput = useRef<HTMLInputElement>(null);
   const toast = useToast();
+  const photos = feature(snapshot.settings, 'avatars');
+  const pickPhoto = async (file: File) => {
+    try {
+      await messenger.setAvatar(await squarePicture(file));
+      toast('Фото обновлено', 'success');
+    } catch (e) {
+      toast(e instanceof Error && e.message ? e.message : 'Не удалось открыть картинку', 'error');
+    }
+  };
   return (
     <>
       <div className="profile-hero" style={{ flexDirection: 'row', textAlign: 'left', gap: 16 }}>
-        <Avatar name={snapshot.me.displayName} seed={snapshot.me.userId} size={72} />
+        <Avatar name={snapshot.me.displayName} seed={snapshot.me.userId} photo={photos ? snapshot.me.avatar : undefined} photoId="me" size={72} />
         <div>
           <h4>{snapshot.me.displayName}</h4>
           <span className="handle selectable">@{snapshot.me.username}</span>
+          {photos && (
+            <div className="avatar-edit">
+              <button className="btn btn-secondary btn-sm" onClick={() => photoInput.current?.click()}>
+                <Camera size={15} /> {snapshot.me.avatar ? 'Сменить фото' : 'Добавить фото'}
+              </button>
+              {snapshot.me.avatar && (
+                <button className="btn btn-ghost btn-sm" onClick={() => void messenger.setAvatar(null).then(() => toast('Фото удалено', 'success'))}>
+                  <Trash2 size={15} /> Удалить
+                </button>
+              )}
+              <input
+                ref={photoInput}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                hidden
+                aria-label="Фото профиля"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void pickPhoto(file);
+                  e.target.value = '';
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
+      {photos && (
+        <div className="field">
+          <span className="field-label">Кто видит фото</span>
+          <div className="segmented" role="radiogroup" aria-label="Кто видит фото">
+            {AVATAR_WHO.map(([value, label]) => (
+              <button
+                key={value}
+                role="radio"
+                aria-checked={snapshot.settings.avatarVisibility === value}
+                className={snapshot.settings.avatarVisibility === value ? 'active' : ''}
+                onClick={() => messenger.updateSettings({ avatarVisibility: value })}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <span className="field-hint">
+            Фото уходит собеседникам внутри зашифрованных сообщений, сервер его не видит. Если убрать доступ, у них фото исчезнет, но кто-то мог успеть
+            его сохранить.
+          </span>
+        </div>
+      )}
       <form
         className="field"
         onSubmit={(e) => {
@@ -1081,6 +1153,8 @@ const FEATURE_TEXT: Record<FeatureName, [string, string]> = {
   video: ['Видеозвонки и показ экрана', 'Камера и экран в звонке; при показе экрана включается Вуаль.'],
   transcribe: ['Голосовые в текст', 'Распознавание на этом устройстве, модель — только с вашего согласия.'],
   search: ['Поиск по переписке', 'Поиск по всем чатам только на этом устройстве.'],
+  avatars: ['Фото профиля', 'Ваше фото и фото собеседников. Уходит только внутри зашифрованных сообщений.'],
+  wallpapers: ['Обои чатов', 'Фон для всех чатов или для одного. Только на этом устройстве.'],
   circles: ['Кружки', 'Видеосообщения до минуты с камеры, зашифрованы как фото.'],
   requests: ['Запросы на переписку', 'Незнакомцы попадают в отдельный список: без «прочитано», звонков и картинок, пока вы не примете.'],
 };

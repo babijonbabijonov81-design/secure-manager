@@ -25,7 +25,7 @@ export function AccountsTab({ messenger, snapshot, onSignedOut }: { messenger: M
       </div>
       <div className="account-list">
         <div className="account-row current">
-          <Avatar name={me.displayName} seed={me.userId} size={44} />
+          <Avatar name={me.displayName} seed={me.userId} size={44} photo={me.avatar} photoId="me" />
           <div className="grow">
             <b>{me.displayName}</b>
             <span>@{me.username}</span>

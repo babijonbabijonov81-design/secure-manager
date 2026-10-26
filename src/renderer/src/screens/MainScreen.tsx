@@ -542,7 +542,7 @@ export function MainScreen({ messenger, incomingRef, reminderRef, onLock, onDele
           </RailButton>
           <div className="tooltip-wrap" data-tip={`@${snapshot.me.username}`}>
             <button className="me" aria-label="Профиль" onClick={() => setModal({ kind: 'settings', tab: 'profile' })}>
-              <Avatar name={snapshot.me.displayName} seed={snapshot.me.userId} size={40} />
+              <Avatar name={snapshot.me.displayName} seed={snapshot.me.userId} photo={snapshot.me.avatar} photoId="me" size={40} />
             </button>
           </div>
         </nav>

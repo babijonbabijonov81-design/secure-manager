@@ -17,7 +17,7 @@ import { bridge, cloudApi } from '../../core/platform.ts';
 import { defaultStorage } from '../../core/storage.ts';
 import type { Contact, Message, Theme } from '../../core/types.ts';
 import { AccountsContext, type AccountsApi } from './lib/accounts.tsx';
-import { ToastProvider } from './lib/ui.tsx';
+import { PhotoSource, ToastProvider } from './lib/ui.tsx';
 import { LockScreen } from './screens/LockScreen.tsx';
 import { MainScreen } from './screens/MainScreen.tsx';
 import { Onboarding } from './screens/Onboarding.tsx';
@@ -114,6 +114,7 @@ export function App() {
   const storage = useMemo(() => new SpaceStorage(root, slot), [root, slot]);
   const [phase, setPhase] = useState<Phase>('loading');
   const [messenger, setMessenger] = useState<Messenger | null>(null);
+  const photoSource = useMemo(() => (messenger ? (id: string) => messenger.getAvatar(id) : null), [messenger]);
   // Adding an account: the one to go back to if that is cancelled.
   const [returnTo, setReturnTo] = useState<Slot | null>(null);
   const [notice, setNotice] = useState('');
@@ -249,6 +250,7 @@ export function App() {
         )}
         {phase === 'ready' && messenger && (
           <AccountsContext.Provider value={api}>
+            <PhotoSource.Provider value={photoSource}>
             <MainScreen
               messenger={messenger}
               incomingRef={incoming}
@@ -256,6 +258,7 @@ export function App() {
               onLock={lock}
               onDeleted={() => void gone()}
             />
+            </PhotoSource.Provider>
           </AccountsContext.Provider>
         )}
       </ToastProvider>

@@ -41,6 +41,7 @@ import {
 import { attachmentUrl, saveAttachment } from '../lib/attachments.ts';
 import { formatDay, plural, sameDay, systemText, timerChip } from '../lib/format.ts';
 import { feature } from '../lib/hooks.ts';
+import { useWallpaperStyle, wallpaperOf } from '../lib/wallpapers.ts';
 import { chatShield } from '../lib/shield.ts';
 import { copyImage, copyText, prepareFile } from '../lib/media.ts';
 import { presenceText } from '../lib/text.ts';
@@ -382,6 +383,8 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
     previous = message;
   });
 
+  const wall = wallpaperOf(snapshot.settings, contact);
+  const wallStyle = useWallpaperStyle(messenger, feature(snapshot.settings, 'wallpapers') ? wall.wallpaper : undefined, wall.scope);
   const status = typing ? null : presenceText(contact, online, snapshot.settings);
   const held = messenger.isHeld(contact.id);
   const shield = !saved && feature(snapshot.settings, 'shield') ? chatShield(contact, snapshot, messenger.iceServers.hasTurn) : null;
@@ -389,14 +392,14 @@ export function ChatView({ messenger, snapshot, contact, infoOpen, veiled, onTog
 
   return (
     <section className="chat" onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
-      <div className="chat-bg" />
+      <div className={`chat-bg${wallStyle ? ' wall' : ''}`} style={wallStyle ?? undefined} data-testid="chat-bg" />
       <header className="chat-header">
         <button className="icon-btn back-btn" onClick={onBack} aria-label="Назад к списку чатов">
           <ArrowLeft size={20} />
         </button>
         <button className="who" onClick={onToggleInfo}>
           <span className="avatar-wrap">
-            <Avatar name={contact.displayName} seed={contact.id} size={42} />
+            <Avatar name={contact.displayName} seed={contact.id} photo={contact.avatar} size={42} />
             {online && <i className="online-dot" />}
           </span>
           <div style={{ minWidth: 0 }}>

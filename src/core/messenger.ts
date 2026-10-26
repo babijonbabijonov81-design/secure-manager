@@ -62,6 +62,7 @@ import {
   DEFAULT_SETTINGS,
   MAX_ALBUM_ITEMS,
   MAX_ATTACHMENT_BYTES,
+  MAX_AVATAR_BYTES,
   MAX_CIRCLE_SECONDS,
   type AccountRecord,
   type Attachment,
@@ -78,6 +79,8 @@ import {
   type Message,
   type MessengerSnapshot,
   type NoteKind,
+  type Profile,
+  type Wallpaper,
   type PresenceKind,
   type SecurityEvent,
   type SecurityEventKind,
@@ -208,6 +211,13 @@ export function snippetOf(message: Message): string {
 }
 
 const isVideo = (mime: string | undefined) => !!mime?.startsWith('video/');
+const AVATAR_REV = /^[0-9a-f]{16}$/;
+const toHex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+/** JPEG, PNG or WebP by their first bytes: a photo is shown as an image, so nothing else gets in. */
+export function isPicture(data: Uint8Array): boolean {
+  const at = (i: number, ...bytes: number[]) => bytes.every((b, k) => data[i + k] === b);
+  return at(0, 0xff, 0xd8, 0xff) || at(0, 0x89, 0x50, 0x4e, 0x47) || (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50));
+}
 /** Photos and videos can be sent "view once". */
 export const canSendOnce = (mime: string) => IMAGE_MIME.test(mime) || /^video\/(mp4|webm|ogg|quicktime)$/.test(mime);
 
@@ -707,6 +717,8 @@ export class Messenger {
   private typing: Record<string, number> = {};
   private typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastTypingSent = new Map<string, number>();
+  /** Their photo I asked for (or will ask for, once their request is accepted). */
+  private avatarWanted = new Map<string, { rev: string; at: number }>();
   /** Contacts currently online: until when (our clock) and when we last heard from them. */
   private online: Record<string, { until: number; last: number }> = {};
   private lastHeartbeat = 0;
@@ -973,6 +985,7 @@ export class Messenger {
           ...(this.account.serverId ? { serverId: this.account.serverId } : {}),
           ...(this.account.serverKey ? { serverKey: this.account.serverKey } : {}),
           createdAt: this.account.createdAt,
+          ...(this.account.avatar ? { avatar: this.account.avatar } : {}),
         },
         security: {
           totp: !!this.account.totp,
@@ -1418,6 +1431,8 @@ export class Messenger {
     this.contacts[id] = next;
     this.markDirty('contacts');
     this.changed();
+    // «Только сверенным»: a newly verified contact gets my photo, an unverified one loses it.
+    if ('verified' in patch && !!patch.verified !== !!current.verified && this.settings.avatarVisibility === 'verified' && this.account.avatar) this.announceProfile(next);
     return next;
   }
 
@@ -1777,6 +1792,7 @@ export class Messenger {
     const sender = this.contacts[senderId];
     if (sender && typeof content.p?.n === 'string' && content.p.n.trim() && content.p.n !== sender.displayName) this.updateContact(senderId, { displayName: content.p.n.trim().slice(0, 64) });
     if (sender && content.p?.ak) this.learnAccessKey(senderId, content.p.ak);
+    if (sender && content.p) this.learnAvatar(senderId, content.p.av);
     const updated = this.updateContact(chat.id, { lastActivity: now, unread: chat.unread + 1, ...(chat.archived && !chat.muted ? { archived: false } : {}) })!;
     if (!updated.muted) this.events.onIncoming?.(updated, message);
   }
@@ -1963,6 +1979,8 @@ export class Messenger {
     if (this.contacts[contactId]?.group) delete this.gkeys[this.contacts[contactId].group!.id];
     await this.clearChat(contactId);
     if (isSavedChat(contactId)) return; // «Избранное» stays, just empty
+    if (this.contacts[contactId]?.avatar) await this.store.delete(`cav.${contactId}`);
+    if (this.contacts[contactId]?.wallpaper) await this.store.delete(`wall.${contactId}`);
     delete this.contacts[contactId];
     delete this.sessions[contactId];
     delete this.online[contactId];
@@ -2544,9 +2562,128 @@ export class Messenger {
   }
 
   /** What goes with my profile to a contact: the name, and the delivery key unless they are blocked. */
-  private myProfile(contact: Contact | undefined): { n: string; ak?: string } {
+  private myProfile(contact: Contact | undefined): Profile {
     const ak = this.account.accessKey;
-    return { n: this.account.displayName, ...(ak && contact && !contact.blocked && !contact.request ? { ak } : {}) };
+    return {
+      n: this.account.displayName,
+      ...(ak && contact && !contact.blocked && !contact.request ? { ak } : {}),
+      av: this.showsAvatarTo(contact) ? this.account.avatar! : '',
+    };
+  }
+
+  // ---- profile photo ----------------------------------------------------------------------
+
+  /** Whether this contact may have my photo (Settings.avatarVisibility). */
+  private showsAvatarTo(contact: Contact | undefined): boolean {
+    if (!contact || !this.account.avatar || this.settings.features.avatars === false) return false;
+    const who = this.settings.avatarVisibility;
+    if (who === 'nobody' || contact.blocked || contact.request) return false;
+    return who === 'chats' || (!contact.group && contact.verified);
+  }
+
+  /** A new photo of mine (a small square picture) or none; contacts learn it with my profile. */
+  async setAvatar(picture: Uint8Array | null): Promise<void> {
+    if (picture) {
+      if (picture.length > MAX_AVATAR_BYTES || !isPicture(picture)) throw new MessengerError('bad_avatar', 'Фото должно быть картинкой до 256 КБ');
+      await this.store.putBytes('avatar.me', picture.slice());
+      this.account.avatar = toHex(random(8));
+    } else {
+      await this.store.delete('avatar.me');
+      delete this.account.avatar;
+    }
+    this.markDirty('account');
+    this.scheduleBackup();
+    this.changed();
+    this.announceProfile();
+  }
+
+  /** My photo ('me') or a contact's, as stored. */
+  getAvatar(id: string): Promise<Uint8Array | null> {
+    return this.store.getBytes(id === 'me' ? 'avatar.me' : `cav.${id}`);
+  }
+
+  /** My profile again to everyone I talk to (a new photo, or who may see it changed). */
+  private announceProfile(only?: Contact): void {
+    for (const contact of only ? [only] : Object.values(this.contacts)) {
+      if (!contact.blocked && !contact.group && !isSavedChat(contact.id) && this.sessions[contact.id]?.length)
+        void this.sendControl(contact, { t: 'prof', ...this.myProfile(contact) });
+    }
+  }
+
+  /** Their profile said which photo they have: ask for a new one, forget a withdrawn one. */
+  private learnAvatar(contactId: string, av: unknown): void {
+    const contact = this.contacts[contactId];
+    if (!contact || typeof av !== 'string' || contact.group || isSavedChat(contactId)) return;
+    if (!av) {
+      this.avatarWanted.delete(contactId);
+      if (contact.avatar) {
+        this.updateContact(contactId, { avatar: undefined });
+        void this.store.delete(`cav.${contactId}`);
+      }
+      return;
+    }
+    if (!AVATAR_REV.test(av) || av === contact.avatar || contact.blocked) return;
+    // A stranger does not learn that I read their profile: asked once the request is accepted.
+    if (contact.request) {
+      this.avatarWanted.set(contactId, { rev: av, at: 0 });
+      return;
+    }
+    const asked = this.avatarWanted.get(contactId);
+    if (asked?.rev === av && asked.at && Date.now() - asked.at < 10 * 60_000) return;
+    this.avatarWanted.set(contactId, { rev: av, at: Date.now() });
+    void this.sendControl(contact, { t: 'avreq' });
+  }
+
+  private async sendAvatar(contact: Contact): Promise<void> {
+    const rev = this.showsAvatarTo(contact) ? this.account.avatar : undefined;
+    const picture = rev ? await this.store.getBytes('avatar.me') : null;
+    try {
+      await this.encryptAndQueue(contact, { t: 'av', rev: picture ? rev! : '' }, picture ?? undefined, []);
+    } catch (error) {
+      console.warn('photo not sent', error);
+    }
+  }
+
+  private async receiveAvatar(contact: Contact, rev: unknown, data: Uint8Array): Promise<void> {
+    if (typeof rev !== 'string' || contact.group || isSavedChat(contact.id)) return;
+    if (!rev || !data.length) return this.learnAvatar(contact.id, '');
+    if (!AVATAR_REV.test(rev) || data.length > MAX_AVATAR_BYTES || !isPicture(data)) return;
+    this.avatarWanted.delete(contact.id);
+    await this.store.putBytes(`cav.${contact.id}`, data.slice());
+    this.updateContact(contact.id, { avatar: rev });
+  }
+
+  // ---- chat background --------------------------------------------------------------------
+
+  /**
+   * The background of every chat (`scope` 'all') or of one chat; null goes back to none (or, for
+   * a chat, to the common one). An own photo is kept encrypted in the vault.
+   */
+  async setWallpaper(scope: string, wallpaper: Wallpaper | null, photo?: Uint8Array): Promise<void> {
+    const all = scope === 'all';
+    if (!all && !this.contacts[scope]) return;
+    let next: Wallpaper | undefined;
+    if (wallpaper) {
+      const dim = Math.max(0, Math.min(0.8, Number(wallpaper.dim) || 0));
+      if (wallpaper.kind === 'photo') {
+        if (photo) {
+          if (photo.length > MAX_ATTACHMENT_BYTES || !isPicture(photo)) throw new MessengerError('bad_wallpaper', 'Обои должны быть картинкой до 20 МБ');
+          await this.store.putBytes(`wall.${scope}`, photo.slice());
+          next = { kind: 'photo', rev: toHex(random(8)), dim };
+        } else {
+          const current = all ? this.settings.wallpaper : this.contacts[scope].wallpaper;
+          if (current?.kind !== 'photo') throw new MessengerError('bad_wallpaper', 'Выберите фото');
+          next = { ...current, dim };
+        }
+      } else next = { kind: 'preset', preset: String(wallpaper.preset ?? '').slice(0, 32), dim };
+    }
+    if (next?.kind !== 'photo') await this.store.delete(`wall.${scope}`);
+    if (all) this.updateSettings({ wallpaper: next });
+    else this.updateContact(scope, { wallpaper: next });
+  }
+
+  getWallpaperPhoto(scope: string): Promise<Uint8Array | null> {
+    return this.store.getBytes(`wall.${scope}`);
   }
 
   private async pumpOutbox(): Promise<void> {
@@ -2602,6 +2739,8 @@ export class Messenger {
     if (!contact?.request) return;
     const accepted = this.updateContact(contactId, { request: undefined })!;
     if (accepted.group) return;
+    const wanted = this.avatarWanted.get(contactId);
+    if (wanted) this.learnAvatar(contactId, wanted.rev);
     void this.sendControl(accepted, { t: 'prof', ...this.myProfile(accepted) });
     // What came while it was a request is reported delivered now; «прочитано» follows when read.
     const incoming = (this.conversations.get(contactId) ?? []).filter((m) => m.dir === 'in');
@@ -3022,6 +3161,7 @@ export class Messenger {
         const patch: Partial<Contact> = { lastActivity: now, unread: contact.unread + 1, ...(contact.groupOnly ? { groupOnly: undefined } : {}) };
         if (content.p?.n && content.p.n !== contact.displayName) patch.displayName = String(content.p.n).slice(0, 64);
         if (content.p?.ak) this.learnAccessKey(contact.id, content.p.ak);
+        if (content.p) this.learnAvatar(contact.id, content.p.av);
         // Like Telegram: a new message brings an archived (not muted) chat back.
         if (contact.archived && !contact.muted) patch.archived = false;
         const updated = this.updateContact(contact.id, patch)!;
@@ -3102,9 +3242,16 @@ export class Messenger {
       case 'call':
         this.handleCall(contact, content, true);
         return;
+      case 'avreq':
+        if (!contact.request) await this.sendAvatar(contact);
+        return;
+      case 'av':
+        await this.receiveAvatar(contact, content.rev, data);
+        return;
       case 'prof':
         if (typeof content.n === 'string' && content.n.trim()) this.updateContact(contact.id, { displayName: content.n.trim().slice(0, 64) });
         this.learnAccessKey(contact.id, content.ak);
+        this.learnAvatar(contact.id, content.av);
         // The new @name is taken from the server, never from the message itself.
         if (content.u === 1) await this.refreshUsername(contact.id);
         return;
@@ -3192,7 +3339,9 @@ export class Messenger {
 
   updateSettings(patch: Partial<Settings>): void {
     const before = this.settings.lastSeen;
+    const photoBefore = this.settings.avatarVisibility + String(this.settings.features.avatars);
     this.settings = { ...this.settings, ...patch };
+    if (this.account.avatar && photoBefore !== this.settings.avatarVisibility + String(this.settings.features.avatars)) this.announceProfile();
     if (patch.typingIndicators === false) this.typing = {};
     if (patch.lastSeen && patch.lastSeen !== before) {
       if (patch.lastSeen === 'nobody') for (const id of Object.keys(this.online)) if (!this.shares(id, 'online')) delete this.online[id];
